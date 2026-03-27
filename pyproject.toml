@@ -16,7 +16,7 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 
-dependencies = []
+dependencies = ["numpy"]
 
 [dependency-groups]
 dev = [
