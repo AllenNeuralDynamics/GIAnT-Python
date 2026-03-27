@@ -1,15 +1,16 @@
-"""Example test template."""
+"""Tests for the giant_python package."""
 
 import unittest
 
 
-class ExampleTest(unittest.TestCase):
-    """Example Test Class"""
+class PackageTest(unittest.TestCase):
+    """Tests for the giant_python package."""
 
-    def test_assert_example(self):
-        """Example of how to test the truth of a statement."""
+    def test_import(self):
+        """Test that the giant_python package can be imported."""
+        import giant_python
 
-        self.assertTrue(1 == 1)
+        self.assertIsNotNone(giant_python.__version__)
 
 
 if __name__ == "__main__":
