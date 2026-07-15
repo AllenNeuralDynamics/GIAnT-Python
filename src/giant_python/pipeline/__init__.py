@@ -12,7 +12,7 @@ from .extract import (
     SourceExtractor,
     StandardSourceExtractor,
     extract_integration_sources,
-    sel_act,
+    silo,
 )
 from .organize import (
     TrialTableBuilder,
@@ -42,7 +42,7 @@ __all__ = [
     "MultiRoiRegistration",
     "multi_roi_registration",
     "Pipeline",
-    "sel_act",
+    "silo",
     "SourceExtractor",
     "StandardSourceExtractor",
     "Stage",

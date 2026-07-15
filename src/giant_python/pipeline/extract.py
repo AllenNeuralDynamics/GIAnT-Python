@@ -45,14 +45,6 @@ def silo(
     raise NotImplementedError
 
 
-def sel_act(
-    dr_or_path_to_trial_table: Optional[Union[str, Path]] = None,
-    params_in: Optional[dict] = None,
-) -> None:
-    """Backward-compatible alias for :func:`silo`."""
-    silo(dr_or_path_to_trial_table, params_in)
-
-
 def extract_integration_sources(
     path_to_trial_table: Optional[Union[str, Path]] = None,
     params_in: Optional[dict] = None,
@@ -63,7 +55,7 @@ def extract_integration_sources(
     data and the integration lookup table produced by
     :func:`giant_python.pipeline.register.integration_registration`
     (``fnAdataInt``), rather than on a reconstructed pixel movie. Shares the
-    peak-detection, baseline, and deconvolution kernels with :func:`sel_act`.
+    peak-detection, baseline, and deconvolution kernels with :func:`silo`.
     Corresponds to ``extractSLAP2IntegrationSources.py`` in
     ophys-slap2-analysis.
 
@@ -133,7 +125,7 @@ class SourceExtractor(Stage):
 
 
 class StandardSourceExtractor(SourceExtractor):
-    """Standard pixel-movie SILo backend (wraps :func:`sel_act`)."""
+    """Standard pixel-movie SILo backend (wraps :func:`silo`)."""
 
     def run(self, trial_table: "object") -> "object":
         """Extract from pixel movies. See :meth:`SourceExtractor.run`."""

@@ -18,7 +18,7 @@ from giant_python.pipeline import (
     extract_integration_sources,
     integration_registration,
     multi_roi_registration,
-    sel_act,
+    silo,
     strip_registration,
     verify_files,
 )
@@ -57,10 +57,10 @@ class TestStageFunctions(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             integration_registration()
 
-    def test_sel_act(self):
-        """sel_act raises NotImplementedError."""
+    def test_silo(self):
+        """silo raises NotImplementedError."""
         with self.assertRaises(NotImplementedError):
-            sel_act()
+            silo()
 
     def test_extract_integration_sources(self):
         """extract_integration_sources raises NotImplementedError."""
