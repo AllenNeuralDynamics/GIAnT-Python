@@ -28,7 +28,7 @@ from .pipeline import (
     TrialTableBuilder,
 )
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 __all__ = [
     "AlignmentData",
@@ -42,5 +42,5 @@ __all__ = [
     "StandardSourceExtractor",
     "TrialTable",
     "TrialTableBuilder",
-    "__version__",
+    "__version__ = "0.1.4"
 ]
