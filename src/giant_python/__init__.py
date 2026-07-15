@@ -42,5 +42,5 @@ __all__ = [
     "StandardSourceExtractor",
     "TrialTable",
     "TrialTableBuilder",
-    "__version__ = "0.1.5"
+    "__version__",
 ]
