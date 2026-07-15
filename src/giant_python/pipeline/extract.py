@@ -45,6 +45,14 @@ def silo(
     raise NotImplementedError
 
 
+def sel_act(
+    dr_or_path_to_trial_table: Optional[Union[str, Path]] = None,
+    params_in: Optional[dict] = None,
+) -> None:
+    """Backward-compatible alias for :func:`silo`."""
+    silo(dr_or_path_to_trial_table, params_in)
+
+
 def extract_integration_sources(
     path_to_trial_table: Optional[Union[str, Path]] = None,
     params_in: Optional[dict] = None,
