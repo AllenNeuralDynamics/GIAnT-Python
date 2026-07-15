@@ -16,7 +16,20 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 
-dependencies = ["numpy"]
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-image",
+    "h5py",
+    "tifffile",
+    "joblib",
+]
+
+[project.optional-dependencies]
+gui = ["napari"]
+
+[project.scripts]
+giant = "giant_python.cli:main"
 
 [dependency-groups]
 dev = [
