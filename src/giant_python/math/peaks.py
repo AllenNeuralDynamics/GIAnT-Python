@@ -5,7 +5,7 @@ Shared by both source-extraction backends (standard and integration). Ports
 integrated-Gaussian helpers from ``extractSLAP2IntegrationSources.py``.
 """
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 

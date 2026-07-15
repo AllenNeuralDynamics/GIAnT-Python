@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 
-PACKAGE_INIT = (
-    Path(__file__).resolve().parents[1] / "src" / "giant_python" / "__init__.py"
+PACKAGE_INIT = Path(__file__).resolve().parents[1] / (
+    "src/giant_python/__init__.py"
 )
 
 
