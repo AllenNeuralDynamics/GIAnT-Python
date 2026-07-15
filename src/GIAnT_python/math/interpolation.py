@@ -1,4 +1,4 @@
-"""Frame interpolation with photon-count weighting."""
+"""Frame interpolation with photon-count weighting (port of interpFrame.m)."""
 
 from typing import Tuple
 
