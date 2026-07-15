@@ -72,7 +72,8 @@ class UserRoi:
         (``experiment_summary.h5`` ``user_rois/Fsvd``).
     f : ndarray or None
         Raw or baseline-corrected ROI fluorescence, shaped
-        ``(channels, total frames)`` (``experiment_summary.h5`` ``user_rois/F``).
+        ``(channels, total frames)``
+        (``experiment_summary.h5`` ``user_rois/F``).
     """
 
     type: str = "polygon"

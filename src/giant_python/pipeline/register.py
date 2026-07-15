@@ -165,5 +165,8 @@ class IntegrationRegistration(MotionCorrector):
     """
 
     def run(self, trial_table: "object") -> "object":
-        """Register SLAP2 band/integration trials. See ``MotionCorrector.run``."""
+        """Register SLAP2 band/integration trials.
+
+        See ``MotionCorrector.run``.
+        """
         raise NotImplementedError
