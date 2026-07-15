@@ -55,7 +55,7 @@ def extract_integration_sources(
     data and the integration lookup table produced by
     :func:`giant_python.pipeline.register.integration_registration`
     (``fnAdataInt``), rather than on a reconstructed pixel movie. Shares the
-    peak-detection, baseline, and deconvolution kernels with :func:`sel_act`.
+    peak-detection, baseline, and deconvolution kernels with :func:`silo`.
     Corresponds to ``extractSLAP2IntegrationSources.py`` in
     ophys-slap2-analysis.
 
@@ -125,7 +125,7 @@ class SourceExtractor(Stage):
 
 
 class StandardSourceExtractor(SourceExtractor):
-    """Standard pixel-movie SILo backend (wraps :func:`sel_act`)."""
+    """Standard pixel-movie SILo backend (wraps :func:`silo`)."""
 
     def run(self, trial_table: "object") -> "object":
         """Extract from pixel movies. See :meth:`SourceExtractor.run`."""
