@@ -26,6 +26,7 @@ class PackageMetadataTest(unittest.TestCase):
                 for target in node.targets
             )
         )
+        self.assertIsInstance(all_assignment.value, (ast.List, ast.Tuple))
         exported_names = [
             elt.value
             for elt in all_assignment.value.elts
