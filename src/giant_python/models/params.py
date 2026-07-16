@@ -99,8 +99,6 @@ class SiloParams:
         ``exp(-3)``).
     peak_buffer : int
         Peak exclusion buffer diameter, in pixels.
-    select_soma : bool
-        Whether to prompt for manual soma annotation before extraction.
     max_workers : int
         Number of worker processes for per-trial extraction.
     num_channels : int or None
@@ -130,7 +128,6 @@ class SiloParams:
     d_xy: int = 5
     sparse_fac: float = math.exp(-3.0)
     peak_buffer: int = 3
-    select_soma: bool = False
     max_workers: int = 6
     num_channels: Optional[int] = None
     psf_dilation: int = 17
