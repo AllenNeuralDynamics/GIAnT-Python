@@ -8,6 +8,7 @@ GIAnT-MATLAB with validated, autocompleting parameter objects. The
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -73,7 +74,42 @@ class SiloParams:
     draw_user_rois : bool
         Whether to prompt for user ROIs before extraction.
     analyze_hz : float or None
-        Temporal analysis rate, in Hz.
+        Temporal analysis rate, in Hz. When ``None``, the BandSILo backend
+        falls back to ``100``.
+
+    Notes
+    -----
+    The remaining attributes below are specific to the ``"integration"``
+    (BandSILo) backend and mirror the GUI defaults in
+    ``extractSLAP2IntegrationSources.py``. They are ignored by the standard
+    (pixel-movie) SILo backend.
+
+    decay_tau_s : float
+        Calcium-decay time constant, in seconds.
+    baseline_window_s : float
+        Rolling-baseline window for dF/F, in seconds.
+    denoise_window_s : float
+        Temporal denoising window, in seconds.
+    vif : float
+        Variance inflation factor for the noise model.
+    d_xy : int
+        Spatial downsampling / superpixel spacing, in pixels.
+    sparse_fac : float
+        NMF sparsity factor (the GUI exposes its natural-log; the default is
+        ``exp(-3)``).
+    peak_buffer : int
+        Peak exclusion buffer diameter, in pixels.
+    select_soma : bool
+        Whether to prompt for manual soma annotation before extraction.
+    max_workers : int
+        Number of worker processes for per-trial extraction.
+    num_channels : int or None
+        Number of acquisition channels; when ``None``, read from the aData
+        alignment file at runtime.
+    psf_dilation : int
+        Dilation size selecting the bundled ``dil-NN.tif`` PSF template.
+    operator : str
+        Operator name recorded in the output metadata.
     """
 
     microscope: str = "slap2"
@@ -87,6 +123,18 @@ class SiloParams:
     activity_channel: int = 0
     draw_user_rois: bool = False
     analyze_hz: Optional[float] = None
+    decay_tau_s: float = 0.15
+    baseline_window_s: float = 4.0
+    denoise_window_s: float = 1.0
+    vif: float = 1.38
+    d_xy: int = 5
+    sparse_fac: float = math.exp(-3.0)
+    peak_buffer: int = 3
+    select_soma: bool = False
+    max_workers: int = 6
+    num_channels: Optional[int] = None
+    psf_dilation: int = 17
+    operator: str = "SLAP2 User"
 
 
 def set_params(
