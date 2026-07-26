@@ -878,8 +878,9 @@ def _valid_sel_cols_for_motion(
     )
     valid_pix_mask = ndimage.binary_erosion(
         valid_pix_mask,
+        # TODO: check if dimensions here should change
         structure=np.ones(
-            (1, psf2d.shape[0], psf2d.shape[1] * 2 - 1), dtype=bool % TODO: check if dimensions here should change
+            (1, psf2d.shape[0], psf2d.shape[1] * 2 - 1), dtype=bool
         ),
     )
     valid_pix_idxs = np.flatnonzero(valid_pix_mask)
