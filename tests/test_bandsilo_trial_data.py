@@ -159,6 +159,20 @@ class TestAccumulate(unittest.TestCase):
         # sp1 (id 101) never accumulates because its only line is empty.
         self.assertEqual(acc["data"][0].sum(), 0)
 
+    def test_line_with_no_matching_superpixels_skipped(self):
+        """A non-empty line matching none of the ids is skipped."""
+        line_specs = [
+            ([9], [9], [10.0]),  # lookup 909 -> matches neither 101 nor 201
+            ([2], [1], [20.0]),  # sp2 (id 201) matches
+        ]
+        df = _MockDataFile(2, 1, line_specs, channels=1)
+        acc = td.accumulate_superpixel_data(
+            df, np.array([1.0, 2.0]), 1.0, self._super_pixel_ids(), 1, False
+        )
+        # sp1 (101) never matches any line; sp2 (201) accumulates.
+        self.assertEqual(acc["data"][0].sum(), 0)
+        self.assertGreater(acc["data"][1].sum(), 0)
+
 
 class TestReadIntegrationTrialData(unittest.TestCase):
     """read_integration_trial_data orchestrates open+accumulate+alignment."""

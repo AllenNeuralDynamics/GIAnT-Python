@@ -336,9 +336,11 @@ class TestGetActImPeaks(unittest.TestCase):
         seeds = pk.get_act_im_peaks(
             self._act_im(), peak_th=4.0, exclusion_mask=excl, buffer_size=3
         )
-        for z, y, x in seeds:
-            if int(z) == 1:
-                self.assertFalse(20 <= y < 30 and 10 <= x < 20)
+        z1_in_box = any(
+            int(z) == 1 and 20 <= y < 30 and 10 <= x < 20
+            for z, y, x in seeds
+        )
+        self.assertFalse(z1_in_box)
 
     def test_all_nan_returns_empty(self):
         """An all-NaN activity image yields no seeds."""
