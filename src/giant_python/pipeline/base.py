@@ -20,4 +20,4 @@ class Stage(ABC):
     @abstractmethod
     def run(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the stage and return its result."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover - abstract stub

@@ -7,12 +7,7 @@ interchangeable.
 """
 
 from .alignment import AlignmentData
-from .experiment import (
-    ExperimentSummary,
-    Source,
-    UserRoi,
-    Visualizations,
-)
+from .experiment import ExperimentSummary, Source, UserRoi, Visualizations
 from .params import AlignParams, SiloParams, set_params
 from .trial_table import Slap2Info, TrialTable
 

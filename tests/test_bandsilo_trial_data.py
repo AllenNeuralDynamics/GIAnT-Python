@@ -25,6 +25,8 @@ class _MockDataFile:
         self._channels = channels
 
         class _Meta:
+            """Minimal metadata stub exposing ``linePeriod_s``."""
+
             linePeriod_s = 1.0
 
         self.metaData = _Meta()
@@ -174,12 +176,12 @@ class TestAccumulate(unittest.TestCase):
         self.assertGreater(acc["data"][1].sum(), 0)
 
 
-class TestReadIntegrationTrialData(unittest.TestCase):
-    """read_integration_trial_data orchestrates open+accumulate+alignment."""
+class TestReadBandTrialData(unittest.TestCase):
+    """read_band_trial_data orchestrates open+accumulate+alignment."""
 
     def test_skipped_trial(self):
         """keep_trial=False returns None without opening anything."""
-        out = td.read_integration_trial_data(
+        out = td.read_band_trial_data(
             0, False, 0, 100.0, np.zeros((1, 1)), "/data", {}, 1
         )
         self.assertIsNone(out)
@@ -206,7 +208,7 @@ class TestReadIntegrationTrialData(unittest.TestCase):
             "motionDSz": np.zeros(2),
         }
         try:
-            out = td.read_integration_trial_data(
+            out = td.read_band_trial_data(
                 0,
                 True,
                 0,

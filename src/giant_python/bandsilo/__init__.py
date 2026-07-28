@@ -1,6 +1,6 @@
-"""Self-contained BandSILo (SLAP2 integration/band-scan) backend.
+"""Self-contained BandSILo (SLAP2 band-scan) backend.
 
-This package owns everything the integration source-extraction backend needs
+This package owns everything the band source-extraction backend needs
 (HDF5 IO, geometry/PSF, trial-data reading, background/rho, peak detection,
 NMF localization, trace extraction, and orchestration), ported faithfully from
 ``extractSLAP2IntegrationSources.py`` in ophys-slap2-analysis.

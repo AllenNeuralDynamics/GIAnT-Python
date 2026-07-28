@@ -165,7 +165,7 @@ def load_reference_stack(
     ref_stack_meta: dict,
     dmd_ix: int,
 ) -> Tuple[Optional[np.ndarray], np.ndarray, Optional[str]]:
-    """Load the integration reference stack for one DMD.
+    """Load the band reference stack for one DMD.
 
     Reads the REFERENCE tif from ``datadr`` but takes the channel list from the
     trial table's embedded ref_stack metadata. The raw counts are scaled by

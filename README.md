@@ -326,7 +326,7 @@ Top-level fields written by **all three** motion correction backends: `numChanne
 | `yPost` | 1 x 1 | numeric | Maximum row shift searched **after** the reference position (pixels); equals `align_params.maxshiftXY` |
 | `Path{n}` | — | group | One group per imaging path (DMD) |
 | `Path{n}/likelihood_means` | Y x X x Z x C x nSP | single | Precomputed expected superpixel mean intensity in the padded reference stack at each displacement in the search cube, per channel and superpixel; used as the template for Poisson or correlation motion inference |
-| `Path{n}/allSuperPixelIDs` | nSP x 1 | numeric | Unique superpixel keys for this path: `superPixIdx * 100 + zIdx` (integration-mode pixels only when `integrationOnly` is true) |
+| `Path{n}/allSuperPixelIDs` | nSP x 1 | numeric | Unique superpixel keys for this path: `superPixIdx * 100 + zIdx` (band-scan pixels only when `bandOnly` is true) |
 | `Path{n}/sparseMaskInds` | N x 2 | numeric | Sparse ROI definition: column 1 = linear DMD pixel index (`rows x cols x numFastZs` layout); column 2 = superpixel index (1 … nSP) |
 | `Path{n}/zPre` | 1 x 1 | numeric | Maximum reference-stack Z shift searched **before** the matched plane (planes); capped by `align_params.maxshiftZ` and available reference Z planes |
 | `Path{n}/zPost` | 1 x 1 | numeric | Maximum reference-stack Z shift searched **after** the matched plane (planes); capped similarly to `zPre` |

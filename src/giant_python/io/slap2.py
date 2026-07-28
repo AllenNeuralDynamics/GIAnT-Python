@@ -2,8 +2,8 @@
 
 Intended home for the SLAP2 data-file reader (equivalent of MATLAB's
 ``slap2.Slap2DataFile``) plus the online motion-offset retrieval ported from
-getOnlineMotion.m. Also hosts the integration (band-scan) superpixel readers
-used by the integration source-extraction backend.
+getOnlineMotion.m. Also hosts the band-scan superpixel readers
+used by the band source-extraction backend.
 """
 
 from typing import Optional, Tuple
@@ -35,13 +35,13 @@ def ref_pixs_to_drc(
     raise NotImplementedError
 
 
-def read_integration_trial_data(
+def read_band_trial_data(
     data_file: object,
     ds_frames: np.ndarray,
     super_pixel_ids: np.ndarray,
     activity_channel: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Read superpixel-binned activity for one integration (band-scan) trial.
+    """Read superpixel-binned activity for one band-scan trial.
 
     Accumulates weighted line data into per-superpixel time series over the
     downsampled frame grid. Port of ``get_trial_data`` from

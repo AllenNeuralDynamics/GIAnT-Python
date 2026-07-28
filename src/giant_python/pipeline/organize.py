@@ -117,6 +117,7 @@ class TrialTableBuilder(Stage):
     """
 
     def __init__(self, microscope: str = "slap2") -> None:
+        """Store the microscope kind (``"slap2"`` or ``"bergamo"``)."""
         self.microscope = microscope
 
     def run(

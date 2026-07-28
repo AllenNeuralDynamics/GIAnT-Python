@@ -8,10 +8,10 @@ are also exported for power users who want to skip the classes.
 
 from .base import Stage
 from .extract import (
-    IntegrationSourceExtractor,
+    BandSourceExtractor,
     SourceExtractor,
     StandardSourceExtractor,
-    extract_integration_sources,
+    extract_band_sources,
     silo,
 )
 from .organize import (
@@ -22,22 +22,22 @@ from .organize import (
 )
 from .pipeline import Pipeline
 from .register import (
-    IntegrationRegistration,
+    BandRegistration,
     MotionCorrector,
     MultiRoiRegistration,
     StripRegistration,
-    integration_registration,
+    band_registration,
     multi_roi_registration,
     strip_registration,
 )
 
 __all__ = [
+    "band_registration",
+    "BandRegistration",
+    "BandSourceExtractor",
     "build_trial_table",
     "build_trial_table_slap2",
-    "extract_integration_sources",
-    "integration_registration",
-    "IntegrationRegistration",
-    "IntegrationSourceExtractor",
+    "extract_band_sources",
     "MotionCorrector",
     "MultiRoiRegistration",
     "multi_roi_registration",

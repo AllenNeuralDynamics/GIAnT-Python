@@ -26,7 +26,7 @@ import torch
 from .background import build_motion_h_matrices, build_selected_pixel_mask
 from .geometry import ref_pixs_to_drc
 from .nmf import solve_phi_motion
-from .trial_data import nearest_interp, read_integration_trial_data
+from .trial_data import nearest_interp, read_band_trial_data
 
 
 def _empty_trace_result(
@@ -486,7 +486,7 @@ def _load_high_res_trial_data(
     tuple
         ``(data, data2, a_data, frames)`` with count-normalized activity.
     """
-    result = read_integration_trial_data(
+    result = read_band_trial_data(
         trial_ix,
         True,
         dmd_ix,

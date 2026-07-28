@@ -54,6 +54,7 @@ class Pipeline:
         align_params: Optional[AlignParams] = None,
         silo_params: Optional[SiloParams] = None,
     ) -> None:
+        """Store session config; ``tt``/``summary`` start empty."""
         self.microscope = microscope
         self.save_dir = Path(save_dir)
         self.align_params = align_params or AlignParams()

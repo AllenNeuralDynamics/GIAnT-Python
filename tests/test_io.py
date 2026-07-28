@@ -7,7 +7,7 @@ import numpy as np
 from giant_python.io import (
     get_online_motion,
     load_struct_h5,
-    read_integration_trial_data,
+    read_band_trial_data,
     ref_pixs_to_drc,
     save_struct_h5,
     scanimagetiff_data_wrapper,
@@ -44,7 +44,7 @@ class TestTiff(unittest.TestCase):
 
 
 class TestSlap2(unittest.TestCase):
-    """Tests for SLAP2 readers (online motion + integration)."""
+    """Tests for SLAP2 readers (online motion + band)."""
 
     def test_get_online_motion(self):
         """get_online_motion raises NotImplementedError."""
@@ -56,10 +56,10 @@ class TestSlap2(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             ref_pixs_to_drc(np.arange(10), 4, 4)
 
-    def test_read_integration_trial_data(self):
-        """read_integration_trial_data raises NotImplementedError."""
+    def test_read_band_trial_data(self):
+        """read_band_trial_data raises NotImplementedError."""
         with self.assertRaises(NotImplementedError):
-            read_integration_trial_data(None, np.arange(5), np.arange(3))
+            read_band_trial_data(None, np.arange(5), np.arange(3))
 
 
 if __name__ == "__main__":

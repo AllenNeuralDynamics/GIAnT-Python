@@ -7,17 +7,13 @@ transposition when porting from MATLAB.
 """
 
 from .hdf5 import load_struct_h5, save_struct_h5
-from .slap2 import (
-    get_online_motion,
-    read_integration_trial_data,
-    ref_pixs_to_drc,
-)
+from .slap2 import get_online_motion, read_band_trial_data, ref_pixs_to_drc
 from .tiff import scanimagetiff_data_wrapper, scanimagetiff_wrapper
 
 __all__ = [
     "get_online_motion",
     "load_struct_h5",
-    "read_integration_trial_data",
+    "read_band_trial_data",
     "ref_pixs_to_drc",
     "save_struct_h5",
     "scanimagetiff_data_wrapper",

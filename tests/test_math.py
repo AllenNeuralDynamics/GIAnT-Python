@@ -5,17 +5,15 @@ import unittest
 import numpy as np
 
 from giant_python.math import (
+    compute_f0,
+    detect_peaks_2d,
     dft_register_clipped,
+    gaussian_peaks_integrated,
+    get_act_im_peaks,
     interp_frame,
     xcorr2_nans,
     xcorr2_nans3d,
     xcorr2_nans_weighted,
-)
-from giant_python.math import (
-    compute_f0,
-    detect_peaks_2d,
-    gaussian_peaks_integrated,
-    get_act_im_peaks,
 )
 from giant_python.math.deconv import deconvolve_trace
 from giant_python.math.nmf import nmf_decompose

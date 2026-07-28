@@ -2,7 +2,7 @@
 
 Exposes the porting-faithful extraction functions plus a
 :class:`SourceExtractor` base with one backend per SLAP2 scan mode
-(standard pixel-movie SILo / integration band-scan SILo), selected via
+(standard pixel-movie SILo / band-scan SILo), selected via
 :meth:`SourceExtractor.for_scan_mode` -- mirroring the
 :class:`~giant_python.pipeline.register.MotionCorrector` backend pattern.
 
@@ -45,29 +45,38 @@ def silo(
     raise NotImplementedError
 
 
-def extract_integration_sources(
+def extract_band_sources(
     path_to_trial_table: Optional[Union[str, Path]] = None,
-    params_in: Optional[dict] = None,
-) -> None:
-    """Perform integration (band-scan) source extraction for SLAP2.
+    params_in: Optional[Union[dict, SiloParams]] = None,
+) -> "object":
+    """Perform band-scan source extraction for SLAP2.
 
     The band-scan variant of SILo: operates on superpixel / DMD-geometry
-    data and the integration lookup table produced by
-    :func:`giant_python.pipeline.register.integration_registration`
-    (``fnAdataInt``), rather than on a reconstructed pixel movie. Shares the
-    peak-detection, baseline, and deconvolution kernels with :func:`silo`.
-    Corresponds to ``extractSLAP2IntegrationSources.py`` in
-    ophys-slap2-analysis.
+    data and the band lookup table produced by
+    :func:`giant_python.pipeline.register.band_registration`
+    (``fnAdataInt``), rather than on a reconstructed pixel movie. Corresponds
+    to ``extractSLAP2IntegrationSources.py`` in ophys-slap2-analysis.
+
+    A thin adapter over :func:`giant_python.bandsilo.pipeline\
+.extract_band_sources` (imported lazily so ``import giant_python`` never
+    pulls in the heavy BandSILo dependencies).
 
     Parameters
     ----------
     path_to_trial_table : str or Path, optional
-        Full path to the trial table file (with integration alignment data).
-    params_in : dict, optional
-        Parameter overrides. Keys and default values are defined in
-        :func:`giant_python.models.params.set_params`.
+        Full path to the ``trial_table.h5`` file (with band alignment
+        data).
+    params_in : dict or SiloParams, optional
+        Parameter overrides.
+
+    Returns
+    -------
+    ExperimentSummary
+        The extracted sources and summary (also written to disk).
     """
-    raise NotImplementedError
+    from ..bandsilo.pipeline import extract_band_sources as _extract_impl
+
+    return _extract_impl(path_to_trial_table, params_in)
 
 
 class SourceExtractor(Stage):
@@ -84,6 +93,7 @@ class SourceExtractor(Stage):
     """
 
     def __init__(self, params: Optional[SiloParams] = None) -> None:
+        """Store the extraction parameters (default :class:`SiloParams`)."""
         self.params = params or SiloParams()
 
     @staticmethod
@@ -97,7 +107,7 @@ class SourceExtractor(Stage):
         ----------
         scan_mode : str
             ``"standard"`` (-> :class:`StandardSourceExtractor`) or
-            ``"integration"`` (-> :class:`IntegrationSourceExtractor`).
+            ``"band"`` (-> :class:`BandSourceExtractor`).
         params : SiloParams, optional
             Source-extraction parameters.
 
@@ -105,8 +115,17 @@ class SourceExtractor(Stage):
         -------
         SourceExtractor
             The appropriate backend instance.
+
+        Raises
+        ------
+        ValueError
+            If *scan_mode* is not ``"standard"`` or ``"band"``.
         """
-        raise NotImplementedError
+        if scan_mode == "band":
+            return BandSourceExtractor(params)
+        if scan_mode == "standard":
+            return StandardSourceExtractor(params)
+        raise ValueError(f"Unknown scan mode: {scan_mode!r}")
 
     def run(self, trial_table: "object") -> "object":
         """Extract sources and write experiment_summary.h5.
@@ -132,12 +151,18 @@ class StandardSourceExtractor(SourceExtractor):
         raise NotImplementedError
 
 
-class IntegrationSourceExtractor(SourceExtractor):
-    """Integration (band-scan) SILo backend.
+class BandSourceExtractor(SourceExtractor):
+    """Band-scan SILo backend.
 
-    Wraps :func:`extract_integration_sources`.
+    Wraps :func:`extract_band_sources`.
     """
 
     def run(self, trial_table: "object") -> "object":
-        """Extract from integration data. See :meth:`SourceExtractor.run`."""
-        raise NotImplementedError
+        """Extract from band data. See :meth:`SourceExtractor.run`.
+
+        Resolves the on-disk ``trial_table.h5`` path from the trial table's
+        ``savedr`` and delegates to :func:`extract_band_sources` with
+        this extractor's parameters.
+        """
+        path = Path(trial_table.savedr) / "trial_table.h5"
+        return extract_band_sources(path, self.params)

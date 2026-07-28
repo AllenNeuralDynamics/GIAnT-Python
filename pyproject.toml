@@ -16,7 +16,7 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 
-# NOTE: The SLAP2 integration (BandSILo) source-extraction backend requires
+# NOTE: The SLAP2 band-scan (BandSILo) source-extraction backend requires
 # ``slap2_utils`` (raw SLAP2 data-file reader). It is not published on PyPI, so
 # it is installed directly from source via the git URL below.
 dependencies = [
@@ -54,7 +54,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # Bundle the default point-spread-function template used by the BandSILo
-# (integration) source-extraction backend.
+# (band-scan) source-extraction backend.
 giant_python = ["assets/psfs/*.tif"]
 
 [tool.setuptools.dynamic]

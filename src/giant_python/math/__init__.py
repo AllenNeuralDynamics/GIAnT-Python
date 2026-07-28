@@ -7,11 +7,7 @@ axis-order and 0- vs 1-based indexing differences when porting.
 
 from .baseline import compute_f0
 from .interpolation import interp_frame
-from .peaks import (
-    detect_peaks_2d,
-    gaussian_peaks_integrated,
-    get_act_im_peaks,
-)
+from .peaks import detect_peaks_2d, gaussian_peaks_integrated, get_act_im_peaks
 from .registration import (
     dft_register_clipped,
     xcorr2_nans,

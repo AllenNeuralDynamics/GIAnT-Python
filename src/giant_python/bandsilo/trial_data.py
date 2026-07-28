@@ -1,4 +1,4 @@
-"""Read low-resolution superpixel activity for integration (band-scan) trials.
+"""Read low-resolution superpixel activity for band-scan trials.
 
 Ported from ``extractSLAP2IntegrationSources.py`` (``get_trial_data`` ref
 715-842, ``nearest_interp``/``fast_dilation`` ref 166-205, and the per-trial
@@ -291,7 +291,7 @@ def _open_slap2_file(path: str):  # pragma: no cover - requires slap2_utils
     return slap2_utils.DataFile(path)
 
 
-def read_integration_trial_data(
+def read_band_trial_data(
     trial_ix: int,
     keep_trial: bool,
     dmd_ix: int,
@@ -302,7 +302,7 @@ def read_integration_trial_data(
     num_channels: int,
     all_channels: bool = True,
 ) -> Optional[dict]:
-    """Read one integration trial's low-res superpixel activity.
+    """Read one band trial's low-res superpixel activity.
 
     Opens the trial's SLAP2 file, builds the downsampled-frame grid,
     accumulates weighted superpixel activity, and loads the matching alignment
@@ -376,7 +376,7 @@ def assemble_lowres_data(results: list, num_channels: int) -> dict:
     Parameters
     ----------
     results : list
-        Per-trial dicts from :func:`read_integration_trial_data` (or ``None``).
+        Per-trial dicts from :func:`read_band_trial_data` (or ``None``).
     num_channels : int
         Number of acquisition channels (>= 2 adds second-channel arrays).
 

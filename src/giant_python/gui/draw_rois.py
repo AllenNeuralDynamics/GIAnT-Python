@@ -23,6 +23,7 @@ class DrawROIs:
     """
 
     def __init__(self, trial_table: "object") -> None:
+        """Store the trial table providing image paths and the save dir."""
         self.trial_table = trial_table
 
     def show(self) -> None:

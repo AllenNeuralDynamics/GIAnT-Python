@@ -20,7 +20,7 @@ from .models import (
     TrialTable,
 )
 from .pipeline import (
-    IntegrationSourceExtractor,
+    BandSourceExtractor,
     MotionCorrector,
     Pipeline,
     SourceExtractor,
@@ -33,8 +33,8 @@ __version__ = "0.1.10"
 __all__ = [
     "AlignmentData",
     "AlignParams",
+    "BandSourceExtractor",
     "ExperimentSummary",
-    "IntegrationSourceExtractor",
     "MotionCorrector",
     "Pipeline",
     "SiloParams",

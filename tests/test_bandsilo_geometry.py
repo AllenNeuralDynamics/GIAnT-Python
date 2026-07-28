@@ -38,7 +38,7 @@ class TestSubsampleMatrixInds(unittest.TestCase):
     """build_subsample_matrix_inds picks median open pixels."""
 
     def test_median_reference_pixel(self):
-        """Odd-length superpixels use the median; even-length use the middle."""
+        """Odd-length pixels use the median; even-length use the middle."""
         all_ids = np.array([[1], [2]], dtype=np.int32)
         mask = np.array(
             [[10, 1], [12, 1], [14, 1], [20, 2], [22, 2]], dtype=np.int32

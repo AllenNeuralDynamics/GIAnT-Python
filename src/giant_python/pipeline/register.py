@@ -2,8 +2,8 @@
 
 Exposes the porting-faithful registration functions plus a
 :class:`MotionCorrector` ABC with one backend per MATLAB registration variant
-(MultiRoi / Strip / Band). Band-mode registration is exposed as
-:func:`integration_registration` / :class:`IntegrationRegistration` (the
+(MultiRoi / Strip / Band). Band-scan registration is exposed as
+:func:`band_registration` / :class:`BandRegistration` (the
 Python API name) and corresponds to ``BandRegistration.m``, writing
 ``bandRegLookupTable.h5``.
 """
@@ -66,11 +66,11 @@ def strip_registration(
     raise NotImplementedError
 
 
-def integration_registration(
+def band_registration(
     full_path_to_trial_table: Optional[Union[str, Path]] = None,
     params_in: Optional[dict] = None,
 ) -> None:
-    """Perform band / integration-mode motion correction for SLAP2 recordings.
+    """Perform band-scan motion correction for SLAP2 recordings.
 
     Builds the cached ``motion_correction/bandRegLookupTable.h5`` lookup table
     (on first run) and writes per-trial ``*_ALIGNMENTDATA.h5`` files including
@@ -102,6 +102,7 @@ class MotionCorrector(Stage):
     """
 
     def __init__(self, params: Optional[AlignParams] = None) -> None:
+        """Store the alignment parameters (default :class:`AlignParams`)."""
         self.params = params or AlignParams()
 
     @staticmethod
@@ -158,14 +159,14 @@ class StripRegistration(MotionCorrector):
         raise NotImplementedError
 
 
-class IntegrationRegistration(MotionCorrector):
-    """SLAP2 BandRegistration backend (wraps ``integration_registration``).
+class BandRegistration(MotionCorrector):
+    """SLAP2 BandRegistration backend (wraps ``band_registration``).
 
     Corresponds to ``BandRegistration.m``; writes ``bandRegLookupTable.h5``.
     """
 
     def run(self, trial_table: "object") -> "object":
-        """Register SLAP2 band/integration trials.
+        """Register SLAP2 band trials.
 
         See ``MotionCorrector.run``.
         """

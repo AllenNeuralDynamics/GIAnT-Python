@@ -54,7 +54,7 @@ class SiloParams:
         ``"slap2"`` or ``"bergamo"``.
     scan_mode : str
         SLAP2 scan mode selecting the extraction backend:
-        ``"standard"`` (pixel-movie SILo) or ``"integration"`` (the
+        ``"standard"`` (pixel-movie SILo) or ``"band"`` (the
         band-scan / superpixel variant, paired with BandRegistration).
     sigma_px : float
         Spatial smoothing sigma, in pixels.
@@ -72,14 +72,15 @@ class SiloParams:
     activity_channel : int
         Channel index used for activity detection.
     draw_user_rois : bool
-        Whether to prompt for user ROIs before extraction.
+        Whether to prompt for / use user ROIs; also gates writing the
+        ``user_rois`` group and per-ROI traces to ``experiment_summary.h5``.
     analyze_hz : float or None
         Temporal analysis rate, in Hz. When ``None``, the BandSILo backend
         falls back to ``100``.
 
     Notes
     -----
-    The remaining attributes below are specific to the ``"integration"``
+    The remaining attributes below are specific to the ``"band"``
     (BandSILo) backend and mirror the GUI defaults in
     ``extractSLAP2IntegrationSources.py``. They are ignored by the standard
     (pixel-movie) SILo backend.

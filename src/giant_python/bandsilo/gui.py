@@ -374,10 +374,10 @@ def _load_one_path(
         return False
 
     out["user_roi_masks"][dmd_key] = roi_masks
-    out["user_roi_superpixels"][dmd_key] = (
-        user_roi_superpixel_lists_from_masks(
-            roi_masks, geo["sp_fastz"], geo["sp_rows"], geo["sp_cols"]
-        )
+    out["user_roi_superpixels"][
+        dmd_key
+    ] = user_roi_superpixel_lists_from_masks(
+        roi_masks, geo["sp_fastz"], geo["sp_rows"], geo["sp_cols"]
     )
     out["user_roi_labels"][dmd_key] = labels
     out["roi_records"][dmd_key] = recs
@@ -541,10 +541,10 @@ def run_user_roi_selection(
         g = user_roi_geo[dmd_key]
         roi_masks, roi_records = _select_rois_for_dmd(cv2, dmd_ix, g)
         out["user_roi_masks"][dmd_key] = roi_masks
-        out["user_roi_superpixels"][dmd_key] = (
-            user_roi_superpixel_lists_from_masks(
-                roi_masks, g["sp_fastz"], g["sp_rows"], g["sp_cols"]
-            )
+        out["user_roi_superpixels"][
+            dmd_key
+        ] = user_roi_superpixel_lists_from_masks(
+            roi_masks, g["sp_fastz"], g["sp_rows"], g["sp_cols"]
         )
         out["user_roi_labels"][dmd_key] = [r["label"] for r in roi_records]
         out["roi_records"][dmd_key] = roi_records

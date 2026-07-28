@@ -268,7 +268,7 @@ def load_trial_table(path: Union[str, Path]) -> dict:
     """Load and normalize a GIAnT ``trial_table.h5`` for BandSILo.
 
     Reads the trial table written by BandRegistration.m and assembles the
-    normalized structure consumed by the integration backend (mirrors the
+    normalized structure consumed by the band backend (mirrors the
     setup block of ``main`` in ``extractSLAP2IntegrationSources.py``).
 
     Parameters

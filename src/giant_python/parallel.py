@@ -18,6 +18,10 @@ def map_trials(
 ) -> List[R]:
     """Apply *func* to each trial, optionally in parallel.
 
+    Runs serially when ``n_workers <= 1`` (or a single trial), otherwise fans
+    the trials out over a joblib process pool. Results are returned in input
+    order regardless of backend.
+
     Parameters
     ----------
     func : callable
@@ -32,4 +36,10 @@ def map_trials(
     list
         Results in input order.
     """
-    raise NotImplementedError
+    trials = list(trials)
+    if n_workers <= 1 or len(trials) <= 1:
+        return [func(t) for t in trials]
+
+    from joblib import Parallel, delayed
+
+    return Parallel(n_jobs=n_workers)(delayed(func)(t) for t in trials)

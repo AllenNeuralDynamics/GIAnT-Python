@@ -1,6 +1,6 @@
 """Activity-image peak detection via integrated-Gaussian fitting.
 
-Shared by both source-extraction backends (standard and integration). Ports
+Shared by both source-extraction backends (standard and band). Ports
 ``getActImPeaks.m`` (GIAnT-MATLAB) / ``get_act_im_peaks`` and its
 integrated-Gaussian helpers from ``extractSLAP2IntegrationSources.py``.
 """
