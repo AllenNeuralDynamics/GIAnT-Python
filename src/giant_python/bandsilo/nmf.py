@@ -262,10 +262,16 @@ def _motion_frames(mot_inds_yx: np.ndarray, i: int) -> np.ndarray:
     return np.flatnonzero(mot_inds_yx == i)
 
 
-def _solve_phi_motion(
+def solve_phi_motion(
     x: torch.Tensor, data_motion: torch.Tensor
 ) -> torch.Tensor:
-    """Least-squares temporal weights for one motion's superpixel profiles."""
+    """Least-squares temporal weights for one motion's superpixel profiles.
+
+    Solves the regularized normal equations
+    ``(XᵀX + 1e-10 I) phi = Xᵀ data`` and returns ``phiᵀ`` (frames x sources).
+    Shared by the NMF fits here and the high-res trace solve in
+    :mod:`giant_python.bandsilo.traces`.
+    """
     xtx = x.T @ x
     xtd = x.T @ data_motion
     regularized = xtx + 1e-10 * torch.eye(xtx.shape[0])
@@ -308,7 +314,7 @@ def fit_phi_all_motions(
     for i in range(n_motions):
         frames = _motion_frames(mot_inds_yx, i)
         x = torch.sparse.mm(h_mots[i], a[sel_pix_idxs, :])
-        phi_low_res[frames, :] = _solve_phi_motion(x, data_for_nmf[:, frames])
+        phi_low_res[frames, :] = solve_phi_motion(x, data_for_nmf[:, frames])
     return phi_low_res
 
 
@@ -367,7 +373,7 @@ def multiplicative_nmf(
         x[~x_support_mots[i]] = 0
         x = x / torch.norm(x, dim=0, keepdim=True)
 
-        phi = torch.clamp(_solve_phi_motion(x, data_for_nmf[:, frames]), min=0)
+        phi = torch.clamp(solve_phi_motion(x, data_for_nmf[:, frames]), min=0)
 
         for iter_idx in range(max_iters):
             numerator = x.T @ data_for_nmf[:, frames]
