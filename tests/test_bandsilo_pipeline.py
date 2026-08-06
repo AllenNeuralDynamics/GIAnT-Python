@@ -77,6 +77,39 @@ def _path_result(
     )
 
 
+class TestDmdUserRois(unittest.TestCase):
+    """_dmd_user_rois slices a resolved session selection per DMD."""
+
+    def test_none_is_neutral(self):
+        """No session selection yields (None, None, [])."""
+        self.assertEqual(pl._dmd_user_rois(None, "DMD1"), (None, None, []))
+
+    def test_slices_key(self):
+        """The named DMD's masks, labels, and superpixels are returned."""
+        sps = [np.array([0, 1])]
+        user_rois = {
+            "user_roi_masks": {"DMD1": ["mask"]},
+            "user_roi_labels": {"DMD1": ["roi"]},
+            "user_roi_superpixels": {"DMD1": sps},
+        }
+        masks, labels, out_sps = pl._dmd_user_rois(user_rois, "DMD1")
+        self.assertEqual(masks, ["mask"])
+        self.assertEqual(labels, ["roi"])
+        self.assertIs(out_sps, sps)
+
+    def test_missing_key_defaults(self):
+        """A DMD absent from the selection yields empty superpixels."""
+        user_rois = {
+            "user_roi_masks": {},
+            "user_roi_labels": {},
+            "user_roi_superpixels": {},
+        }
+        masks, labels, out_sps = pl._dmd_user_rois(user_rois, "DMD2")
+        self.assertIsNone(masks)
+        self.assertIsNone(labels)
+        self.assertEqual(out_sps, [])
+
+
 class TestWithNanChannel(unittest.TestCase):
     """_with_nan_channel reshapes and NaN-fills non-activity channels."""
 

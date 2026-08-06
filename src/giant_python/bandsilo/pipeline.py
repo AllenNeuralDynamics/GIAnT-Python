@@ -38,8 +38,19 @@ from . import background as bg
 from . import geometry as geo
 from . import summary_images as si
 from . import trial_data as td
+from .annotate import (
+    build_user_roi_geometry,
+    resolve_interactivity,
+    resolve_user_rois,
+)
 from .baseline import assemble_dff
-from .hdf5 import load_trial_table, to_serializable, write_dict_to_h5group
+from .hdf5 import (
+    compute_keep_trials,
+    load_trial_table,
+    read_align_info,
+    to_serializable,
+    write_dict_to_h5group,
+)
 from .nmf import fit_sources
 from .peaks import get_act_im_peaks
 from .traces import get_high_res_traces
@@ -165,6 +176,37 @@ def _assemble_user_rois(pr: PathResult) -> Optional[dict]:
         [r[7] for r in pr.trace_results], axis=0
     ).transpose(1, 2, 0)
     return {"mask": masks_by_roi, "labels": pr.soma_labels, "F": f_soma_all}
+
+
+def _dmd_user_rois(user_rois: Optional[dict], key: str) -> tuple:
+    """Return ``(soma_masks, soma_labels, soma_sps)`` for one DMD path.
+
+    Slices a resolved session selection (from
+    :func:`giant_python.bandsilo.annotate.resolve_user_rois`) down to one DMD,
+    or the neutral ``(None, None, [])`` when user ROIs are disabled.
+
+    Parameters
+    ----------
+    user_rois : dict or None
+        The resolved session selection, or ``None`` when ``draw_user_rois``
+        is unset.
+    key : str
+        The DMD key (``"DMD{N}"``).
+
+    Returns
+    -------
+    tuple
+        ``(soma_masks, soma_labels, soma_sps)`` -- the per-ROI masks and labels
+        (or ``None``) and the per-ROI superpixel index lists (``[]`` when
+        absent).
+    """
+    if user_rois is None:
+        return None, None, []
+    return (
+        user_rois["user_roi_masks"].get(key),
+        user_rois["user_roi_labels"].get(key),
+        user_rois["user_roi_superpixels"].get(key, []),
+    )
 
 
 def assemble_path_outputs(pr: PathResult) -> dict:
@@ -394,6 +436,51 @@ def _resolve_params(
     return SiloParams(**params_in)
 
 
+def _resolve_session_user_rois(
+    result_dr: str,
+    trial_table: dict,
+    lookup: dict,
+    params: SiloParams,
+) -> Optional[
+    dict
+]:  # pragma: no cover - reference-stack/aData IO + optional GUI
+    """Resolve per-DMD user ROIs for the session, or ``None`` if disabled.
+
+    When ``draw_user_rois`` is set, builds the per-DMD annotation geometry and
+    loads ``<result_dr>/annotations/annotations.h5`` (drawing it interactively,
+    or failing fast when headless, via
+    :func:`giant_python.bandsilo.annotate.resolve_user_rois`). Extraction
+    stays non-interactive: drawing only happens as the resolver's fallback.
+
+    Parameters
+    ----------
+    result_dr : str
+        Session results directory (holds the ``annotations`` subdir).
+    trial_table : dict
+        Normalized trial table.
+    lookup : dict
+        Band-registration lookup table.
+    params : SiloParams
+        Extraction parameters (``draw_user_rois``/``interactive``).
+
+    Returns
+    -------
+    dict or None
+        The resolved user-ROI selection, or ``None`` when ``draw_user_rois``
+        is unset.
+    """
+    if not params.draw_user_rois:
+        return None
+    user_roi_geo, ref_files = build_user_roi_geometry(trial_table, lookup)
+    return resolve_user_rois(
+        Path(result_dr) / "annotations",
+        trial_table["n_dmds"],
+        user_roi_geo,
+        interactive=resolve_interactivity(params.interactive),
+        ref_files=ref_files,
+    )
+
+
 def extract_band_sources(
     path_to_trial_table: Union[str, Path],
     params_in=None,
@@ -434,11 +521,29 @@ def extract_band_sources(
     )
     psf = geo.load_psf(params.psf_dilation, trial_table["n_dmds"])
 
+    trial_table["keep_trials"] = compute_keep_trials(
+        trial_table["fn_adata"], trial_table["filename"], trial_table["datadr"]
+    )
+    align_hz, num_channels = read_align_info(
+        trial_table["fn_adata"],
+        trial_table["keep_trials"],
+        trial_table["n_dmds"],
+    )
+    trial_table["align_hz"] = align_hz
+    if params.num_channels is None:
+        params.num_channels = num_channels
+
+    user_rois = _resolve_session_user_rois(
+        result_dr, trial_table, lookup, params
+    )
+
     assembled_paths = []
     for dmd_ix in range(trial_table["n_dmds"]):
         assembled_paths.append(
             assemble_path_outputs(
-                _process_dmd(dmd_ix, trial_table, params, lookup, psf)
+                _process_dmd(
+                    dmd_ix, trial_table, params, lookup, psf, user_rois
+                )
             )
         )
 
@@ -471,15 +576,19 @@ def _process_dmd(
     params: SiloParams,
     lookup: dict,
     psf: dict,
+    user_rois: Optional[dict] = None,
 ) -> PathResult:  # pragma: no cover - full per-DMD IO/slap2/torch compute
     """Run Phases 3-7 for one DMD path and bundle the results.
 
     Reads the low-res trial data, estimates background/noise/rho, builds the
     activity image and detects peaks, localizes sources with NMF, and extracts
     high-res traces per trial (fanned out via
-    :func:`giant_python.parallel.map_trials`).
+    :func:`giant_python.parallel.map_trials`). When ``user_rois`` is provided,
+    this DMD's ROI masks/labels are attached and its per-ROI superpixels feed
+    the per-trial ``F_soma``.
     """
     key = f"DMD{dmd_ix + 1}"
+    soma_masks, soma_labels, soma_sps = _dmd_user_rois(user_rois, key)
     datadr = str(trial_table["datadr"])
     n_trials = trial_table["filename"].shape[1]
     num_channels = params.num_channels
@@ -639,7 +748,7 @@ def _process_dmd(
             dmd_pixels_per_column,
             dmd_pixels_per_row,
             num_channels,
-            [],
+            soma_sps,
         )
 
     trace_results = map_trials(_traces, range(n_trials), params.max_workers)
@@ -665,6 +774,8 @@ def _process_dmd(
             np.ceil(params.baseline_window_s * params.analyze_hz)
         ),
         draw_user_rois=params.draw_user_rois,
+        soma_masks=soma_masks,
+        soma_labels=soma_labels,
         yx_shape=yx_shape,
     )
 

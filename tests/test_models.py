@@ -1,6 +1,11 @@
 """Tests for the models subpackage."""
 
+import os
+import tempfile
 import unittest
+
+import h5py
+import numpy as np
 
 from giant_python.models import (
     AlignmentData,
@@ -55,9 +60,60 @@ class TestH5RoundTrip(unittest.TestCase):
     """from_h5/to_h5 are not implemented yet."""
 
     def test_trial_table_from_h5(self):
-        """TrialTable.from_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            TrialTable.from_h5("trial_table.h5")
+        """from_h5 faithfully mirrors the trial_table.h5 group hierarchy."""
+        str_dt = h5py.string_dtype(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "trial_table.h5")
+            with h5py.File(path, "w") as f:
+                f.create_dataset("row_major", data=1)
+                f.create_dataset("datadr", data="/data", dtype=str_dt)
+                f.create_dataset("savedr", data="/res", dtype=str_dt)
+                f.create_dataset(
+                    "filename",
+                    data=np.array([["t1", "t2"]], dtype=object),
+                    dtype=str_dt,
+                )
+                si = f.create_group("slap2_info")
+                si.create_dataset("first_line", data=np.array([[1, 2]]))
+                si.create_dataset("last_line", data=np.array([[10, 20]]))
+                rs = si.create_group("ref_stack")
+                rs.create_group("Path1").create_dataset(
+                    "channels", data=np.array([1, 2])
+                )
+                mc = f.create_group("motion_correction")
+                mc.create_dataset(
+                    "fn_adata",
+                    data=np.array([["a.h5", ""]], dtype=object),
+                    dtype=str_dt,
+                )
+            tt = TrialTable.from_h5(path)
+        self.assertEqual(str(tt.datadr), os.path.normpath("/data"))
+        self.assertEqual(str(tt.savedr), os.path.normpath("/res"))
+        self.assertIsInstance(tt.slap2_info, Slap2Info)
+        np.testing.assert_array_equal(
+            np.asarray(tt.slap2_info.first_line), np.array([[1, 2]])
+        )
+        self.assertIn("Path1", tt.slap2_info.ref_stack)
+        self.assertEqual(tt.motion_correction["fn_adata"][0, 0], "a.h5")
+        self.assertIsNone(tt.source_extraction)
+
+    def test_trial_table_from_h5_non_slap2(self):
+        """A table without slap2_info yields slap2_info=None."""
+        str_dt = h5py.string_dtype(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "trial_table.h5")
+            with h5py.File(path, "w") as f:
+                f.create_dataset("row_major", data=1)
+                f.create_dataset("datadr", data="/data", dtype=str_dt)
+                f.create_dataset("savedr", data="/res", dtype=str_dt)
+                f.create_dataset(
+                    "filename",
+                    data=np.array([["t1"]], dtype=object),
+                    dtype=str_dt,
+                )
+            tt = TrialTable.from_h5(path)
+        self.assertIsNone(tt.slap2_info)
+        self.assertIsNone(tt.motion_correction)
 
     def test_trial_table_to_h5(self):
         """TrialTable.to_h5 raises NotImplementedError."""

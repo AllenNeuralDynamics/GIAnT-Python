@@ -12,9 +12,11 @@ from giant_python.bandsilo.hdf5 import (
     _decode_one,
     _reshape_1d,
     _resolve_fn_adata,
+    compute_keep_trials,
     load_alignment_data_h5,
     load_struct_from_h5,
     load_trial_table,
+    read_align_info,
     to_serializable,
     write_dict_to_h5group,
 )
@@ -196,7 +198,7 @@ class TestReshapeAndAlignment(unittest.TestCase):
 
 
 class TestTrialTable(unittest.TestCase):
-    """_resolve_fn_adata and load_trial_table normalization."""
+    """load_trial_table resolve step + keep-trial / align-info helpers."""
 
     def test_resolve_fn_adata(self):
         """Empty entries stay empty; others become absolute paths."""
@@ -205,14 +207,14 @@ class TestTrialTable(unittest.TestCase):
         self.assertEqual(out[0, 0], "")
         self.assertEqual(out[0, 1], os.path.join("root", "moco", "a.h5"))
 
-    def _write_trial_table(self, path):
+    def _write_trial_table(self, path, savedr="/res", with_fn_adata=True):
         """Write a minimal synthetic trial_table.h5 (row-major)."""
         fnames = np.array([["t1.dat", "t2.dat"]], dtype=object)
         fn_adata = np.array([["t1_AD.h5", ""]], dtype=object)
         with h5py.File(path, "w") as f:
             f.create_dataset("row_major", data=1)
             f.create_dataset("datadr", data="/data", dtype=_str_dt())
-            f.create_dataset("savedr", data="/res", dtype=_str_dt())
+            f.create_dataset("savedr", data=savedr, dtype=_str_dt())
             f.create_dataset("filename", data=fnames, dtype=_str_dt())
             si = f.create_group("slap2_info")
             si.create_dataset("first_line", data=np.array([[1, 2]]))
@@ -221,32 +223,83 @@ class TestTrialTable(unittest.TestCase):
             p1 = rs.create_group("Path1")
             p1.create_dataset("channels", data=np.array([1, 2]))
             mc = f.create_group("motion_correction")
-            mc.create_dataset("fn_adata", data=fn_adata, dtype=_str_dt())
+            if with_fn_adata:
+                mc.create_dataset("fn_adata", data=fn_adata, dtype=_str_dt())
             ap = mc.create_group("align_params")
             ap.create_dataset("align_hz", data=80.0)
 
     def test_load_trial_table(self):
-        """Normalized dict has resolved paths, dims, and align params."""
+        """Resolved dict is flat with hoisted arrays and absolute paths."""
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "trial_table.h5")
             self._write_trial_table(path)
             out = load_trial_table(path)
 
-        self.assertEqual(out["datadr"], "/data")
-        self.assertEqual(out["result_dr"], "/res")
         self.assertEqual(
-            out["moco_save_dr"], os.path.join("/res", "motion_correction")
+            os.path.normpath(out["datadr"]), os.path.normpath("/data")
+        )
+        self.assertEqual(
+            os.path.normpath(out["savedr"]), os.path.normpath("/res")
+        )
+        self.assertEqual(
+            os.path.normpath(out["moco_save_dr"]),
+            os.path.normpath(os.path.join("/res", "motion_correction")),
         )
         self.assertEqual(out["n_dmds"], 1)
         self.assertEqual(out["n_trials"], 2)
         self.assertAlmostEqual(out["align_params"]["align_hz"], 80.0)
-        tt = out["trial_table"]
-        self.assertEqual(tt["fn_adata"][0, 1], "")
+        self.assertEqual(out["fn_adata"][0, 1], "")
         self.assertEqual(
-            tt["fn_adata"][0, 0],
-            os.path.join("/res", "motion_correction", "t1_AD.h5"),
+            os.path.normpath(out["fn_adata"][0, 0]),
+            os.path.normpath(
+                os.path.join("/res", "motion_correction", "t1_AD.h5")
+            ),
         )
-        self.assertIn("Path1", tt["ref_stack"])
+        self.assertIn("Path1", out["ref_stack"])
+        np.testing.assert_array_equal(out["first_line"], np.array([[1, 2]]))
+
+    def test_load_trial_table_unregistered(self):
+        """A table without motion_correction/fn_adata is rejected."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "trial_table.h5")
+            self._write_trial_table(path, with_fn_adata=False)
+            with self.assertRaises(ValueError):
+                load_trial_table(path)
+
+    def test_compute_keep_trials(self):
+        """Only trials whose aData and source files both exist are kept."""
+        with tempfile.TemporaryDirectory() as d:
+            adata = os.path.join(d, "t1_AD.h5")
+            with open(adata, "w") as fh:
+                fh.write("x")
+            with open(os.path.join(d, "t1.dat"), "w") as fh:
+                fh.write("x")
+            fn_adata = np.array([[adata, ""]], dtype=object)
+            filename = np.array([["t1.dat", "t2.dat"]], dtype=object)
+            keep = compute_keep_trials(fn_adata, filename, d)
+        np.testing.assert_array_equal(keep, np.array([[True, False]]))
+
+    def test_read_align_info(self):
+        """align_hz/num_channels come from the first kept trial's aData."""
+        with tempfile.TemporaryDirectory() as d:
+            adata = os.path.join(d, "t1_AD.h5")
+            with h5py.File(adata, "w") as f:
+                f.create_dataset("row_major", data=1)
+                f.create_dataset("numChannels", data=2)
+                f.create_dataset("alignHz", data=80.0)
+            fn_adata = np.array([[adata, ""]], dtype=object)
+            keep = np.array([[True, False]])
+            align_hz, num_channels = read_align_info(fn_adata, keep, 1)
+        self.assertAlmostEqual(align_hz["DMD1"], 80.0)
+        self.assertEqual(num_channels, 2)
+
+    def test_read_align_info_no_valid(self):
+        """A DMD with no kept trials contributes no align_hz entry."""
+        fn_adata = np.array([["", ""]], dtype=object)
+        keep = np.array([[False, False]])
+        align_hz, num_channels = read_align_info(fn_adata, keep, 1)
+        self.assertEqual(align_hz, {})
+        self.assertIsNone(num_channels)
 
 
 if __name__ == "__main__":

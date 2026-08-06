@@ -23,6 +23,8 @@ from typing import Union
 import h5py
 import numpy as np
 
+from ..models import TrialTable
+
 
 def to_serializable(val):
     """Recursively convert numpy types/arrays to JSON-friendly Python values.
@@ -265,11 +267,17 @@ def _resolve_fn_adata(fn_adata: np.ndarray, moco_save_dr: str) -> np.ndarray:
 
 
 def load_trial_table(path: Union[str, Path]) -> dict:
-    """Load and normalize a GIAnT ``trial_table.h5`` for BandSILo.
+    """Resolve a registered SLAP2 band ``trial_table.h5`` to a runtime view.
 
-    Reads the trial table written by BandRegistration.m and assembles the
-    normalized structure consumed by the band backend (mirrors the
-    setup block of ``main`` in ``extractSLAP2IntegrationSources.py``).
+    Faithful load is delegated to :meth:`giant_python.models.TrialTable\
+.from_h5` (which mirrors the README schema exactly); this function performs
+    only the *structural* resolution the band backend needs: it hoists the
+    per-trial arrays out of ``slap2_info`` / ``motion_correction``, resolves
+    ``fn_adata`` basenames to absolute paths under
+    ``savedr/motion_correction``, and derives the result subdirectories and
+    ``(n_dmds, n_trials)``. The disk-dependent pieces (kept-trial mask,
+    per-DMD ``alignHz``, channel count) are computed separately by
+    :func:`compute_keep_trials` / :func:`read_align_info`.
 
     Parameters
     ----------
@@ -279,20 +287,30 @@ def load_trial_table(path: Union[str, Path]) -> dict:
     Returns
     -------
     dict
-        Keys: ``datadr``, ``result_dr``, ``moco_save_dr``,
+        Flat runtime view with keys ``datadr``, ``savedr``, ``moco_save_dr``,
         ``annotation_save_dr``, ``src_extr_save_dr``, ``align_params``,
-        ``n_dmds``, ``n_trials``, and ``trial_table`` (a dict with
-        ``filename``, ``first_line``, ``last_line``, ``fn_adata`` (absolute
-        paths), ``datadr``, ``savedr``, ``ref_stack``).
+        ``n_dmds``, ``n_trials``, ``filename``, ``first_line``, ``last_line``,
+        ``fn_adata`` (absolute paths), and ``ref_stack``.
+
+    Raises
+    ------
+    ValueError
+        If the file is not a registered SLAP2 band trial table (missing
+        ``slap2_info`` or ``motion_correction/fn_adata``).
     """
-    tt = load_struct_from_h5(path)
+    tt = TrialTable.from_h5(path)
+    slap2 = tt.slap2_info
+    motion_correction = tt.motion_correction or {}
+    if slap2 is None or "fn_adata" not in motion_correction:
+        raise ValueError(
+            "load_trial_table expects a registered SLAP2 band trial table "
+            "(slap2_info + motion_correction/fn_adata); "
+            f"got {str(path)!r}."
+        )
 
-    datadr = str(tt["datadr"])
-    result_dr = str(tt["savedr"])
+    datadr = str(tt.datadr) if tt.datadr is not None else ""
+    result_dr = str(tt.savedr) if tt.savedr is not None else ""
     moco_save_dr = os.path.join(result_dr, "motion_correction")
-
-    motion_correction = tt.get("motion_correction", {}) or {}
-    slap2_info = tt.get("slap2_info", {}) or {}
 
     align_params = {
         key: to_serializable(val)
@@ -301,34 +319,112 @@ def load_trial_table(path: Union[str, Path]) -> dict:
         ).items()
     }
 
-    filenames = np.atleast_2d(np.asarray(tt["filename"], dtype=object))
-    first_line = np.atleast_2d(np.asarray(slap2_info["first_line"]))
-    last_line = np.atleast_2d(np.asarray(slap2_info["last_line"]))
+    filenames = np.atleast_2d(np.asarray(tt.filename, dtype=object))
+    first_line = np.atleast_2d(np.asarray(slap2.first_line))
+    last_line = np.atleast_2d(np.asarray(slap2.last_line))
     fn_adata = np.atleast_2d(
         np.asarray(motion_correction["fn_adata"], dtype=object)
     )
 
     n_dmds, n_trials = filenames.shape
-    fn_adata_full = _resolve_fn_adata(fn_adata, moco_save_dr)
-
-    trial_table = {
-        "filename": filenames,
-        "first_line": first_line,
-        "last_line": last_line,
-        "fn_adata": fn_adata_full,
-        "datadr": datadr,
-        "savedr": result_dr,
-        "ref_stack": slap2_info.get("ref_stack", {}) or {},
-    }
 
     return {
         "datadr": datadr,
-        "result_dr": result_dr,
+        "savedr": result_dr,
         "moco_save_dr": moco_save_dr,
         "annotation_save_dr": os.path.join(result_dr, "annotations"),
         "src_extr_save_dr": os.path.join(result_dr, "source_extraction"),
         "align_params": align_params,
         "n_dmds": int(n_dmds),
         "n_trials": int(n_trials),
-        "trial_table": trial_table,
+        "filename": filenames,
+        "first_line": first_line,
+        "last_line": last_line,
+        "fn_adata": _resolve_fn_adata(fn_adata, moco_save_dr),
+        "ref_stack": slap2.ref_stack or {},
     }
+
+
+def compute_keep_trials(
+    fn_adata_abs: np.ndarray,
+    filename: np.ndarray,
+    datadr: Union[str, Path],
+) -> np.ndarray:
+    """Return the ``(n_dmds, n_trials)`` mask of trials whose files exist.
+
+    A trial is kept only if its alignment-data file (absolute ``fn_adata``
+    path) and its source file (``filename`` resolved under ``datadr``) both
+    exist on disk. Mirrors the ``verifyFiles`` / ``keepTrials`` logic in
+    ``extractSLAP2IntegrationSources.py``.
+
+    Parameters
+    ----------
+    fn_adata_abs : ndarray of object, shape (n_dmds, n_trials)
+        Absolute alignment-data paths (``''`` where absent).
+    filename : ndarray of object, shape (n_dmds, n_trials)
+        Source-file basenames, resolved under ``datadr``.
+    datadr : str or Path
+        Raw-data directory.
+
+    Returns
+    -------
+    ndarray of bool, shape (n_dmds, n_trials)
+        The kept-trial mask.
+    """
+    fn_adata_abs = np.atleast_2d(np.asarray(fn_adata_abs, dtype=object))
+    filename = np.atleast_2d(np.asarray(filename, dtype=object))
+    n_dmds, n_trials = fn_adata_abs.shape
+    keep = np.ones((n_dmds, n_trials), dtype=bool)
+    for d in range(n_dmds):
+        for t in range(n_trials):
+            adata = fn_adata_abs[d, t]
+            src = filename[d, t]
+            src_path = os.path.join(str(datadr), str(src)) if src else ""
+            if (
+                not adata
+                or not os.path.exists(str(adata))
+                or not src
+                or not os.path.exists(src_path)
+            ):
+                keep[d, t] = False
+    return keep
+
+
+def read_align_info(
+    fn_adata_abs: np.ndarray,
+    keep_trials: np.ndarray,
+    n_dmds: int,
+) -> tuple:
+    """Read per-DMD ``alignHz`` and the channel count from alignment data.
+
+    For each DMD, reads the first kept trial's ``_ALIGNMENTDATA.h5`` to recover
+    the alignment rate and acquisition channel count (which live in the
+    alignment files, not in ``trial_table.h5``).
+
+    Parameters
+    ----------
+    fn_adata_abs : ndarray of object, shape (n_dmds, n_trials)
+        Absolute alignment-data paths.
+    keep_trials : ndarray of bool, shape (n_dmds, n_trials)
+        Kept-trial mask from :func:`compute_keep_trials`.
+    n_dmds : int
+        Number of DMD paths.
+
+    Returns
+    -------
+    tuple
+        ``(align_hz, num_channels)`` -- a ``{"DMD{N}": alignHz}`` dict and the
+        channel count (``None`` if every DMD had no kept trials).
+    """
+    fn_adata_abs = np.atleast_2d(np.asarray(fn_adata_abs, dtype=object))
+    keep_trials = np.atleast_2d(np.asarray(keep_trials))
+    align_hz = {}
+    num_channels = None
+    for d in range(n_dmds):
+        valid = np.flatnonzero(keep_trials[d])
+        if valid.size == 0:
+            continue
+        a_data = load_alignment_data_h5(fn_adata_abs[d, valid[0]])
+        align_hz[f"DMD{d + 1}"] = a_data["alignHz"]
+        num_channels = a_data["numChannels"]
+    return align_hz, num_channels

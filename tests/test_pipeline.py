@@ -182,10 +182,24 @@ class TestPipelineFacade(unittest.TestCase):
         self.assertEqual(self.pipe.tt, "TT2")
 
     def test_annotate_delegates(self):
-        """annotate lazily invokes the ROI-annotation GUI step."""
+        """A non-band scan mode uses the generic annotation GUI."""
+        self.pipe.silo_params.scan_mode = "standard"
         with mock.patch("giant_python.gui.annotate_rois") as annotate_rois:
             result = self.pipe.annotate()
         annotate_rois.assert_called_once()
+        self.assertIs(result, self.pipe)
+
+    def test_annotate_band_delegates(self):
+        """A band scan mode uses the BandSILo standalone annotation step."""
+        self.pipe.silo_params.scan_mode = "band"
+        self.pipe.tt = mock.Mock(savedr="/results")
+        with mock.patch(
+            "giant_python.bandsilo.annotate.annotate_band_rois"
+        ) as annotate_band:
+            result = self.pipe.annotate()
+        annotate_band.assert_called_once()
+        called_path = annotate_band.call_args[0][0]
+        self.assertEqual(called_path.name, "trial_table.h5")
         self.assertIs(result, self.pipe)
 
     def test_extract_delegates(self):
@@ -199,10 +213,37 @@ class TestPipelineFacade(unittest.TestCase):
         self.assertIs(result, self.pipe)
         self.assertEqual(self.pipe.summary, "SUMMARY")
 
-    def test_run_all(self):
-        """run_all raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
+    def test_run_all_sequences_stages(self):
+        """run_all sequences organize -> register -> annotate -> extract."""
+        with mock.patch.object(
+            self.pipe, "organize", return_value=self.pipe
+        ) as organize, mock.patch.object(
+            self.pipe, "register", return_value=self.pipe
+        ) as register, mock.patch.object(
+            self.pipe, "annotate", return_value=self.pipe
+        ) as annotate, mock.patch.object(
+            self.pipe, "extract", return_value=self.pipe
+        ) as extract:
+            result = self.pipe.run_all("/data", annotate=True)
+        organize.assert_called_once_with("/data")
+        register.assert_called_once()
+        annotate.assert_called_once()
+        extract.assert_called_once()
+        self.assertIs(result, self.pipe)
+
+    def test_run_all_skips_annotation(self):
+        """run_all skips annotation when annotate is False."""
+        with mock.patch.object(
+            self.pipe, "organize", return_value=self.pipe
+        ), mock.patch.object(
+            self.pipe, "register", return_value=self.pipe
+        ), mock.patch.object(
+            self.pipe, "annotate", return_value=self.pipe
+        ) as annotate, mock.patch.object(
+            self.pipe, "extract", return_value=self.pipe
+        ):
             self.pipe.run_all("/data")
+        annotate.assert_not_called()
 
     def test_from_trial_table(self):
         """from_trial_table raises NotImplementedError."""

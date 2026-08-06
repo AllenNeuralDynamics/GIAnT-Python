@@ -140,16 +140,27 @@ class Pipeline:
     def annotate(self) -> "Pipeline":
         """Run the optional ROI-annotation GUI step.
 
-        Imported lazily so headless installs never import the GUI extra.
+        Dispatches on the source-extraction scan mode: ``"band"`` uses the
+        BandSILo standalone annotation step (writing
+        ``<savedr>/annotations/annotations.h5``); any other mode uses the
+        generic annotation GUI. GUI modules are imported lazily so headless
+        installs never import the GUI extra.
 
         Returns
         -------
         Pipeline
             ``self`` (supports method chaining).
         """
-        from ..gui import annotate_rois
+        if self.silo_params.scan_mode == "band":
+            from ..bandsilo.annotate import annotate_band_rois
 
-        annotate_rois(self.tt)
+            annotate_band_rois(
+                Path(self.tt.savedr) / "trial_table.h5", self.silo_params
+            )
+        else:
+            from ..gui import annotate_rois
+
+            annotate_rois(self.tt)
         return self
 
     def extract(self) -> "Pipeline":
@@ -184,11 +195,16 @@ class Pipeline:
             extraction.
         resume : bool
             Skip stages whose HDF5 outputs already exist (mirrors the
-            ``overwriteExisting`` logic in GIAnT-MATLAB).
+            ``overwriteExisting`` logic in GIAnT-MATLAB). Reserved for the
+            per-stage checkpoint logic; not yet honored.
 
         Returns
         -------
         Pipeline
             ``self`` (with ``tt`` and ``summary`` populated).
         """
-        raise NotImplementedError
+        del resume  # reserved for future per-stage checkpointing
+        self.organize(data_dir).register()
+        if annotate:
+            self.annotate()
+        return self.extract()

@@ -74,6 +74,13 @@ class SiloParams:
     draw_user_rois : bool
         Whether to prompt for / use user ROIs; also gates writing the
         ``user_rois`` group and per-ROI traces to ``experiment_summary.h5``.
+    interactive : bool or None
+        Tri-state override for whether a GUI may be launched when
+        ``draw_user_rois`` is set but no ``annotations.h5`` exists. ``True``
+        forces the drawing GUI, ``False`` forces headless (fail fast with
+        guidance), and ``None`` (the default) auto-detects (respecting the
+        ``GIANT_HEADLESS`` env var and stdin being a TTY). See
+        :func:`giant_python.bandsilo.annotate.resolve_interactivity`.
     analyze_hz : float or None
         Temporal analysis rate, in Hz. When ``None``, the BandSILo backend
         falls back to ``100``.
@@ -121,6 +128,7 @@ class SiloParams:
     peakth: Optional[float] = None
     activity_channel: int = 0
     draw_user_rois: bool = False
+    interactive: Optional[bool] = None
     analyze_hz: Optional[float] = None
     decay_tau_s: float = 0.15
     baseline_window_s: float = 4.0

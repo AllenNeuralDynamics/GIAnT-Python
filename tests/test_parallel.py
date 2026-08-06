@@ -1,8 +1,7 @@
-"""Tests for the parallel helper and the CLI entry point."""
+"""Tests for the per-trial parallelism helper."""
 
 import unittest
 
-from giant_python.cli import main
 from giant_python.parallel import map_trials
 
 
@@ -29,15 +28,6 @@ class TestMapTrials(unittest.TestCase):
         self.assertEqual(
             map_trials(_double, [1, 2, 3, 4], n_workers=2), [2, 4, 6, 8]
         )
-
-
-class TestCli(unittest.TestCase):
-    """Tests for the CLI entry point."""
-
-    def test_not_implemented(self):
-        """main raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            main([])
 
 
 if __name__ == "__main__":
