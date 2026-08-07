@@ -77,6 +77,20 @@ def _path_result(
     )
 
 
+class TestEffectiveAnalyzeHz(unittest.TestCase):
+    """effective_analyze_hz applies the 100 Hz default for None."""
+
+    def test_none_defaults_to_100(self):
+        """An unset analyze_hz falls back to 100.0."""
+        self.assertEqual(pl.effective_analyze_hz(None), 100.0)
+
+    def test_value_passthrough(self):
+        """A set analyze_hz is returned as a float."""
+        out = pl.effective_analyze_hz(80)
+        self.assertEqual(out, 80.0)
+        self.assertIsInstance(out, float)
+
+
 class TestDmdUserRois(unittest.TestCase):
     """_dmd_user_rois slices a resolved session selection per DMD."""
 
