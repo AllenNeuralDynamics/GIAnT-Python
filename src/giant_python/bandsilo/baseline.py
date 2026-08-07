@@ -144,7 +144,9 @@ def compute_f0(
         .to_numpy()
     )
 
-    f0 = f0.reshape(f0.shape[0], -1)
+    # ``to_numpy()`` can hand back a read-only view (pandas copy-on-write), so
+    # take a writable, owned copy before assigning the per-column baselines.
+    f0 = np.array(f0, dtype=float).reshape(f0.shape[0], -1)
     for cix in range(f0.shape[1]):
         if np.all(np.isnan(f0[:, cix])):
             continue

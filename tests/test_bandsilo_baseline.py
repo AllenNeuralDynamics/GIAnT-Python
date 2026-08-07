@@ -93,6 +93,24 @@ class TestComputeF0(unittest.TestCase):
         self.assertEqual(f0.shape, f.shape)
         self.assertFalse(np.all(np.isnan(f0)))
 
+    def test_copy_on_write_readonly_rolling_result(self):
+        """Under pandas copy-on-write, to_numpy() is read-only; f0 still fits.
+
+        Regression: ``rolling().median().to_numpy()`` returns a read-only view
+        when copy-on-write is enabled (the default in newer pandas), which used
+        to break the in-place per-column baseline assignment.
+        """
+        import pandas as pd
+
+        f = np.stack(
+            [self._drifting_trace(seed=1), self._drifting_trace(seed=2)],
+            axis=1,
+        )
+        with pd.option_context("mode.copy_on_write", True):
+            f0 = bl.compute_f0(f, 9, 40)
+        self.assertEqual(f0.shape, f.shape)
+        self.assertFalse(np.all(np.isnan(f0)))
+
 
 class TestAssembleDff(unittest.TestCase):
     """assemble_dff combines the least-squares traces into dF/F."""
