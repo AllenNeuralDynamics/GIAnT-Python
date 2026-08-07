@@ -33,6 +33,7 @@ class TestBuildParser(unittest.TestCase):
         self.assertEqual(args.scan_mode, "band")
         self.assertFalse(args.draw_user_rois)
         self.assertIsNone(args.interactive)
+        self.assertFalse(args.verbose)
 
     def test_extract_flags(self):
         """extract parses the draw and headless flags."""
@@ -63,6 +64,7 @@ class TestParamsFromArgs(unittest.TestCase):
                 "--interactive",
                 "--operator",
                 "Alice",
+                "--verbose",
             ]
         )
         params = cli._params_from_args(args)
@@ -70,6 +72,7 @@ class TestParamsFromArgs(unittest.TestCase):
         self.assertTrue(params.draw_user_rois)
         self.assertTrue(params.interactive)
         self.assertEqual(params.operator, "Alice")
+        self.assertTrue(params.verbose)
 
 
 class TestMain(unittest.TestCase):

@@ -5,16 +5,26 @@ Centralizes the choice of parallel backend (e.g. joblib /
 trials without each stage reimplementing the plumbing.
 """
 
-from typing import Callable, Iterable, List, TypeVar
+from typing import Callable, Iterable, List, Optional, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+def _maybe_bar(trials: list, desc: Optional[str]):
+    """Wrap ``trials`` in a tqdm bar when ``desc`` is set, else as-is."""
+    if desc is None:
+        return trials
+    from tqdm import tqdm
+
+    return tqdm(trials, desc=desc)
 
 
 def map_trials(
     func: Callable[[T], R],
     trials: Iterable[T],
     n_workers: int = 1,
+    desc: Optional[str] = None,
 ) -> List[R]:
     """Apply *func* to each trial, optionally in parallel.
 
@@ -30,6 +40,9 @@ def map_trials(
         The trials to process.
     n_workers : int
         Number of parallel workers. ``1`` runs serially.
+    desc : str, optional
+        When set, display a tqdm progress bar with this label as the trials are
+        dispatched (used by the verbose band pipeline). ``None`` shows nothing.
 
     Returns
     -------
@@ -38,8 +51,10 @@ def map_trials(
     """
     trials = list(trials)
     if n_workers <= 1 or len(trials) <= 1:
-        return [func(t) for t in trials]
+        return [func(t) for t in _maybe_bar(trials, desc)]
 
     from joblib import Parallel, delayed
 
-    return Parallel(n_jobs=n_workers)(delayed(func)(t) for t in trials)
+    return Parallel(n_jobs=n_workers)(
+        delayed(func)(t) for t in _maybe_bar(trials, desc)
+    )

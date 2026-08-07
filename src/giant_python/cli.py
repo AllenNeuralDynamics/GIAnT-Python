@@ -52,6 +52,11 @@ def _add_silo_options(parser: argparse.ArgumentParser) -> None:
         default=SiloParams.operator,
         help="Operator name recorded in the output metadata.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print per-stage status messages and progress bars.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,6 +101,7 @@ def _params_from_args(args: argparse.Namespace) -> SiloParams:
         draw_user_rois=args.draw_user_rois,
         interactive=args.interactive,
         operator=args.operator,
+        verbose=args.verbose,
     )
 
 

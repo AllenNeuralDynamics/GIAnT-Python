@@ -116,6 +116,11 @@ class SiloParams:
         Dilation size selecting the bundled ``dil-NN.tif`` PSF template.
     operator : str
         Operator name recorded in the output metadata.
+    verbose : bool
+        When set, the band pipeline prints per-stage status messages and shows
+        tqdm progress bars over its long-running loops (per-trial reads, rho,
+        activity image, NMF). Off by default so headless / batch runs stay
+        quiet. See :mod:`giant_python.bandsilo.progress`.
     """
 
     microscope: str = "slap2"
@@ -141,6 +146,7 @@ class SiloParams:
     num_channels: Optional[int] = None
     psf_dilation: int = 17
     operator: str = "SLAP2 User"
+    verbose: bool = False
 
 
 def set_params(

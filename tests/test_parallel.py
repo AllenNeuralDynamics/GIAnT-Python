@@ -29,6 +29,12 @@ class TestMapTrials(unittest.TestCase):
             map_trials(_double, [1, 2, 3, 4], n_workers=2), [2, 4, 6, 8]
         )
 
+    def test_desc_shows_progress_bar(self):
+        """A desc label wraps the trials in a bar without changing results."""
+        self.assertEqual(
+            map_trials(_double, [1, 2, 3], desc="doubling"), [2, 4, 6]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

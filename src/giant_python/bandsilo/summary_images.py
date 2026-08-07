@@ -25,6 +25,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.ndimage as ndimage
 
+from .progress import progress
 from .trial_data import fast_dilation
 
 
@@ -100,6 +101,7 @@ def accumulate_activity_image(
     dmd_pixels_per_column: int,
     dmd_pixels_per_row: int,
     batch_size: int = 1000,
+    verbose: bool = False,
 ) -> np.ndarray:
     """Accumulate squared spatio-temporal local maxima of ``rho``.
 
@@ -119,6 +121,8 @@ def accumulate_activity_image(
         Spatial grid geometry.
     batch_size : int
         Number of frames processed per batch (capped at ``n_frames``).
+    verbose : bool
+        Show a per-batch progress bar when set.
 
     Returns
     -------
@@ -176,7 +180,9 @@ def accumulate_activity_image(
     batch_rho_pow2_core = np.empty(interior_shape, dtype=np.float32)
     time_indices_pre = np.arange(prealloc_size)[:, None]
 
-    for batch_idx in range(num_batches):
+    for batch_idx in progress(
+        range(num_batches), desc="Creating activity map", verbose=verbose
+    ):
         batch_start = batch_idx * batch_size
         batch_end = min(batch_start + batch_size, n_frames)
         padded_start = max(0, batch_start - temporal_pad)

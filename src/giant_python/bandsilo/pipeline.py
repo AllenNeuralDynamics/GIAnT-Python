@@ -53,6 +53,7 @@ from .hdf5 import (
 )
 from .nmf import fit_sources
 from .peaks import get_act_im_peaks
+from .progress import log, progress
 from .traces import get_high_res_traces
 
 _FRAME_INFO_KEYS = (
@@ -509,6 +510,7 @@ def extract_band_sources(
         The extracted sources and summary (also written to disk).
     """
     params = _resolve_params(params_in)
+    log(f"Loading trial table {path_to_trial_table}", params.verbose)
     trial_table = load_trial_table(path_to_trial_table)
     result_dr = str(trial_table["savedr"])
     src_extr_dr = Path(result_dr) / "source_extraction"
@@ -537,8 +539,10 @@ def extract_band_sources(
         result_dr, trial_table, lookup, params
     )
 
+    n_dmds = trial_table["n_dmds"]
+    log(f"Extracting sources for {n_dmds} DMD path(s)", params.verbose)
     assembled_paths = []
-    for dmd_ix in range(trial_table["n_dmds"]):
+    for dmd_ix in range(n_dmds):
         assembled_paths.append(
             assemble_path_outputs(
                 _process_dmd(
@@ -548,6 +552,7 @@ def extract_band_sources(
         )
 
     params_serializable = to_serializable(_params_dict(params))
+    log(f"Writing {output_path}", params.verbose)
     write_experiment_summary(output_path, params_serializable, assembled_paths)
     return build_experiment_summary(params_serializable, assembled_paths)
 
@@ -588,6 +593,7 @@ def _process_dmd(
     the per-trial ``F_soma``.
     """
     key = f"DMD{dmd_ix + 1}"
+    log(f"Processing {key}", params.verbose)
     soma_masks, soma_labels, soma_sps = _dmd_user_rois(user_rois, key)
     datadr = str(trial_table["datadr"])
     n_trials = trial_table["filename"].shape[1]
@@ -632,7 +638,13 @@ def _process_dmd(
         )
 
     low = td.assemble_lowres_data(
-        map_trials(_read, range(n_trials), params.max_workers), num_channels
+        map_trials(
+            _read,
+            range(n_trials),
+            params.max_workers,
+            desc=f"{key} reading trials" if params.verbose else None,
+        ),
+        num_channels,
     )
     low_res_data_norm = low["lowResData"] / low["lowResDataCt"]
     v_im = 1.0 / low["lowResDataCt"]
@@ -751,7 +763,12 @@ def _process_dmd(
             soma_sps,
         )
 
-    trace_results = map_trials(_traces, range(n_trials), params.max_workers)
+    trace_results = map_trials(
+        _traces,
+        range(n_trials),
+        params.max_workers,
+        desc=f"{key} extracting traces" if params.verbose else None,
+    )
     trace_results = [r for r in trace_results if r[0].shape[0] > 0]
 
     return PathResult(
@@ -797,13 +814,16 @@ def _estimate_background(
     params,
 ):  # pragma: no cover - Phase-4 background composition over real data
     """Interpolated + rolling-baseline background on the superpixel grid."""
+    log("Estimating background", params.verbose)
     psf_tensor, psf_center, psf_exp, psf_center_exp = bg.expand_psf(psf2d)
     interp_data = np.full(
         (sel_pix_idxs.shape[0], low_res_data_norm.shape[1]),
         np.nan,
         dtype=np.float32,
     )
-    for z in range(num_fast_zs):
+    for z in progress(
+        range(num_fast_zs), desc="Interpolating planes", verbose=params.verbose
+    ):
         z_idxs, sel_2d = bg.selected_pixels_2d_for_plane(
             sel_pix_idxs, z, dmd_pixels_per_column, dmd_pixels_per_row
         )
@@ -860,6 +880,7 @@ def _localize(
     params,
 ):  # pragma: no cover - Phase 4-6 rho/activity/NMF over real data
     """Compute rho + activity image, detect peaks, and NMF-fit sources."""
+    log("Computing activity image and localizing sources", params.verbose)
     h_mots = bg.build_motion_h_matrices(
         sparse_h_inds,
         sparse_h_vals,
@@ -870,7 +891,11 @@ def _localize(
     )
     psf_tensor, psf_center, psf_exp, psf_center_exp = bg.expand_psf(psf2d)
     d_mats, d_mats_exp = [], []
-    for z in range(num_fast_zs):
+    for z in progress(
+        range(num_fast_zs),
+        desc="Computing D matrices",
+        verbose=params.verbose,
+    ):
         _, sel_2d = bg.selected_pixels_2d_for_plane(
             sel_pix_idxs, z, dmd_pixels_per_column, dmd_pixels_per_row
         )
@@ -895,9 +920,14 @@ def _localize(
         dmd_pixels_per_column,
         dmd_pixels_per_row,
         psf2d,
+        verbose=params.verbose,
     )
     nan_ct = bg.mask_high_nan_rho(rho)
-    rho = bg.smooth_rho(rho, bg.decay_kernel_1d(params.decay_tau_s, align_hz))
+    rho = bg.smooth_rho(
+        rho,
+        bg.decay_kernel_1d(params.decay_tau_s, align_hz),
+        verbose=params.verbose,
+    )
 
     act_im = si.accumulate_activity_image(
         rho,
@@ -905,6 +935,7 @@ def _localize(
         num_fast_zs,
         dmd_pixels_per_column,
         dmd_pixels_per_row,
+        verbose=params.verbose,
     )
     act_im = si.finalize_activity_image(act_im, sel_pix_idxs, nan_ct)
 
@@ -925,6 +956,7 @@ def _localize(
         n_pixels,
         params.d_xy,
         params.sparse_fac,
+        verbose=params.verbose,
     )
     return (
         act_im,

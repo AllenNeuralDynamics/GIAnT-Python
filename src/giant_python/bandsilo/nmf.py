@@ -37,6 +37,8 @@ from typing import List
 import numpy as np
 import torch
 
+from .progress import progress
+
 
 def sel_pix_gaussian_profile(
     gaussian_params: torch.Tensor, pixel_coords_tensor: torch.Tensor
@@ -654,6 +656,7 @@ def fit_sources(
     mult_nmf_max_iters: int = 10,
     learning_rate: float = 0.01,
     gd_tol: float = 1e-4,
+    verbose: bool = False,
 ) -> dict:
     """Localize sources by superpixel-space NMF + Gaussian-profile fitting.
 
@@ -687,6 +690,8 @@ def fit_sources(
         Base Adam learning rate.
     gd_tol : float
         Adam convergence tolerance.
+    verbose : bool
+        Show a progress bar over the outer NMF/fit iterations when set.
 
     Returns
     -------
@@ -716,7 +721,11 @@ def fit_sources(
         (n_frames, n_sources), float("nan"), dtype=torch.float32
     )
 
-    for outer_loop_iter in range(outer_loop_iters):
+    for outer_loop_iter in progress(
+        range(outer_loop_iters),
+        desc="Localizing sources (NMF)",
+        verbose=verbose,
+    ):
         x_mots = multiplicative_nmf(
             a,
             h_mots,

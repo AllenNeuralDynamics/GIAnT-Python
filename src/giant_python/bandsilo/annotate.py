@@ -38,6 +38,7 @@ from .gui import (
     save_annotations_h5,
 )
 from .hdf5 import compute_keep_trials, load_alignment_data_h5, load_trial_table
+from .progress import log
 
 
 def first_valid_trial(keep_trials: np.ndarray, dmd_ix: int) -> int:
@@ -307,6 +308,7 @@ def annotate_band_rois(
         Path to the written (or existing) ``annotations.h5``.
     """
     params = _resolve_params(params_in)
+    log(f"Loading trial table {path_to_trial_table}", params.verbose)
     trial_table = load_trial_table(path_to_trial_table)
     trial_table["keep_trials"] = compute_keep_trials(
         trial_table["fn_adata"],
@@ -319,6 +321,11 @@ def annotate_band_rois(
         Path(trial_table["moco_save_dr"]) / "bandRegLookupTable.h5",
         trial_table["n_dmds"],
     )
+    log(
+        f"Loading reference geometry for {trial_table['n_dmds']} "
+        "DMD path(s)",
+        params.verbose,
+    )
     user_roi_geo, ref_files = build_user_roi_geometry(trial_table, lookup)
 
     resolve_user_rois(
@@ -328,4 +335,6 @@ def annotate_band_rois(
         interactive=resolve_interactivity(params.interactive),
         ref_files=ref_files,
     )
-    return os.path.join(str(annotation_dir), "annotations.h5")
+    out_path = os.path.join(str(annotation_dir), "annotations.h5")
+    log(f"Annotations at {out_path}", params.verbose)
+    return out_path

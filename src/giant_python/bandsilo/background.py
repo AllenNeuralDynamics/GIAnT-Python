@@ -33,6 +33,8 @@ import torch
 from scipy import signal
 from scipy.interpolate import RectBivariateSpline
 
+from .progress import progress
+
 
 def bin_motion(
     motion_r: np.ndarray, motion_c: np.ndarray, motion_z: np.ndarray
@@ -904,6 +906,7 @@ def compute_rho(
     dmd_pixels_per_column: int,
     dmd_pixels_per_row: int,
     psf2d: np.ndarray,
+    verbose: bool = False,
 ) -> np.ndarray:
     """Compute the ``rho`` matched-filter response on the selected pixels.
 
@@ -932,6 +935,8 @@ def compute_rho(
         Grid geometry.
     psf2d : ndarray
         The (cropped) PSF for this DMD.
+    verbose : bool
+        Show a per-motion-bin progress bar when set.
 
     Returns
     -------
@@ -948,7 +953,11 @@ def compute_rho(
         (len(sel_pix_idxs), residual.shape[1]), np.nan, dtype=np.float32
     )
 
-    for i in range(len(unique_motion_to_keep_yx)):
+    for i in progress(
+        range(len(unique_motion_to_keep_yx)),
+        desc="Computing rho",
+        verbose=verbose,
+    ):
         motion_frames = np.flatnonzero(mot_inds_yx == i)
         if motion_frames.size == 0:
             continue
@@ -1066,7 +1075,9 @@ def decay_kernel_1d(decay_tau_s: float, align_hz: float) -> np.ndarray:
     return k1d / np.sum(k1d)
 
 
-def smooth_rho(rho: np.ndarray, k1d: np.ndarray) -> np.ndarray:
+def smooth_rho(
+    rho: np.ndarray, k1d: np.ndarray, verbose: bool = False
+) -> np.ndarray:
     """NaN-aware temporal smoothing of ``rho`` with a 1-D decay kernel.
 
     Convolves along time only, dividing the smoothed values by the smoothed
@@ -1080,6 +1091,8 @@ def smooth_rho(rho: np.ndarray, k1d: np.ndarray) -> np.ndarray:
         The rho response (NaN allowed).
     k1d : ndarray
         1-D smoothing kernel from :func:`decay_kernel_1d`.
+    verbose : bool
+        Show a per-row-chunk progress bar when set.
 
     Returns
     -------
@@ -1091,7 +1104,11 @@ def smooth_rho(rho: np.ndarray, k1d: np.ndarray) -> np.ndarray:
     bytes_per_row = max(1, n_time) * np.dtype(np.float32).itemsize * 3
     row_chunk = max(64, min(4096, int(200_000_000 // bytes_per_row)))
 
-    for r0 in range(0, rho.shape[0], row_chunk):
+    for r0 in progress(
+        range(0, rho.shape[0], row_chunk),
+        desc="Smoothing rho",
+        verbose=verbose,
+    ):
         r1 = min(r0 + row_chunk, rho.shape[0])
         rc = rho[r0:r1].copy()
         row_has_data = np.any(np.isfinite(rc), axis=1)
