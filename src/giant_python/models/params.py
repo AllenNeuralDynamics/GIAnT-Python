@@ -48,6 +48,17 @@ class AlignParams:
 class SiloParams:
     """Source-extraction (SILo) parameters (mirrors the SILo params struct).
 
+    Defaults policy
+    ---------------
+    Every value parameter carries a concrete default, so a bare
+    :class:`SiloParams` never lets a ``None`` reach the numerics. ``None`` is
+    reserved as an explicit "resolve at runtime" sentinel for the few fields
+    that cannot have a fixed default: ``num_channels`` (read from the
+    acquisition metadata), ``interactive`` (auto-detected from the
+    environment), and the standard-SILo-only ``phi`` / ``tau_s`` /
+    ``photon_scale`` (consumed only by the not-yet-implemented pixel-movie
+    backend). Each of those is resolved in exactly one place.
+
     Attributes
     ----------
     microscope : str
@@ -67,8 +78,8 @@ class SiloParams:
         Deconvolution time constant, in seconds.
     photon_scale : float or None
         Photons per digital unit (variance modeling).
-    peakth : float or None
-        Activity-image peak detection threshold.
+    peakth : float
+        Activity-image peak detection threshold (default ``8``).
     activity_channel : int
         Channel index used for activity detection.
     draw_user_rois : bool
@@ -81,9 +92,9 @@ class SiloParams:
         guidance), and ``None`` (the default) auto-detects (respecting the
         ``GIANT_HEADLESS`` env var and stdin being a TTY). See
         :func:`giant_python.bandsilo.annotate.resolve_interactivity`.
-    analyze_hz : float or None
-        Temporal analysis rate, in Hz. When ``None``, the BandSILo backend
-        falls back to ``100``.
+    analyze_hz : float
+        Temporal analysis rate, in Hz (default ``100``; the value the
+        reference's parameter GUI defaulted to).
 
     Notes
     -----
@@ -130,11 +141,11 @@ class SiloParams:
     phi: Optional[float] = None
     tau_s: Optional[float] = None
     photon_scale: Optional[float] = None
-    peakth: Optional[float] = None
+    peakth: float = 8.0
     activity_channel: int = 0
     draw_user_rois: bool = False
     interactive: Optional[bool] = None
-    analyze_hz: Optional[float] = None
+    analyze_hz: float = 100.0
     decay_tau_s: float = 0.15
     baseline_window_s: float = 4.0
     denoise_window_s: float = 1.0

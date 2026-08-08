@@ -55,6 +55,15 @@ class TestDataclasses(unittest.TestCase):
         self.assertEqual(SiloParams().microscope, "slap2")
         self.assertEqual(SiloParams().scan_mode, "standard")
 
+    def test_silo_value_params_have_concrete_defaults(self):
+        """Value params default to concrete (non-None) values."""
+        p = SiloParams()
+        self.assertEqual(p.analyze_hz, 100.0)
+        self.assertEqual(p.peakth, 8.0)
+        # Only genuinely runtime-resolved fields stay None sentinels.
+        self.assertIsNone(p.num_channels)
+        self.assertIsNone(p.interactive)
+
 
 class TestH5RoundTrip(unittest.TestCase):
     """from_h5/to_h5 are not implemented yet."""

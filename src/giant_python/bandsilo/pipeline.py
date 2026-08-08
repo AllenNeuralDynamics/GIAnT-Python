@@ -437,27 +437,6 @@ def _resolve_params(
     return SiloParams(**params_in)
 
 
-def effective_analyze_hz(analyze_hz) -> float:
-    """Return the band analysis rate (Hz), defaulting to 100 when unset.
-
-    ``SiloParams.analyze_hz`` defaults to ``None`` (the reference's parameter
-    GUI always supplied a value, defaulting to 100 Hz). The band backend
-    materializes that fallback here so it is used consistently as the
-    high-res-trace sample rate and in the dF/F window sizes.
-
-    Parameters
-    ----------
-    analyze_hz : float or None
-        The configured analysis rate.
-
-    Returns
-    -------
-    float
-        ``analyze_hz`` as a float, or ``100.0`` when it is ``None``.
-    """
-    return 100.0 if analyze_hz is None else float(analyze_hz)
-
-
 def _resolve_session_user_rois(
     result_dr: str,
     trial_table: dict,
@@ -531,7 +510,6 @@ def extract_band_sources(
         The extracted sources and summary (also written to disk).
     """
     params = _resolve_params(params_in)
-    params.analyze_hz = effective_analyze_hz(params.analyze_hz)
     log(f"Loading trial table {path_to_trial_table}", params.verbose)
     trial_table = load_trial_table(path_to_trial_table)
     result_dr = str(trial_table["savedr"])
@@ -556,6 +534,11 @@ def extract_band_sources(
     trial_table["align_hz"] = align_hz
     if params.num_channels is None:
         params.num_channels = num_channels
+    if params.num_channels is None:
+        raise ValueError(
+            "num_channels could not be determined from the alignment data "
+            "(no kept trials?); set SiloParams.num_channels explicitly."
+        )
 
     user_rois = _resolve_session_user_rois(
         result_dr, trial_table, lookup, params
@@ -961,7 +944,7 @@ def _localize(
     )
     act_im = si.finalize_activity_image(act_im, sel_pix_idxs, nan_ct)
 
-    peak_th = params.peakth if params.peakth is not None else 8
+    peak_th = params.peakth
     source_seeds = get_act_im_peaks(
         act_im, peak_th=peak_th, buffer_size=params.peak_buffer
     )
