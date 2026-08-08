@@ -116,10 +116,7 @@ def build_subsample_matrix_inds(
     for sp in range(num_super_pixels):
         inds = np.where(sparse_mask_inds[:, 1] == sp + 1)[0]
         open_pixs = sparse_mask_inds[inds, 0] - 1
-        if len(open_pixs) % 2 == 1:
-            ref_pix = int(np.median(open_pixs))
-        else:
-            ref_pix = open_pixs[int(np.floor(len(open_pixs) / 2))]
+        ref_pix = open_pixs[int(np.floor(len(open_pixs) / 2))]
         out[sp, 0] = ref_pix
         out[sp, 1] = sp + 1
     return out
