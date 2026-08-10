@@ -468,8 +468,8 @@ def fit_gaussian_profiles(
     )
 
     z_col = source_params[:, 0].unsqueeze(1)
-    loc_min = torch.from_numpy(source_seeds[:, 1:3] - d_xy).float()
-    loc_max = torch.from_numpy(source_seeds[:, 1:3] + d_xy).float()
+    loc_min = torch.from_numpy(source_seeds[:, 1:3] - 1.5).float()
+    loc_max = torch.from_numpy(source_seeds[:, 1:3] + 1.5).float()
 
     losses = []
     shuffled_indices = None
