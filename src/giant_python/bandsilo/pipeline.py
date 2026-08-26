@@ -602,6 +602,9 @@ def _process_dmd(
     soma_masks, soma_labels, soma_sps = _dmd_user_rois(user_rois, key)
     datadr = str(trial_table["datadr"])
     n_trials = trial_table["filename"].shape[1]
+    if params.max_trials is not None:
+        n_trials = min(n_trials, params.max_trials)
+        log(f"Debug: limiting to first {n_trials} trial(s)", params.verbose)
     num_channels = params.num_channels
     align_hz = trial_table["align_hz"][key]
     keep_trials = trial_table["keep_trials"]

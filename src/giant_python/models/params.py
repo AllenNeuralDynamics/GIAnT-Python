@@ -132,6 +132,11 @@ class SiloParams:
         tqdm progress bars over its long-running loops (per-trial reads, rho,
         activity image, NMF). Off by default so headless / batch runs stay
         quiet. See :mod:`giant_python.bandsilo.progress`.
+    max_trials : int or None
+        Debug knob: when set, process only the first ``max_trials`` trials per
+        DMD (both the low-res read and high-res trace extraction). ``None``
+        (the default) processes all trials. Use a small value (e.g. ``5``) to
+        iterate quickly while debugging.
     """
 
     microscope: str = "slap2"
@@ -158,6 +163,7 @@ class SiloParams:
     psf_dilation: int = 17
     operator: str = "SLAP2 User"
     verbose: bool = False
+    max_trials: Optional[int] = None
 
 
 def set_params(
