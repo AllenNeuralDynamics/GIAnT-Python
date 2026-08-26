@@ -55,6 +55,15 @@ def map_trials(
 
     from joblib import Parallel, delayed
 
-    return Parallel(n_jobs=n_workers)(
-        delayed(func)(t) for t in _maybe_bar(trials, desc)
+    # ``return_as="generator"`` yields results (in submission order) as each
+    # trial *completes*, so wrapping this generator in tqdm tracks real
+    # progress. Wrapping the dispatch generator instead would fill the bar as
+    # soon as tasks are submitted, long before the workers finish.
+    results = Parallel(n_jobs=n_workers, return_as="generator")(
+        delayed(func)(t) for t in trials
     )
+    if desc is not None:
+        from tqdm import tqdm
+
+        results = tqdm(results, desc=desc, total=len(trials))
+    return list(results)
