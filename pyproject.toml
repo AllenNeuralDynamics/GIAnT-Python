@@ -29,6 +29,7 @@ dependencies = [
     "torch",
     "opencv-python",
     "pandas",
+    "bottleneck",
     "slap2_utils @ git+https://github.com/m-xie/SLAP2_Utils.git@multidatafiles",
 ]
 

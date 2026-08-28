@@ -28,10 +28,16 @@ from __future__ import annotations
 from typing import List, Tuple
 
 import numpy as np
+import pandas as pd
 import scipy.ndimage as ndimage
 import torch
 from scipy import signal
 from scipy.interpolate import RectBivariateSpline
+
+try:  # pragma: no cover - exercised via the installed extra
+    import bottleneck as bn
+except ImportError:  # pragma: no cover
+    bn = None
 
 from .progress import progress
 
@@ -582,11 +588,19 @@ def baseline_window_frames(align_hz: float, baseline_window_s: float) -> int:
 def compute_rolling_baseline(
     interp_data: np.ndarray, baseline_window: int
 ) -> np.ndarray:
-    """Compute a NaN-aware rolling-mean baseline of the interpolated data.
+    """Compute a NaN-aware rolling-median baseline of the interpolated data.
 
-    Uses running window sums of values and of the valid-sample count, then
-    divides, so NaNs contribute nothing and windows with no valid samples stay
-    NaN. ``interp_data`` is modified in place (NaNs replaced by 0).
+    Each frame's baseline is the median of its centered window, ignoring NaNs,
+    so windows with no valid samples stay NaN and edge windows are truncated to
+    the available samples. This is the fast moving-median analogue of the
+    former moving-mean baseline; the median is more robust to transient
+    activity spikes when estimating the background.
+
+    The heavy lifting uses :func:`bottleneck.move_median` (a C sliding-window
+    median whose cost is close to the moving mean) when available, falling back
+    to pandas' skip-list rolling median otherwise. ``bottleneck`` computes a
+    *trailing* window, so the data is right-padded with NaNs by ``window // 2``
+    and the result is sliced back to center each window on its frame.
 
     Parameters
     ----------
@@ -598,31 +612,43 @@ def compute_rolling_baseline(
     Returns
     -------
     ndarray
-        The rolling-mean background estimate (NaN where no valid samples).
+        The rolling-median background estimate (NaN where no valid samples).
     """
-    valid = ~np.isnan(interp_data)
-    np.nan_to_num(interp_data, copy=False, nan=0.0)
+    n_frames = interp_data.shape[1]
+    window = int(min(max(baseline_window, 1), n_frames))
 
-    sum_vals = (
-        ndimage.uniform_filter1d(
-            interp_data, size=baseline_window, axis=1, mode="nearest"
+    if bn is not None:
+        pad = window // 2
+        if pad:
+            padded = np.concatenate(
+                [
+                    interp_data,
+                    np.full(
+                        (interp_data.shape[0], pad),
+                        np.nan,
+                        dtype=interp_data.dtype,
+                    ),
+                ],
+                axis=1,
+            )
+        else:
+            padded = interp_data
+        trailing = bn.move_median(
+            padded, window=window, min_count=1, axis=1
         )
-        * baseline_window
-    )
-    valid_f = valid.astype(np.float32, copy=False)
-    count_vals = (
-        ndimage.uniform_filter1d(
-            valid_f, size=baseline_window, axis=1, mode="nearest"
-        )
-        * baseline_window
-    )
+        background = trailing[:, pad : pad + n_frames]
+        return background.astype(interp_data.dtype, copy=False)
 
-    interp_data_background = np.empty_like(sum_vals, dtype=interp_data.dtype)
-    interp_data_background.fill(np.nan)
-    np.divide(
-        sum_vals, count_vals, out=interp_data_background, where=count_vals > 0
+    # Fallback (no bottleneck): pandas rolls along the row axis, so transpose
+    # to (n_frames, n_sel), roll each column, and transpose back.
+    background = (
+        pd.DataFrame(interp_data.T)
+        .rolling(window=window, center=True, min_periods=1)
+        .median()
+        .to_numpy()
+        .T
     )
-    return interp_data_background
+    return background.astype(interp_data.dtype, copy=False)
 
 
 def assemble_background(

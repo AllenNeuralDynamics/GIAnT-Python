@@ -290,16 +290,36 @@ class TestRollingBaseline(unittest.TestCase):
         """Window length is int(hz * seconds)."""
         self.assertEqual(bg.baseline_window_frames(80.0, 4.0), 320)
 
-    def test_no_nan_matches_uniform_filter(self):
-        """With no NaNs, the baseline reduces to a plain moving average."""
-        import scipy.ndimage as ndimage
+    def test_no_nan_matches_brute_median(self):
+        """With no NaNs, the baseline is a centered moving median."""
+
+        def brute_rolling_median(data, window):
+            n = data.shape[1]
+            out = np.full(data.shape, np.nan, dtype=float)
+            for r in range(data.shape[0]):
+                for i in range(n):
+                    lo = max(0, i - (window - 1) // 2)
+                    hi = min(n, i + window // 2 + 1)
+                    vals = data[r, lo:hi]
+                    vals = vals[~np.isnan(vals)]
+                    if vals.size:
+                        out[r, i] = np.median(vals)
+            return out
 
         data = np.arange(20, dtype=np.float32).reshape(2, 10)
-        expected = ndimage.uniform_filter1d(
-            data.copy(), size=3, axis=1, mode="nearest"
-        )
+        for window in (3, 5):
+            expected = brute_rolling_median(data, window)
+            out = bg.compute_rolling_baseline(data.copy(), window)
+            np.testing.assert_allclose(out, expected, rtol=1e-5)
+
+    def test_ignores_nan_in_window(self):
+        """NaNs are dropped from each window's median."""
+        data = np.array([[1.0, np.nan, 3.0, 100.0, 5.0]], dtype=np.float32)
         out = bg.compute_rolling_baseline(data.copy(), 3)
-        np.testing.assert_allclose(out, expected, rtol=1e-5)
+        # window at idx 1 sees {1, 3} -> median 2; idx 2 sees {3, 100} -> 51.5
+        np.testing.assert_allclose(out[0, 0], 1.0)
+        np.testing.assert_allclose(out[0, 1], 2.0)
+        np.testing.assert_allclose(out[0, 2], 51.5)
 
     def test_all_nan_row_stays_nan(self):
         """A fully-NaN row yields a fully-NaN baseline."""
