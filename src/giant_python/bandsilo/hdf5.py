@@ -213,6 +213,14 @@ def load_alignment_data_h5(path: Union[str, Path]) -> dict:
     are stored as column vectors and online-motion shifts live under the nested
     ``slap2`` group in the new format; everything is flattened to 1-D here.
 
+    ``motionDSr``/``motionDSc``/``motionDSz`` are negated relative to the
+    on-disk values. The on-disk convention (shared by ``BandRegistration.m``
+    and ``MultiRoiRegistration.m``) is the sample's physical displacement,
+    i.e. ``reference_position = canonical_position - motionDS_saved``. Every
+    bandsilo consumer instead writes ``reference_position =
+    canonical_position + motion``, so the sign is flipped once here to keep
+    that arithmetic correct everywhere downstream.
+
     Parameters
     ----------
     path : str or Path
@@ -221,16 +229,28 @@ def load_alignment_data_h5(path: Union[str, Path]) -> dict:
     Returns
     -------
     dict
-        Keys ``DSframes``, ``motionDSr/c/z``, ``onlineYshift/Xshift/Zshift``,
-        ``numChannels``, ``alignHz``.
+        Keys ``DSframes``, ``motionDSr/c/z`` (sign-flipped from the on-disk
+        values, see above), ``onlineYshift/Xshift/Zshift``, ``numChannels``,
+        ``alignHz``.
     """
     s = load_struct_from_h5(path)
     slap2 = s.get("slap2", {}) or {}
+    # On disk, motionDSr/c/z is the sample displacement: BandRegistration.m
+    # searches a lookup table whose entry at offset `off` is
+    # ref(canonical + off), finds `motionDS_internal = off`, then saves
+    # `-motionDS_internal`. So `reference = canonical - motionDS_saved`.
+    # bandsilo consistently maps canonical superpixel coordinates into the
+    # reference stack as `canonical + motion` (see gui.py `sp_rows` and
+    # background.py `s_r`/`s_c`), which needs `motionDS_internal`. Negate
+    # back here, once, so that downstream arithmetic is correct.
+    motion_ds_r = _reshape_1d(s, "motionDSr")
+    motion_ds_c = _reshape_1d(s, "motionDSc")
+    motion_ds_z = _reshape_1d(s, "motionDSz")
     return {
         "DSframes": _reshape_1d(s, "DSframes"),
-        "motionDSr": _reshape_1d(s, "motionDSr"),
-        "motionDSc": _reshape_1d(s, "motionDSc"),
-        "motionDSz": _reshape_1d(s, "motionDSz"),
+        "motionDSr": None if motion_ds_r is None else -motion_ds_r,
+        "motionDSc": None if motion_ds_c is None else -motion_ds_c,
+        "motionDSz": None if motion_ds_z is None else -motion_ds_z,
         "onlineYshift": _reshape_1d(slap2, "onlineMotionYshift"),
         "onlineXshift": _reshape_1d(slap2, "onlineMotionXshift"),
         "onlineZshift": _reshape_1d(slap2, "onlineMotionZshift"),
