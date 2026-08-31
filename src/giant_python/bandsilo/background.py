@@ -285,6 +285,81 @@ def expand_psf(
     return psf_tensor, psf_center, psf_tensor_expanded, psf_center_expanded
 
 
+def shrink_psf(
+    psf2d: np.ndarray, scale_y: float = 1.0, scale_x: float = 0.75
+) -> np.ndarray:
+    """Spatially shrink a PSF on the same grid (TEMPORARY).
+
+    Resamples the PSF on a grid whose coordinates are divided by the per-axis
+    scale so a ``scale < 1`` narrows the PSF's spatial footprint along that
+    axis while keeping the same array shape and center; the result is
+    re-normalized to sum to 1. Used only for the temporary activity-image
+    experiment.
+
+    Parameters
+    ----------
+    psf2d : ndarray
+        The (cropped) PSF for this DMD.
+    scale_y : float
+        Spatial shrink factor along the row (y) axis (``< 1`` shrinks,
+        ``1`` is a no-op).
+    scale_x : float
+        Spatial shrink factor along the column (x) axis (``< 1`` shrinks,
+        ``1`` is a no-op).
+
+    Returns
+    -------
+    ndarray of shape ``psf2d.shape``, float32
+        The shrunk, sum-normalized PSF.
+    """
+    psf_arr = np.asarray(psf2d, dtype=np.float32)
+    psf_shape = psf_arr.shape
+    center_y = (psf_shape[0] - 1) / 2
+    center_x = (psf_shape[1] - 1) / 2
+    orig_y = np.arange(psf_shape[0], dtype=np.float64) - center_y
+    orig_x = np.arange(psf_shape[1], dtype=np.float64) - center_x
+    interp_spline = RectBivariateSpline(orig_y, orig_x, psf_arr)
+    shrunk = interp_spline(orig_y / scale_y, orig_x / scale_x)
+    shrunk = np.clip(shrunk, 0.0, None).astype(np.float32)
+    total = shrunk.sum()
+    if total > 0:
+        shrunk = shrunk / total
+    return shrunk
+
+
+def gaussian_kernel_2d(
+    sigma: float, truncate: float = 4.0
+) -> Tuple[torch.Tensor, Tuple[int, int]]:
+    """Build a sum-normalized isotropic 2-D Gaussian kernel (TEMPORARY).
+
+    Used by the temporary difference-of-Gaussians activity-image experiment,
+    which replaces the PSF-derived ``D``/``D_expanded`` convolution matrices
+    with an isotropic center/surround pair. The subtraction itself still
+    happens in :func:`compute_rho`, after per-column normalization.
+
+    Parameters
+    ----------
+    sigma : float
+        Gaussian standard deviation, in pixels.
+    truncate : float
+        Kernel half-width, in standard deviations. Truncation lowers the
+        realized standard deviation slightly, so the default is generous.
+
+    Returns
+    -------
+    kernel : torch.Tensor
+        Sum-normalized ``(2 * radius + 1, 2 * radius + 1)`` kernel.
+    center : tuple of int
+        ``(row, col)`` center index of ``kernel``.
+    """
+    radius = int(np.ceil(truncate * sigma))
+    coords = np.arange(-radius, radius + 1, dtype=np.float64)
+    g_1d = np.exp(-(coords**2) / (2.0 * sigma**2))
+    kernel = np.outer(g_1d, g_1d).astype(np.float32)
+    kernel /= kernel.sum()
+    return torch.from_numpy(kernel), (radius, radius)
+
+
 def selected_pixels_2d_for_plane(
     sel_pix_idxs: np.ndarray,
     plane_z: int,
@@ -1031,11 +1106,25 @@ def compute_rho(
 
             hd = torch.sparse.mm(h_sub, d_mats[z])
             hd = hd / torch.sum(hd, dim=0, keepdim=True)
+            # Center-surround matched filter. Both projections are
+            # column-normalized before subtracting, so ``hd_diff`` has
+            # zero-sum columns and is blind to spatially flat residual.
             hd_expanded = torch.sparse.mm(h_sub, d_mats_expanded[z])
             hd_expanded = hd_expanded / torch.sum(
                 hd_expanded, dim=0, keepdim=True
             )
             hd_diff = hd - hd_expanded
+            # TEMPORARY: whiten each filter column to unit L2 norm so every
+            # selected pixel's rho has the same noise variance. The L1
+            # normalization above pins each column's *sum*, not its norm, so
+            # noise gain varies with where a column sits relative to the
+            # sparse superpixel reference-pixel lattice. Since the activity
+            # image accumulates rho^2 only at local maxima, that bias is
+            # amplified into a visible grid of bright reference pixels.
+            # Whitening also makes ``peak_th`` a true sigma threshold.
+            # To revert, delete the two lines below.
+            hd_norm = torch.linalg.norm(hd_diff, dim=0, keepdim=True)
+            hd_diff = hd_diff / hd_norm.clamp_min(1e-12)
 
             z_cols = z_col_idxs_np[z]
             z_valid_mask = valid_sel_cols[z_cols]
