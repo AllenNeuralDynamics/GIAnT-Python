@@ -273,7 +273,7 @@ def finalize_activity_image(
     ] = False
     act_im[nan_mask] = np.nan
 
-    med_act_im = ndimage.generic_filter(act_im, np.nanmedian, size=(1, 11, 11))
+    med_act_im = ndimage.generic_filter(act_im, np.nanmedian, size=(1, 5, 11))
     act_im = act_im - med_act_im
     act_im[nan_mask] = np.nan
     return act_im
