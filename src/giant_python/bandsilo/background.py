@@ -32,7 +32,7 @@ import pandas as pd
 import scipy.ndimage as ndimage
 import torch
 from scipy import signal
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import CubicSpline, RectBivariateSpline
 
 try:  # pragma: no cover - exercised via the installed extra
     import bottleneck as bn
@@ -484,13 +484,24 @@ def _interp_columns(
     data,
     frames,
     dtype,
+    method="linear",
+    spline_weight_cache=None,
 ):
-    """Linearly interpolate each multi-point column onto its selected pixels.
+    """Interpolate each multi-point column onto its selected pixels.
 
     Selected rows that coincide with a reference row are copied exactly; those
-    strictly between two reference rows are linearly interpolated; those
-    outside the sampled row range are left untouched (NaN).
+    strictly between reference rows use linear or natural-cubic interpolation;
+    those outside the sampled row range are left untouched (NaN). Cubic spline
+    weights depend only on row geometry, so they are computed once and applied
+    to all complete frames in one matrix multiplication. Linear interpolation
+    is retained for columns with fewer than three samples and frames containing
+    missing source values.
     """
+    if method not in {"linear", "cubic"}:
+        raise ValueError(
+            "interpolation method must be 'linear' or 'cubic', "
+            f"got {method!r}"
+        )
     for c_int, rows in rows_by_col.items():
         col_sel_pix_idxs = sel_idxs_by_col_all[c_int]
         target_rows = sel_rows[col_sel_pix_idxs]
@@ -537,11 +548,53 @@ def _interp_columns(
             / (row_hi - row_lo)
         )[:, None]
 
-        vals_lo = data[src_idx[lo_v]][:, frames]
-        vals_hi = data[src_idx[hi_v]][:, frames]
-        out[np.ix_(col_sel_pix_idxs[interp_rows], frames)] = (
-            1.0 - alpha
-        ) * vals_lo + alpha * vals_hi
+        target_indices = col_sel_pix_idxs[interp_rows]
+        linear_frame_mask = np.ones(frames.size, dtype=bool)
+        has_cubic_geometry = rows.size >= 3 and np.all(np.diff(rows) > 0)
+        if method == "cubic" and has_cubic_geometry:
+            source_values = data[src_idx][:, frames]
+            complete_frames = np.all(np.isfinite(source_values), axis=0)
+            if np.any(complete_frames):
+                source_rows = rows.astype(dtype, copy=False)
+                target_interp_rows = target_rows[interp_rows].astype(
+                    dtype, copy=False
+                )
+                origin = source_rows[0]
+                cache_key = (
+                    tuple(source_rows - origin),
+                    tuple(target_interp_rows - origin),
+                    np.dtype(dtype).str,
+                )
+                spline_weights = (
+                    spline_weight_cache.get(cache_key)
+                    if spline_weight_cache is not None
+                    else None
+                )
+                if spline_weights is None:
+                    spline_weights = CubicSpline(
+                        source_rows,
+                        np.eye(rows.size, dtype=dtype),
+                        axis=0,
+                        bc_type="natural",
+                        extrapolate=False,
+                    )(target_interp_rows).astype(dtype, copy=False)
+                    if spline_weight_cache is not None:
+                        spline_weight_cache[cache_key] = spline_weights
+                cubic_values = (
+                    spline_weights @ source_values[:, complete_frames]
+                )
+                out[
+                    np.ix_(target_indices, frames[complete_frames])
+                ] = cubic_values
+                linear_frame_mask = ~complete_frames
+
+        if not np.any(linear_frame_mask):
+            continue
+        linear_frames = frames[linear_frame_mask]
+        vals_lo = data[src_idx[lo_v]][:, linear_frames]
+        vals_hi = data[src_idx[hi_v]][:, linear_frames]
+        linear_values = (1.0 - alpha) * vals_lo + alpha * vals_hi
+        out[np.ix_(target_indices, linear_frames)] = linear_values
 
 
 def build_interp_data(
@@ -554,6 +607,7 @@ def build_interp_data(
     height: int = 800,
     width: int = 1280,
     dtype=np.float32,
+    method: str = "cubic",
 ) -> Tuple[np.ndarray, Tuple[int, int], Tuple[int, int]]:
     """Interpolate reference-pixel traces onto the selected-pixel grid.
 
@@ -578,6 +632,11 @@ def build_interp_data(
         Sensor row/column extents used to window valid shifts.
     dtype : numpy dtype
         Working/output dtype.
+    method : {"linear", "cubic"}
+        Interpolation along each column (default ``"cubic"``). Cubic mode uses
+        a natural spline with precomputed geometry weights and falls back to
+        linear for columns with fewer than three samples or frames with missing
+        samples.
 
     Returns
     -------
@@ -591,6 +650,11 @@ def build_interp_data(
     ref_r = np.asarray(ref_r, dtype=np.int32)
     ref_c = np.asarray(ref_c, dtype=np.int32)
     data = np.asarray(data, dtype=dtype)
+    if method not in {"linear", "cubic"}:
+        raise ValueError(
+            "interpolation method must be 'linear' or 'cubic', "
+            f"got {method!r}"
+        )
 
     r0 = int(max(0, ref_r.min()) + unique_motion_to_keep_yx[:, 0].min())
     r1 = int(min(height, ref_r.max()) + unique_motion_to_keep_yx[:, 0].max())
@@ -610,6 +674,7 @@ def build_interp_data(
         np.flatnonzero(mot_inds_yx == idx)
         for idx in range(len(unique_motion_to_keep_yx))
     ]
+    spline_weight_cache = {} if method == "cubic" else None
 
     for m_idx, frames in enumerate(frames_by_motion):
         if frames.size == 0:
@@ -635,6 +700,8 @@ def build_interp_data(
             data,
             frames,
             dtype,
+            method,
+            spline_weight_cache,
         )
         for rr_match, src_pos in single_points:
             out[np.ix_(rr_match, frames)] = data[src_pos, frames]

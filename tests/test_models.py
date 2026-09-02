@@ -54,6 +54,7 @@ class TestDataclasses(unittest.TestCase):
         self.assertEqual(AlignParams().align_hz, 80.0)
         self.assertEqual(SiloParams().microscope, "slap2")
         self.assertEqual(SiloParams().scan_mode, "standard")
+        self.assertEqual(SiloParams().background_interpolation, "cubic")
 
     def test_silo_value_params_have_concrete_defaults(self):
         """Value params default to concrete (non-None) values."""

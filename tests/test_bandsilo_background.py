@@ -225,6 +225,52 @@ class TestInterpData(unittest.TestCase):
         self.assertAlmostEqual(float(out[2, 0]), 3.0, places=5)
         self.assertEqual(cb, (5, 5))
 
+    def test_cubic_interpolation(self):
+        """Natural cubic interpolation is smooth and keeps exact samples."""
+        ref_r = np.array([0, 2, 4, 6], dtype=np.int32)
+        ref_c = np.full(4, 5, dtype=np.int32)
+        data = np.array([[0.0], [1.0], [0.0], [1.0]], dtype=np.float32)
+        sel_2d = np.array([[0, 5], [1, 5], [2, 5], [3, 5]])
+        umyx = np.array([[0, 0]], dtype=float)
+        mot_yx = np.array([0])
+        linear, _, _ = bg.build_interp_data(
+            data, ref_r, ref_c, sel_2d, umyx, mot_yx, method="linear"
+        )
+        cubic, _, _ = bg.build_interp_data(
+            data, ref_r, ref_c, sel_2d, umyx, mot_yx, method="cubic"
+        )
+        self.assertAlmostEqual(float(cubic[0, 0]), 0.0, places=5)
+        self.assertAlmostEqual(float(cubic[2, 0]), 1.0, places=5)
+        self.assertNotAlmostEqual(
+            float(cubic[1, 0]), float(linear[1, 0]), places=5
+        )
+
+    def test_cubic_falls_back_with_two_samples(self):
+        """Two-point columns retain the linear result in cubic mode."""
+        ref_r = np.array([4, 6], dtype=np.int32)
+        ref_c = np.array([5, 5], dtype=np.int32)
+        data = np.array([[1.0], [3.0]], dtype=np.float32)
+        sel_2d = np.array([[5, 5]])
+        umyx = np.array([[0, 0]], dtype=float)
+        mot_yx = np.array([0])
+        out, _, _ = bg.build_interp_data(
+            data, ref_r, ref_c, sel_2d, umyx, mot_yx, method="cubic"
+        )
+        self.assertAlmostEqual(float(out[0, 0]), 2.0, places=5)
+
+    def test_unknown_interpolation_method_rejected(self):
+        """Interpolation method typos fail before processing data."""
+        with self.assertRaisesRegex(ValueError, "linear.*cubic"):
+            bg.build_interp_data(
+                np.ones((1, 1)),
+                np.array([1]),
+                np.array([1]),
+                np.array([[1, 1]]),
+                np.array([[0, 0]]),
+                np.array([0]),
+                method="spline",
+            )
+
     def test_empty_motion_and_missing_column(self):
         """Empty bins and columns absent from the selection are skipped."""
         ref_r = np.array([4, 6], dtype=np.int32)

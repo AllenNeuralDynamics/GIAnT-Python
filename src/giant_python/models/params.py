@@ -107,6 +107,9 @@ class SiloParams:
         Calcium-decay time constant, in seconds.
     baseline_window_s : float
         Rolling-baseline window for dF/F, in seconds.
+    background_interpolation : str
+        Interpolation used to map sparse superpixels onto the background image:
+        ``"cubic"`` (default; natural cubic spline) or ``"linear"``.
     denoise_window_s : float
         Temporal denoising window, in seconds.
     vif : float
@@ -153,6 +156,7 @@ class SiloParams:
     analyze_hz: float = 100.0
     decay_tau_s: float = 0.15
     baseline_window_s: float = 4.0
+    background_interpolation: str = "cubic"
     denoise_window_s: float = 1.0
     vif: float = 1.38
     d_xy: int = 5
