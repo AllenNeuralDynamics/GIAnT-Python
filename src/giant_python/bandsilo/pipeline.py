@@ -899,11 +899,12 @@ def _localize(
         num_super_pixels,
         dmd_pixels_per_row,
     )
-    # TEMPORARY: build the activity-image D matrices from an isotropic
-    # difference-of-Gaussians instead of the PSF / expanded-PSF pair.
+    # TEMPORARY: build the activity-image D matrices from a one-pixel center
+    # and a 3x3 uniform surround instead of the PSF / expanded-PSF pair.
     # ``compute_rho`` column-normalizes each and subtracts them, so the
-    # effective filter is H @ (G_center - G_surround). ``psf2d`` is still used
-    # there for the valid-column dilation/erosion mask.
+    # effective filter is H @ (U_center - U_surround). ``psf2d`` is still used
+    # there for the valid-column dilation/erosion mask. The negative surround
+    # is normalized by its negative column sum before that subtraction.
     #
     # To revert, delete the Gaussian kernels below, restore these two lines
     # (the ``shrink_psf`` call was itself a temporary hack and is optional),
@@ -911,12 +912,16 @@ def _localize(
     # inside the loop:
     # psf2d = bg.shrink_psf(psf2d, scale_y=0.9, scale_x=0.75)
     # psf_tensor, psf_center, psf_exp, psf_center_exp = bg.expand_psf(psf2d)
-    dog_center_sd = 0.9
-    dog_surround_sd = 4.5
-    center_kernel, center_kernel_ctr = bg.gaussian_kernel_2d(dog_center_sd)
-    surround_kernel, surround_kernel_ctr = bg.gaussian_kernel_2d(
-        dog_surround_sd
-    )
+    # dog_center_sd = 0.9
+    # dog_surround_sd = 4.5
+    # center_kernel, center_kernel_ctr = bg.gaussian_kernel_2d(dog_center_sd)
+    # surround_kernel, surround_kernel_ctr = bg.gaussian_kernel_2d(
+    #     dog_surround_sd
+    # )
+    uniform_center_kernel = torch.ones((1, 1), dtype=torch.float32)
+    uniform_center_kernel_ctr = (0, 0)
+    uniform_surround_kernel = -torch.ones((3, 3), dtype=torch.float32) / 9.0
+    uniform_surround_kernel_ctr = (1, 1)
     d_mats, d_mats_exp = [], []
     for z in progress(
         range(num_fast_zs),
@@ -932,14 +937,26 @@ def _localize(
         # d_mats_exp.append(
         #     bg.build_convolution_matrix(sel_2d, psf_exp, psf_center_exp)
         # )
+        # d_mats.append(
+        #     bg.build_convolution_matrix(
+        #         sel_2d, center_kernel, center_kernel_ctr
+        #     )
+        # )
+        # d_mats_exp.append(
+        #     bg.build_convolution_matrix(
+        #         sel_2d, surround_kernel, surround_kernel_ctr
+        #     )
+        # )
         d_mats.append(
             bg.build_convolution_matrix(
-                sel_2d, center_kernel, center_kernel_ctr
+                sel_2d, uniform_center_kernel, uniform_center_kernel_ctr
             )
         )
         d_mats_exp.append(
             bg.build_convolution_matrix(
-                sel_2d, surround_kernel, surround_kernel_ctr
+                sel_2d,
+                uniform_surround_kernel,
+                uniform_surround_kernel_ctr,
             )
         )
     rho = bg.compute_rho(
