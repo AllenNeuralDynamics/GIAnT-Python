@@ -1002,7 +1002,6 @@ def _localize(
         nan_ct,
         ref_r=ref_r + int(dominant_motion[0]),
         ref_c=ref_c + int(dominant_motion[1]),
-        normalize_mad=params.normalize_activity_mad,
         ref_d=ref_d,
     )
 

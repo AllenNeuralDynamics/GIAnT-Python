@@ -1,4 +1,4 @@
-"""Phase-matched background statistics, including overlapping band columns."""
+"""Phase-matched background medians, including overlapping band columns."""
 
 import unittest
 
@@ -7,12 +7,11 @@ import numpy as np
 from giant_python.bandsilo import summary_images as si
 
 
-def brute_stats(image, selected, ref_r, ref_c, ref_d, height, width,
-                tolerance, minimum):
+def brute_median(image, selected, ref_r, ref_c, ref_d, height, width,
+                 tolerance, minimum):
     """Independent small-grid reference using explicit distance/window loops."""
     phases = np.full(image.shape, np.nan)
     med = np.full(image.shape, np.nan)
-    mad = np.full(image.shape, np.nan)
     for flat in selected:
         z, r, c = np.unravel_index(flat, image.shape)
         centers = np.unique(ref_r[(ref_d == z) & (ref_c == c)])
@@ -31,20 +30,18 @@ def brute_stats(image, selected, ref_r, ref_c, ref_d, height, width,
                     samples.append(image[z, sr, sc])
         if len(samples) >= minimum:
             med[z, r, c] = np.median(samples)
-            mad[z, r, c] = np.median(np.abs(samples - med[z, r, c]))
-    first_med, first_mad = med.copy(), mad.copy()
+    first_med = med.copy()
     for flat in selected:
         z, r, c = np.unravel_index(flat, image.shape)
         if (not np.isfinite(phases[z, r, c]) or not np.isfinite(image[z, r, c])
                 or np.isfinite(first_med[z, r, c])):
             continue
-        for source, target in ((first_med, med), (first_mad, mad)):
-            window = source[z, max(0, r - height // 2):r + height // 2 + 1,
-                            max(0, c - width // 2):c + width // 2 + 1]
-            finite = window[np.isfinite(window)]
-            if finite.size:
-                target[z, r, c] = np.mean(finite)
-    return med, mad
+        window = first_med[z, max(0, r - height // 2):r + height // 2 + 1,
+                           max(0, c - width // 2):c + width // 2 + 1]
+        finite = window[np.isfinite(window)]
+        if finite.size:
+            med[z, r, c] = np.mean(finite)
+    return med
 
 
 class TestPhaseMatchedFilter(unittest.TestCase):
@@ -63,16 +60,15 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         image.ravel()[selected[::29]] = np.nan
         image.ravel()[selected[::41]] = np.inf
         original = image.copy()
-        expected = brute_stats(image, selected, ref_r, ref_c, ref_d, 9, 7, 0, 3)
+        expected = brute_median(image, selected, ref_r, ref_c, ref_d, 9, 7, 0, 3)
         for chunk_size in (1, 53, 4096):
             actual = si.phase_matched_nanmedian(
                 image, selected[::-1], ref_r, ref_c, ref_d,
                 height=9, width=7, min_samples=3,
-                chunk_size=chunk_size, return_mad=True,
+                chunk_size=chunk_size,
             )
-            for values, truth in zip(actual, expected):
-                np.testing.assert_allclose(values, truth, atol=1e-6, equal_nan=True)
-                self.assertTrue(np.isnan(values[:, :, 7]).all())
+            np.testing.assert_allclose(actual, expected, atol=1e-6, equal_nan=True)
+            self.assertTrue(np.isnan(actual[:, :, 7]).all())
         np.testing.assert_array_equal(image, original)
 
     def test_signed_phase_not_absolute_distance(self):
@@ -82,12 +78,9 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         image[0, 5, :] = 10  # phase -1
         image[0, 7, :] = 100  # phase +1
         selected = np.arange(image.size)
-        med, mad = si.phase_matched_nanmedian(
-            image, selected, centers, cols, return_mad=True
-        )
+        med = si.phase_matched_nanmedian(image, selected, centers, cols)
         self.assertEqual(med[0, 5, 5], 10)
         self.assertEqual(med[0, 7, 5], 100)
-        self.assertEqual(mad[0, 5, 5], 0)
 
     def test_phase_tolerance_and_minimum_samples(self):
         image = np.arange(5 * 7, dtype=float).reshape(1, 5, 7)
@@ -96,15 +89,13 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         selected = np.arange(image.size)
         for tolerance in (0, 0.3, 1.0):
             for minimum in (1, 5, 100):
-                truth = brute_stats(image, selected, centers, cols, np.zeros(7),
-                                    5, 7, tolerance, minimum)
+                truth = brute_median(image, selected, centers, cols, np.zeros(7),
+                                     5, 7, tolerance, minimum)
                 result = si.phase_matched_nanmedian(
                     image, selected, centers, cols, height=5, width=7,
                     phase_tolerance=tolerance, min_samples=minimum,
-                    return_mad=True,
                 )
-                for actual, expected in zip(result, truth):
-                    np.testing.assert_allclose(actual, expected, equal_nan=True)
+                np.testing.assert_allclose(result, truth, equal_nan=True)
 
     def test_midpoint_rows_and_duplicate_centers_are_retained(self):
         image = np.ones((1, 16, 11))
@@ -155,45 +146,38 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         )
         self.assertEqual(med[0, 3, 3], 4)
 
-    def test_fallback_uses_first_pass_statistics_not_raw_or_filled_values(self):
+    def test_fallback_uses_first_pass_medians_not_raw_or_filled_values(self):
         image = np.full((1, 3, 11), np.nan, dtype=np.float32)
         image[0, 0] = np.arange(11) ** 2
         image[0, 1:3, 5] = 9999
         selected = np.flatnonzero(np.isfinite(image))
         cols = np.arange(11)
-        expected_med, expected_mad = [], []
+        expected_med = []
         for col in cols:
             samples = image[0, 0, max(0, col - 5):col + 6]
             median = np.median(samples)
             expected_med.append(median)
-            expected_mad.append(np.median(abs(samples - median)))
         for chunk in (1, 4, 4096):
-            med, mad = si.phase_matched_nanmedian(
+            med = si.phase_matched_nanmedian(
                 image, selected[::-1], np.zeros(11), cols,
-                height=3, chunk_size=chunk, return_mad=True,
+                height=3, chunk_size=chunk,
             )
             np.testing.assert_allclose(med[0, 0], expected_med)
-            np.testing.assert_allclose(mad[0, 0], expected_mad)
             self.assertAlmostEqual(float(med[0, 1, 5]), np.mean(expected_med), places=5)
-            self.assertAlmostEqual(float(mad[0, 1, 5]), np.mean(expected_mad), places=5)
             # Filled row 1 cannot propagate into row 2, even in later chunks.
             self.assertTrue(np.isnan(med[0, 2, 5]))
-            self.assertTrue(np.isnan(mad[0, 2, 5]))
             self.assertTrue(np.isnan(med[~np.isfinite(image)]).all())
-            median_only = si.phase_matched_nanmedian(
+            ordered = si.phase_matched_nanmedian(
                 image, selected, np.zeros(11), cols, height=3, chunk_size=chunk,
             )
-            np.testing.assert_allclose(median_only, med, equal_nan=True)
-        for normalize in (False, True):
-            out = si.finalize_activity_image(
-                image.copy(), selected, np.zeros(selected.size),
-                np.zeros(11), cols, normalize_mad=normalize, phase_window_height=3,
-            )
-            expected = (9999 - float(med[0, 1, 5]))
-            if normalize:
-                expected /= float(mad[0, 1, 5])
-            np.testing.assert_allclose(out[0, 1, 5], expected, rtol=1e-6)
-            self.assertEqual(out[0, 2, 5], 0)  # Vertical window hits image edge.
+            np.testing.assert_allclose(ordered, med, equal_nan=True)
+        out = si.finalize_activity_image(
+            image.copy(), selected, np.zeros(selected.size),
+            np.zeros(11), cols, phase_window_height=3,
+        )
+        expected = 9999 - np.mean(expected_med)
+        np.testing.assert_allclose(out[0, 1, 5], expected, rtol=1e-6)
+        self.assertEqual(out[0, 2, 5], 0)  # Vertical window hits image edge.
 
     def test_empty_fallback_is_nan_without_warnings(self):
         import warnings
@@ -201,12 +185,10 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         image = np.ones((1, 3, 3))
         with warnings.catch_warnings():
             warnings.simplefilter("error", RuntimeWarning)
-            med, mad = si.phase_matched_nanmedian(
+            med = si.phase_matched_nanmedian(
                 image, np.arange(image.size), np.ones(3), np.arange(3),
-                return_mad=True,
             )
         self.assertTrue(np.isnan(med).all())
-        self.assertTrue(np.isnan(mad).all())
 
     def test_missing_depth_geometry_and_empty_support(self):
         image = np.ones((2, 9, 11))
@@ -214,17 +196,16 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         selected = np.arange(image.size)
         with self.assertRaisesRegex(ValueError, "ref_d"):
             si.phase_matched_nanmedian(image, selected, centers, cols)
-        med, mad = si.phase_matched_nanmedian(
-            image, selected, centers, cols, np.zeros(11), return_mad=True
+        med = si.phase_matched_nanmedian(
+            image, selected, centers, cols, np.zeros(11)
         )
         self.assertTrue(np.isfinite(med[0]).all())
         self.assertTrue(np.isnan(med[1]).all())
         for valid in (np.array([], dtype=int), selected):
-            med, mad = si.phase_matched_nanmedian(
-                image * np.nan, valid, centers, cols, np.zeros(11), return_mad=True
+            med = si.phase_matched_nanmedian(
+                image * np.nan, valid, centers, cols, np.zeros(11)
             )
             self.assertTrue(np.isnan(med).all())
-            self.assertTrue(np.isnan(mad).all())
 
     def test_finalization_masks_samples_and_preserves_motion_geometry(self):
         cols = np.arange(3, 14)
@@ -236,26 +217,19 @@ class TestPhaseMatchedFilter(unittest.TestCase):
         dr, dc = 2, -1
         image_masked = image.copy()
         image_masked.ravel()[nan_ct > 0.5] = np.nan
-        med, mad = si.phase_matched_nanmedian(
+        med = si.phase_matched_nanmedian(
             image_masked, selected[nan_ct <= 0.5], centers + dr, cols + dc,
-            return_mad=True,
         )
-        for normalize in (True, False):
-            expected = image_masked - med
-            if normalize:
-                positive = np.isfinite(mad) & (mad > 0)
-                np.divide(expected, mad, out=expected, where=positive)
-                expected[~positive] = np.nan
-            support = np.isfinite(image_masked)
-            for z, r, c in zip(*np.where(support)):
-                if (r < 3 or r + 3 >= image.shape[1]
-                        or not support[z, r - 3:r + 4, c].all()):
-                    expected[z, r, c] = 0
-            actual = si.finalize_activity_image(
-                image.copy(), selected, nan_ct, centers + dr, cols + dc,
-                normalize_mad=normalize,
-            )
-            np.testing.assert_allclose(actual, expected, equal_nan=True)
+        expected = image_masked - med
+        support = np.isfinite(image_masked)
+        for z, r, c in zip(*np.where(support)):
+            if (r < 3 or r + 3 >= image.shape[1]
+                    or not support[z, r - 3:r + 4, c].all()):
+                expected[z, r, c] = 0
+        actual = si.finalize_activity_image(
+            image.copy(), selected, nan_ct, centers + dr, cols + dc,
+        )
+        np.testing.assert_allclose(actual, expected, equal_nan=True)
 
     def test_invalid_parameters(self):
         image = np.ones((1, 5, 7))

@@ -140,10 +140,6 @@ class SiloParams:
         DMD (both the low-res read and high-res trace extraction). ``None``
         (the default) processes all trials. Use a small value (e.g. ``5``) to
         iterate quickly while debugging.
-    normalize_activity_mad : bool
-        Band-scan activity images are normalized by raw local MAD by default.
-        False retains local median subtraction but skips MAD computation and
-        division.
     """
 
     microscope: str = "slap2"
@@ -172,7 +168,6 @@ class SiloParams:
     operator: str = "SLAP2 User"
     verbose: bool = False
     max_trials: Optional[int] = None
-    normalize_activity_mad: bool = True
 
 
 def set_params(

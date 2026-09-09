@@ -134,7 +134,7 @@ class TestAccumulateActivityImage(unittest.TestCase):
 
 
 class TestFinalizeActivityImage(unittest.TestCase):
-    """Activity-image masking, local median subtraction, and MAD scaling."""
+    """Activity-image masking and local median subtraction in raw units."""
 
     def test_vertical_window_requires_full_valid_support(self):
         image = np.ones((2, 19, 13), dtype=np.float32)
@@ -152,30 +152,26 @@ class TestFinalizeActivityImage(unittest.TestCase):
         for height in (1, 3, 7):
             geometry = dict(ref_r=np.array([9, 9]), ref_c=np.array([6, 6]),
                             ref_d=np.array([0, 1]), phase_window_height=height)
-            for normalize in (False, True):
-                # Fixed statistics isolate final edge suppression.
-                stats = (
-                    (np.zeros_like(image), np.ones_like(image))
-                    if normalize else np.zeros_like(image)
+            # A fixed median isolates final edge suppression.
+            with patch.object(
+                si, "phase_matched_nanmedian", return_value=np.zeros_like(image)
+            ):
+                out = si.finalize_activity_image(
+                    image.copy(), selected, nan_ct, **geometry,
                 )
-                with patch.object(si, "phase_matched_nanmedian", return_value=stats):
-                    out = si.finalize_activity_image(
-                        image.copy(), selected, nan_ct, normalize_mad=normalize,
-                        **geometry,
-                    )
-                for z, r, c in zip(*np.where(support)):
-                    lo, hi = r - height // 2, r + height // 2 + 1
-                    fits = (
-                        lo >= 0 and hi <= image.shape[1]
-                        and support[z, lo:hi, c].all()
-                    )
-                    self.assertEqual(out[z, r, c], 1 if fits else 0)
-                self.assertTrue(np.isnan(out[~selected_mask]).all())
-                self.assertTrue(np.isnan(out[0, 9, 6]))
-                self.assertTrue(np.isnan(out[1, 9, 7]))
-                self.assertEqual(out[1, 9, 0], 1)  # Horizontal edges survive.
+            for z, r, c in zip(*np.where(support)):
+                lo, hi = r - height // 2, r + height // 2 + 1
+                fits = (
+                    lo >= 0 and hi <= image.shape[1]
+                    and support[z, lo:hi, c].all()
+                )
+                self.assertEqual(out[z, r, c], 1 if fits else 0)
+            self.assertTrue(np.isnan(out[~selected_mask]).all())
+            self.assertTrue(np.isnan(out[0, 9, 6]))
+            self.assertTrue(np.isnan(out[1, 9, 7]))
+            self.assertEqual(out[1, 9, 0], 1)  # Horizontal edges survive.
 
-    def test_skip_mad_preserves_median_subtraction_and_mask(self):
+    def test_median_subtraction_preserves_mask(self):
         image = np.ones((1, 13, 17), dtype=np.float32)
         image[0, 6, 8] = 7
         selected = np.arange(1, image.size)
@@ -185,18 +181,9 @@ class TestFinalizeActivityImage(unittest.TestCase):
             {}, {"ref_r": np.full(17, 6), "ref_c": np.arange(17)},
         ):
             with self.subTest(snake=bool(geometry)):
-                with patch.object(
-                    si, "phase_matched_nanmedian", wraps=si.phase_matched_nanmedian
-                ) as snake, patch.object(
-                    si, "median_abs_deviation",
-                    side_effect=AssertionError("MAD must not be computed"),
-                ):
-                    out = si.finalize_activity_image(
-                        image.copy(), selected, nan_ct,
-                        normalize_mad=False, **geometry,
-                    )
-                    if geometry:
-                        self.assertFalse(snake.call_args.kwargs["return_mad"])
+                out = si.finalize_activity_image(
+                    image.copy(), selected, nan_ct, **geometry,
+                )
                 self.assertEqual(out[0, 6, 8], 6)
                 self.assertEqual(out[0, 6, 7], 0)
                 self.assertTrue(np.isnan(out.ravel()[0]))
@@ -206,8 +193,8 @@ class TestFinalizeActivityImage(unittest.TestCase):
                 expected.ravel()[[0, -1]] = np.nan
                 np.testing.assert_allclose(out, expected, equal_nan=True)
 
-    def test_zero_mad_is_masked(self):
-        """Constant and isolated-spike footprints cannot be normalized."""
+    def test_constant_neighborhoods_are_zero_and_spike_is_preserved(self):
+        """Subtract constant backgrounds without masking valid neighborhoods."""
         num_fast_zs, npc, npr = 1, 13, 13
         act_im = np.ones((num_fast_zs, npc, npr), dtype=np.float32)
         # all pixels selected and valid (nan_ct = 0)
@@ -224,7 +211,9 @@ class TestFinalizeActivityImage(unittest.TestCase):
                     radius = 3 if geometry else 2
                     self.assertTrue(np.all(out[:, :radius] == 0))
                     self.assertTrue(np.all(out[:, -radius:] == 0))
-                    self.assertTrue(np.all(np.isnan(out[:, radius:-radius])))
+                    expected = np.zeros_like(act_im)
+                    expected[0, 6, 6] = spike
+                    np.testing.assert_array_equal(out, expected)
 
     def test_high_nan_pixels_masked(self):
         """Pixels with nan_ct > 0.5 are excluded and set to NaN."""
@@ -305,8 +294,8 @@ class TestFinalizeActivityImage(unittest.TestCase):
 
         self.assertAlmostEqual(float(med[0, 19, 4]), 10.0, places=5)
 
-    def test_raw_mad_normalization(self):
-        """Both paths use the footprint's own median and unscaled MAD."""
+    def test_median_subtraction_preserves_raw_units_and_scaling(self):
+        """Both paths subtract their footprint median and retain input scaling."""
         image = np.broadcast_to(np.arange(17), (1, 17, 17)).astype(np.float32).copy()
         image[0, 8, 8] += 6
         selected = np.arange(image.size)
@@ -317,20 +306,18 @@ class TestFinalizeActivityImage(unittest.TestCase):
             with self.subTest(height=height):
                 samples = image[0, 8 - height // 2 : 9 + height // 2, 3:14]
                 median = np.nanmedian(samples)
-                mad = np.nanmedian(np.abs(samples - median))
-                self.assertEqual(mad, 3)
                 out = si.finalize_activity_image(
                     image.copy(), selected, np.zeros(selected.size), **geometry
                 )
                 self.assertAlmostEqual(
-                    float(out[0, 8, 8]), float((image[0, 8, 8] - median) / mad)
+                    float(out[0, 8, 8]), float(image[0, 8, 8] - median)
                 )
                 rescaled = si.finalize_activity_image(
                     4 * image + 13, selected, np.zeros(selected.size), **geometry
                 )
-                np.testing.assert_allclose(out, rescaled, equal_nan=True)
+                np.testing.assert_allclose(4 * out, rescaled, equal_nan=True)
 
-    def test_normalization_follows_curved_footprint(self):
+    def test_median_subtraction_follows_curved_footprint(self):
         cols = np.arange(17)
         ref_r = np.abs(cols - 8) + 5
         image = np.zeros((1, 25, 17), dtype=np.float32)
@@ -342,12 +329,12 @@ class TestFinalizeActivityImage(unittest.TestCase):
             ref_r=ref_r, ref_c=cols,
         )
         # The default 7-row window reaches center-phase samples in columns
-        # 5:12 at this bend. Replacing 20 with 25 gives median=21, MAD=2.
-        self.assertAlmostEqual(float(out[0, 5, 8]), 2.0, places=6)
+        # 5:12 at this bend. Replacing 20 with 25 gives median=21.
+        self.assertAlmostEqual(float(out[0, 5, 8]), 4.0, places=6)
 
 
-class TestSnakeMedianMad(unittest.TestCase):
-    """MAD shares the exact curved, clipped, section-limited footprint."""
+class TestSnakeMedian(unittest.TestCase):
+    """Medians use the exact curved, clipped, section-limited footprint."""
 
     def test_matches_explicit_samples_across_chunks(self):
         rng = np.random.default_rng(42)
@@ -359,9 +346,9 @@ class TestSnakeMedianMad(unittest.TestCase):
         selected = np.ravel_multi_index(np.array(points).T, image.shape)
         original = image.copy()
         for height in (3, 5):
-            med, mad = si.snake_aligned_nanmedian(
+            med = si.snake_aligned_nanmedian(
                 image, selected, ref_r, cols, height=height,
-                chunk_size=2, return_mad=True,
+                chunk_size=2,
             )
             for depth, row, col in points:
                 samples = []
@@ -377,17 +364,16 @@ class TestSnakeMedianMad(unittest.TestCase):
                         if 0 <= sample_row < image.shape[1]:
                             samples.append(image[depth, sample_row, sample_col])
                 expected_med = np.nanmedian(samples)
-                expected_mad = np.nanmedian(np.abs(np.array(samples) - expected_med))
                 self.assertAlmostEqual(float(med[depth, row, col]), float(expected_med))
-                self.assertAlmostEqual(float(mad[depth, row, col]), float(expected_mad))
             unselected = np.ones(image.size, dtype=bool)
             unselected[selected] = False
             self.assertTrue(np.all(np.isnan(med.ravel()[unselected])))
-            self.assertTrue(np.all(np.isnan(mad.ravel()[unselected])))
-            median_only = si.snake_aligned_nanmedian(
-                image, selected, ref_r, cols, height=height
-            )
-            np.testing.assert_allclose(med, median_only, equal_nan=True)
+            for chunk_size in (1, 4096):
+                other_chunk = si.snake_aligned_nanmedian(
+                    image, selected, ref_r, cols, height=height,
+                    chunk_size=chunk_size,
+                )
+                np.testing.assert_allclose(med, other_chunk, equal_nan=True)
         np.testing.assert_array_equal(image, original)
 
     def test_empty_and_all_nan_support(self):
@@ -395,11 +381,10 @@ class TestSnakeMedianMad(unittest.TestCase):
         cols = np.arange(11)
         for selected in (np.array([], dtype=int), np.array([27])):
             with self.subTest(selected=selected.size):
-                med, mad = si.snake_aligned_nanmedian(
-                    image, selected, np.full(11, 2), cols, return_mad=True
+                med = si.snake_aligned_nanmedian(
+                    image, selected, np.full(11, 2), cols
                 )
                 self.assertTrue(np.all(np.isnan(med)))
-                self.assertTrue(np.all(np.isnan(mad)))
 
 
 if __name__ == "__main__":

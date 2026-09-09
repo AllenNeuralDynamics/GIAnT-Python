@@ -87,14 +87,8 @@ class TestLocalizeMedianMotion(unittest.TestCase):
         ref_c = np.array([8, 8])
         # Dropped frames outnumber either retained bin and must be ignored.
         mot_inds = np.array([-1, -1, -1, -1, 0, 1, 1, 1])
-        self.assertTrue(pl.SiloParams().normalize_activity_mad)
-        cases = [
-            (shift, normalize)
-            for shift in ((2, -5), (-3, 4), (0, 0))
-            for normalize in (True, False)
-        ]
-        for displacement, normalize in cases:
-            with self.subTest(displacement=displacement, normalize=normalize), ExitStack() as stack:
+        for displacement in ((2, -5), (-3, 4), (0, 0)):
+            with self.subTest(displacement=displacement), ExitStack() as stack:
                 umyx = np.array([[7, 9], displacement], dtype=float)
                 for name in (
                     "build_motion_h_matrices", "gaussian_kernel_2d",
@@ -123,14 +117,9 @@ class TestLocalizeMedianMotion(unittest.TestCase):
                         dmd_pixels_per_column=40, dmd_pixels_per_row=40,
                         psf2d=np.ones((3, 3)), num_super_pixels=2,
                         sparse_h_inds=None, sparse_h_vals=None, align_hz=10,
-                        params=pl.SiloParams(
-                            verbose=False, normalize_activity_mad=normalize
-                        ),
+                        params=pl.SiloParams(verbose=False),
                     )
                 finalize.assert_called_once()
-                self.assertEqual(
-                    finalize.call_args.kwargs["normalize_mad"], normalize
-                )
                 np.testing.assert_array_equal(
                     finalize.call_args.kwargs["ref_d"], [0, 0]
                 )

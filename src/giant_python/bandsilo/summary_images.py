@@ -14,7 +14,7 @@ The activity image is built by sweeping ``rho`` in temporal batches, finding
 spatio-temporal local maxima (a voxel greater than its 6 spatial neighbors in
 the same frame and its temporal neighbors), and accumulating their squared
 value; it is then masked where data was never valid, has a local NaN-median
-subtracted, and is divided by the raw local median absolute deviation (MAD).
+subtracted, and is zeroed at vertical support edges.
 
 The reference's optional ``profile_activity_map`` timing instrumentation is
 intentionally dropped (it only prints timings and does not affect output).
@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import numpy as np
 import scipy.ndimage as ndimage
-from scipy.stats import median_abs_deviation
 
 from .progress import progress
 from .trial_data import fast_dilation
@@ -247,39 +246,34 @@ def finalize_activity_image(
     nan_ct: np.ndarray,
     ref_r: np.ndarray = None,
     ref_c: np.ndarray = None,
-    normalize_mad: bool = True,
     ref_d: np.ndarray = None,
     phase_window_height: int = 7,
     phase_window_width: int = 11,
     phase_tolerance: float = 0.0,
     phase_min_samples: int = 5,
 ) -> np.ndarray:
-    """Mask never-valid pixels and normalize by local NaN-median and MAD.
+    """Subtract the local NaN-median and suppress vertical support edges.
 
     Pixels whose rho was mostly NaN (``nan_ct > 0.5``) or that were never
     selected are set to NaN. When superpixel reference centers are supplied,
     an axis-aligned window includes only valid pixels with similar signed
     vertical offsets from their nearest same-column reference center.
     No snake identity or shared trajectory is assumed. Without reference
-    centers, a fixed 5x11 footprint is used. First-pass statistics use
-    the same local samples: ``MAD = nanmedian(abs(samples - median))``.
-    The output is ``(act_im - median) / MAD``, with no Gaussian scale factor.
-    Pixels with zero or non-finite MAD are set to NaN, as are masked pixels.
-    With ``normalize_mad=False``, only the median is subtracted; MAD is not
-    computed and zero-MAD pixels remain valid. With geometry, neighborhoods
+    centers, a fixed 5x11 footprint is used. The output is ``act_im - median``
+    in the original activity units. With geometry, neighborhoods
     below ``phase_min_samples`` use the mean of finite first-pass medians
-    (and MADs) in the full window, regardless of phase. Empty fallback
+    in the full window, regardless of phase. Empty fallback
     windows and pixels without reference geometry remain NaN.
     Finally, finite input pixels within valid support are set to zero if the
     centered vertical window in their own column crosses invalid/nonfinite
-    input or an image boundary. This overrides undefined median/MAD at these
-    edges in either normalization mode, without changing the filter samples.
+    input or an image boundary. This overrides undefined medians at these
+    edges without changing the filter samples.
     Horizontal window clipping alone does not trigger this suppression.
 
     Parameters
     ----------
     act_im : ndarray
-        Accumulated activity image (masked in place before normalization).
+        Accumulated activity image (masked in place before subtraction).
     sel_pix_idxs : ndarray of int
         Flattened selected-pixel indices into ``act_im``'s grid.
     nan_ct : ndarray of shape (n_sel,)
@@ -290,10 +284,6 @@ def finalize_activity_image(
         the activity-image coordinate frame. The pipeline shifts these by
         the dominant retained motion bin as an approximation for the
         multi-motion image. Multiple bands can occupy the same column.
-    normalize_mad : bool
-        Divide the median-subtracted image by raw local MAD (default True).
-        False skips MAD computation and normalization, retaining masking and
-        median subtraction.
     ref_d : ndarray, optional
         Depth of each reference center. Required with geometry for multi-plane
         images; omitted centers belong to plane zero in single-plane images.
@@ -303,16 +293,15 @@ def finalize_activity_image(
         Maximum signed-phase difference, in row pixels (default 0, exact
         equality). Midpoint ties choose the smaller reference row.
     phase_min_samples : int
-        Minimum finite phase-matched samples for first-pass median/MAD
+        Minimum finite phase-matched samples for first-pass medians
         (default 5); smaller neighborhoods use the full-window fallback.
 
     Returns
     -------
     ndarray
-        Activity in raw local-MAD units (NaN outside the valid support or
-        where the local MAD is zero or non-finite), or median-subtracted
-        activity in original units when ``normalize_mad=False``. Valid vertical
-        support-edge pixels are zero in either mode.
+        Median-subtracted activity in original units, NaN outside valid
+        support or where the median is undefined. Valid vertical support-edge
+        pixels are zero.
     """
     nan_mask = np.full_like(act_im, True, dtype=bool)
     valid_sel_pix = np.flatnonzero(nan_ct <= 0.5)
@@ -324,12 +313,11 @@ def finalize_activity_image(
     if ref_r is not None and ref_c is not None:
         # Legacy trajectory-following filter: uncomment this call and comment
         # out the phase-matched call below to switch back. The original helper
-        # is retained unchanged below for comparison and regression tests.
-        # local_stats = snake_aligned_nanmedian(
+        # is retained below for comparison and regression tests.
+        # med_act_im = snake_aligned_nanmedian(
         #     act_im, np.flatnonzero(~nan_mask), ref_r, ref_c,
-        #     return_mad=normalize_mad,
         # )
-        local_stats = phase_matched_nanmedian(
+        med_act_im = phase_matched_nanmedian(
             act_im,
             np.flatnonzero(~nan_mask),
             ref_r,
@@ -339,25 +327,12 @@ def finalize_activity_image(
             width=phase_window_width,
             phase_tolerance=phase_tolerance,
             min_samples=phase_min_samples,
-            return_mad=normalize_mad,
         )
-        if normalize_mad:
-            med_act_im, mad_act_im = local_stats
-        else:
-            med_act_im = local_stats
     else:
         med_act_im = ndimage.generic_filter(
             act_im, np.nanmedian, size=(1, 5, 11)
         )
-        if normalize_mad:
-            # Use each footprint's own median, not the spatial median image.
-            mad_act_im = ndimage.generic_filter(
-                act_im,
-                median_abs_deviation,
-                size=(1, 5, 11),
-                extra_keywords={"nan_policy": "omit"},
-            )
-    # Check original input support, not median/MAD support. The vertical-only
+    # Check original input support, not median support. The vertical-only
     # footprint preserves horizontal edges and never combines depth planes.
     valid_input = (~nan_mask) & np.isfinite(act_im)
     window_height = (
@@ -368,13 +343,7 @@ def finalize_activity_image(
     )
     vertical_edge = valid_input & ~vertical_interior
     act_im = act_im - med_act_im
-    if not normalize_mad:
-        act_im[nan_mask] = np.nan
-        act_im[vertical_edge] = 0
-        return act_im
-    valid_scale = (~nan_mask) & np.isfinite(mad_act_im) & (mad_act_im > 0)
-    np.divide(act_im, mad_act_im, out=act_im, where=valid_scale)
-    act_im[~valid_scale] = np.nan
+    act_im[nan_mask] = np.nan
     act_im[vertical_edge] = 0
     return act_im
 
@@ -390,9 +359,8 @@ def phase_matched_nanmedian(
     phase_tolerance: float = 0.0,
     min_samples: int = 5,
     chunk_size: int = 4096,
-    return_mad: bool = False,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Local median/MAD conditioned on signed reference-band phase.
+) -> np.ndarray:
+    """Local median conditioned on signed reference-band phase.
 
     For each selected pixel, phase is ``row - nearest_reference_row`` using
     only reference centers in the same column and depth. Distances are
@@ -419,10 +387,7 @@ def phase_matched_nanmedian(
     This is a phase-conditioned spatial background, not a
     reconstruction or separation of contributions at physical crossings.
 
-    With ``return_mad=True``, first-pass raw MAD uses exactly the median's
-    samples, without Gaussian scaling. Fallback MAD is the nanmean of finite
-    first-pass MADs in the full window, not a pooled-sample MAD. Return both
-    images; otherwise skip MAD entirely. Non-selected/nonfinite pixels and
+    Non-selected/nonfinite pixels and
     pixels without geometry remain NaN. Sparse phase/support arrays and chunked
     gathers bound working memory; only output images are dense.
     """
@@ -464,9 +429,8 @@ def phase_matched_nanmedian(
         raise ValueError("valid_pix_idxs contains an out-of-bounds index")
     selected = np.unique(selected.astype(np.intp))
     result = np.full(image.shape, np.nan, dtype=np.result_type(image.dtype, np.float32))
-    mad_result = np.full_like(result, np.nan) if return_mad else None
     if not selected.size:
-        return (result, mad_result) if return_mad else result
+        return result
 
     nz, nr, nc = image.shape
     in_bounds = (ref_d >= 0) & (ref_d < nz) & (ref_c >= 0) & (ref_c < nc)
@@ -529,28 +493,19 @@ def phase_matched_nanmedian(
         medians = np.nanmedian(samples, axis=1)
         flat = selected[positions[enough]]
         result.ravel()[flat] = medians
-        if return_mad:
-            np.subtract(samples, medians[:, None], out=samples)
-            np.abs(samples, out=samples)
-            mad_result.ravel()[flat] = np.nanmedian(samples, axis=1)
 
     # Advanced indexing freezes first-pass values: fallback estimates must
     # not propagate or depend on chunk size / iteration order.
     first_medians = result.ravel()[selected]
-    first_mads = mad_result.ravel()[selected] if return_mad else None
     missing = outputs[~np.isfinite(first_medians[outputs])]
-    statistics = [(first_medians, result)]
-    if return_mad:
-        statistics.append((first_mads, mad_result))
     for positions, lookup, support in windows(missing):
-        for source, destination in statistics:
-            accept = support & np.isfinite(source[lookup])
-            counts = np.count_nonzero(accept, axis=1)
-            enough = counts > 0
-            # Equivalent to nanmean, without empty-window warnings.
-            totals = np.sum(np.where(accept, source[lookup], 0), axis=1, dtype=np.float64)
-            destination.ravel()[selected[positions[enough]]] = totals[enough] / counts[enough]
-    return (result, mad_result) if return_mad else result
+        accept = support & np.isfinite(first_medians[lookup])
+        counts = np.count_nonzero(accept, axis=1)
+        enough = counts > 0
+        # Equivalent to nanmean, without empty-window warnings.
+        totals = np.sum(np.where(accept, first_medians[lookup], 0), axis=1, dtype=np.float64)
+        result.ravel()[selected[positions[enough]]] = totals[enough] / counts[enough]
+    return result
 
 
 def snake_aligned_nanmedian(
@@ -561,9 +516,8 @@ def snake_aligned_nanmedian(
     height: int = 5,
     width: int = 11,
     chunk_size: int = 100_000,
-    return_mad: bool = False,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Return local medians and optionally MADs along the band trajectory.
+) -> np.ndarray:
+    """Return local medians along the band trajectory.
 
     The parallel snakes have the same trajectory and differ by a nearly fixed
     vertical spacing. The trajectory is unwrapped modulo that spacing so its
@@ -574,12 +528,7 @@ def snake_aligned_nanmedian(
     ``ref_r`` and ``ref_c`` must already be expressed in ``image`` coordinates;
     this helper does not apply motion correction itself.
 
-    With ``return_mad=True``, return ``(median_image, mad_image)``. The raw
-    MAD is ``nanmedian(abs(samples - median))`` over exactly the same samples
-    used for each output median, without Gaussian scaling. The sample buffer
-    is reused for absolute deviations. Both images are NaN at unrequested
-    pixels and all-NaN footprints; constant footprints have MAD zero.
-    The default returns only the median image for compatibility.
+    The output is NaN at unrequested pixels and all-NaN footprints.
     """
     if height < 1 or width < 1 or height % 2 == 0 or width % 2 == 0:
         raise ValueError("height and width must be positive odd integers")
@@ -639,7 +588,6 @@ def snake_aligned_nanmedian(
     trajectory_segment = segment_at_reference[nearest]
 
     result = np.full_like(image, np.nan, dtype=np.result_type(image, np.float32))
-    mad_result = np.full_like(result, np.nan) if return_mad else None
     col_offsets = np.arange(-(width // 2), width // 2 + 1)
     row_offsets = np.arange(-(height // 2), height // 2 + 1)
 
@@ -676,9 +624,4 @@ def snake_aligned_nanmedian(
         ]
         medians = np.nanmedian(samples, axis=(1, 2))
         result.ravel()[flat] = medians
-        if return_mad:
-            np.subtract(samples, medians[:, None, None], out=samples)
-            np.abs(samples, out=samples)
-            mad_result.ravel()[flat] = np.nanmedian(samples, axis=(1, 2))
-
-    return (result, mad_result) if return_mad else result
+    return result
