@@ -11,6 +11,8 @@ Phase 1-7 kernels are each covered/cross-checked in their own modules).
 import os
 import tempfile
 import unittest
+from contextlib import ExitStack
+from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -75,6 +77,71 @@ def _path_result(
         soma_labels=soma_labels,
         yx_shape=(npc, npr),
     )
+
+
+class TestLocalizeMedianMotion(unittest.TestCase):
+    """Check median geometry without running the expensive rho/NMF stages."""
+
+    def test_dominant_retained_motion_shifts_only_median_geometry(self):
+        ref_r = np.array([10, 19])
+        ref_c = np.array([8, 8])
+        # Dropped frames outnumber either retained bin and must be ignored.
+        mot_inds = np.array([-1, -1, -1, -1, 0, 1, 1, 1])
+        self.assertTrue(pl.SiloParams().normalize_activity_mad)
+        cases = [
+            (shift, normalize)
+            for shift in ((2, -5), (-3, 4), (0, 0))
+            for normalize in (True, False)
+        ]
+        for displacement, normalize in cases:
+            with self.subTest(displacement=displacement, normalize=normalize), ExitStack() as stack:
+                umyx = np.array([[7, 9], displacement], dtype=float)
+                for name in (
+                    "build_motion_h_matrices", "gaussian_kernel_2d",
+                    "selected_pixels_2d_for_plane", "build_convolution_matrix",
+                    "compute_rho", "mask_high_nan_rho", "decay_kernel_1d",
+                    "smooth_rho",
+                ):
+                    stack.enter_context(patch.object(
+                        pl.bg, name, return_value=(None, None)
+                    ))
+                stack.enter_context(patch.object(
+                    pl.si, "accumulate_activity_image"
+                ))
+                # Stop at finalization; peak detection and NMF are unrelated.
+                finalize = stack.enter_context(patch.object(
+                    pl.si, "finalize_activity_image",
+                    side_effect=RuntimeError("median reached"),
+                ))
+                with self.assertRaisesRegex(RuntimeError, "median reached"):
+                    pl._localize(
+                        residual=np.zeros((2, mot_inds.size)),
+                        umyx=umyx, mot_inds_yx=mot_inds,
+                        sel_pix_idxs=np.array([0]), pixel_coords=None,
+                        n_pixels=1600, ref_d=np.array([0, 0]),
+                        ref_r=ref_r, ref_c=ref_c, num_fast_zs=1,
+                        dmd_pixels_per_column=40, dmd_pixels_per_row=40,
+                        psf2d=np.ones((3, 3)), num_super_pixels=2,
+                        sparse_h_inds=None, sparse_h_vals=None, align_hz=10,
+                        params=pl.SiloParams(
+                            verbose=False, normalize_activity_mad=normalize
+                        ),
+                    )
+                finalize.assert_called_once()
+                self.assertEqual(
+                    finalize.call_args.kwargs["normalize_mad"], normalize
+                )
+                np.testing.assert_array_equal(
+                    finalize.call_args.kwargs["ref_d"], [0, 0]
+                )
+                np.testing.assert_array_equal(
+                    finalize.call_args.kwargs["ref_r"], ref_r + displacement[0]
+                )
+                np.testing.assert_array_equal(
+                    finalize.call_args.kwargs["ref_c"], ref_c + displacement[1]
+                )
+                np.testing.assert_array_equal(ref_r, [10, 19])
+                np.testing.assert_array_equal(ref_c, [8, 8])
 
 
 class TestDmdUserRois(unittest.TestCase):

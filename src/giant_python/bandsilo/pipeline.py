@@ -899,14 +899,14 @@ def _localize(
         num_super_pixels,
         dmd_pixels_per_row,
     )
-    # TEMPORARY: build the activity-image D matrices from a one-pixel center
-    # and a 3x3 uniform surround instead of the PSF / expanded-PSF pair.
+    # Build the activity-image D matrices from a narrow Gaussian center and a
+    # broad Gaussian surround instead of the PSF / expanded-PSF pair.
     # ``compute_rho`` column-normalizes each and subtracts them, so the
-    # effective filter is H @ (U_center - U_surround). ``psf2d`` is still used
-    # there for the valid-column dilation/erosion mask. The negative surround
-    # is normalized by its negative column sum before that subtraction.
+    # effective filter is H @ (G_center - G_surround). ``psf2d`` is still used
+    # there for the valid-column dilation/erosion mask.
     #
-    # To revert, delete the Gaussian kernels below, restore these two lines
+    # To restore the PSF-derived pair, delete the Gaussian kernels below,
+    # restore these two lines,
     # (the ``shrink_psf`` call was itself a temporary hack and is optional),
     # and swap the commented-out ``build_convolution_matrix`` calls back in
     # inside the loop:
@@ -991,7 +991,20 @@ def _localize(
         dmd_pixels_per_row,
         verbose=params.verbose,
     )
-    act_im = si.finalize_activity_image(act_im, sel_pix_idxs, nan_ct)
+    # Approximate the accumulated image's scan trajectory using the most
+    # populated retained YX motion bin. Dropped frames have bin index -1.
+    # Shift only the median geometry; rho/NMF still need the original centers.
+    motion_counts = np.bincount(mot_inds_yx[mot_inds_yx >= 0])
+    dominant_motion = umyx[np.argmax(motion_counts)]
+    act_im = si.finalize_activity_image(
+        act_im,
+        sel_pix_idxs,
+        nan_ct,
+        ref_r=ref_r + int(dominant_motion[0]),
+        ref_c=ref_c + int(dominant_motion[1]),
+        normalize_mad=params.normalize_activity_mad,
+        ref_d=ref_d,
+    )
 
     peak_th = params.peakth
     source_seeds = get_act_im_peaks(
