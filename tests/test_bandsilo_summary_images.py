@@ -136,6 +136,45 @@ class TestAccumulateActivityImage(unittest.TestCase):
 class TestFinalizeActivityImage(unittest.TestCase):
     """Activity-image masking, local median subtraction, and MAD scaling."""
 
+    def test_vertical_window_requires_full_valid_support(self):
+        image = np.ones((2, 19, 13), dtype=np.float32)
+        selected_mask = np.ones(image.shape, dtype=bool)
+        selected_mask[0, :4] = False
+        selected_mask[0, 15:] = False
+        selected = np.flatnonzero(selected_mask)
+        nan_ct = np.zeros(selected.size)
+        dropped = np.ravel_multi_index((0, 9, 6), image.shape)
+        nan_ct[selected == dropped] = 1
+        image[1, 9, 7] = np.nan
+        image[1, 9, 8] = np.inf
+        support = selected_mask & np.isfinite(image)
+        support[0, 9, 6] = False
+        for height in (1, 3, 7):
+            geometry = dict(ref_r=np.array([9, 9]), ref_c=np.array([6, 6]),
+                            ref_d=np.array([0, 1]), phase_window_height=height)
+            for normalize in (False, True):
+                # Fixed statistics isolate final edge suppression.
+                stats = (
+                    (np.zeros_like(image), np.ones_like(image))
+                    if normalize else np.zeros_like(image)
+                )
+                with patch.object(si, "phase_matched_nanmedian", return_value=stats):
+                    out = si.finalize_activity_image(
+                        image.copy(), selected, nan_ct, normalize_mad=normalize,
+                        **geometry,
+                    )
+                for z, r, c in zip(*np.where(support)):
+                    lo, hi = r - height // 2, r + height // 2 + 1
+                    fits = (
+                        lo >= 0 and hi <= image.shape[1]
+                        and support[z, lo:hi, c].all()
+                    )
+                    self.assertEqual(out[z, r, c], 1 if fits else 0)
+                self.assertTrue(np.isnan(out[~selected_mask]).all())
+                self.assertTrue(np.isnan(out[0, 9, 6]))
+                self.assertTrue(np.isnan(out[1, 9, 7]))
+                self.assertEqual(out[1, 9, 0], 1)  # Horizontal edges survive.
+
     def test_skip_mad_preserves_median_subtraction_and_mask(self):
         image = np.ones((1, 13, 17), dtype=np.float32)
         image[0, 6, 8] = 7
@@ -182,7 +221,10 @@ class TestFinalizeActivityImage(unittest.TestCase):
                     out = si.finalize_activity_image(
                         image, sel_pix_idxs, nan_ct, **geometry
                     )
-                    self.assertTrue(np.all(np.isnan(out)))
+                    radius = 3 if geometry else 2
+                    self.assertTrue(np.all(out[:, :radius] == 0))
+                    self.assertTrue(np.all(out[:, -radius:] == 0))
+                    self.assertTrue(np.all(np.isnan(out[:, radius:-radius])))
 
     def test_high_nan_pixels_masked(self):
         """Pixels with nan_ct > 0.5 are excluded and set to NaN."""

@@ -270,6 +270,11 @@ def finalize_activity_image(
     below ``phase_min_samples`` use the mean of finite first-pass medians
     (and MADs) in the full window, regardless of phase. Empty fallback
     windows and pixels without reference geometry remain NaN.
+    Finally, finite input pixels within valid support are set to zero if the
+    centered vertical window in their own column crosses invalid/nonfinite
+    input or an image boundary. This overrides undefined median/MAD at these
+    edges in either normalization mode, without changing the filter samples.
+    Horizontal window clipping alone does not trigger this suppression.
 
     Parameters
     ----------
@@ -306,7 +311,8 @@ def finalize_activity_image(
     ndarray
         Activity in raw local-MAD units (NaN outside the valid support or
         where the local MAD is zero or non-finite), or median-subtracted
-        activity in original units when ``normalize_mad=False``.
+        activity in original units when ``normalize_mad=False``. Valid vertical
+        support-edge pixels are zero in either mode.
     """
     nan_mask = np.full_like(act_im, True, dtype=bool)
     valid_sel_pix = np.flatnonzero(nan_ct <= 0.5)
@@ -351,13 +357,25 @@ def finalize_activity_image(
                 size=(1, 5, 11),
                 extra_keywords={"nan_policy": "omit"},
             )
+    # Check original input support, not median/MAD support. The vertical-only
+    # footprint preserves horizontal edges and never combines depth planes.
+    valid_input = (~nan_mask) & np.isfinite(act_im)
+    window_height = (
+        phase_window_height if ref_r is not None and ref_c is not None else 5
+    )
+    vertical_interior = ndimage.minimum_filter1d(
+        valid_input, size=window_height, axis=1, mode="constant", cval=0,
+    )
+    vertical_edge = valid_input & ~vertical_interior
     act_im = act_im - med_act_im
     if not normalize_mad:
         act_im[nan_mask] = np.nan
+        act_im[vertical_edge] = 0
         return act_im
     valid_scale = (~nan_mask) & np.isfinite(mad_act_im) & (mad_act_im > 0)
     np.divide(act_im, mad_act_im, out=act_im, where=valid_scale)
     act_im[~valid_scale] = np.nan
+    act_im[vertical_edge] = 0
     return act_im
 
 

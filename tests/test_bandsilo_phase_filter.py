@@ -193,7 +193,7 @@ class TestPhaseMatchedFilter(unittest.TestCase):
             if normalize:
                 expected /= float(mad[0, 1, 5])
             np.testing.assert_allclose(out[0, 1, 5], expected, rtol=1e-6)
-            self.assertTrue(np.isnan(out[0, 2, 5]))
+            self.assertEqual(out[0, 2, 5], 0)  # Vertical window hits image edge.
 
     def test_empty_fallback_is_nan_without_warnings(self):
         import warnings
@@ -246,6 +246,11 @@ class TestPhaseMatchedFilter(unittest.TestCase):
                 positive = np.isfinite(mad) & (mad > 0)
                 np.divide(expected, mad, out=expected, where=positive)
                 expected[~positive] = np.nan
+            support = np.isfinite(image_masked)
+            for z, r, c in zip(*np.where(support)):
+                if (r < 3 or r + 3 >= image.shape[1]
+                        or not support[z, r - 3:r + 4, c].all()):
+                    expected[z, r, c] = 0
             actual = si.finalize_activity_image(
                 image.copy(), selected, nan_ct, centers + dr, cols + dc,
                 normalize_mad=normalize,
