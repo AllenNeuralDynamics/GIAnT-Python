@@ -7,7 +7,7 @@ Ported from the peak-detection kernels of
 :mod:`giant_python.bandsilo.summary_images`; those seeds initialize the Phase-6
 NMF localization.
 
-Detection fits integrated isotropic 2-D Gaussians (each Gaussian integrated
+Detection fits integrated axis-aligned 2-D Gaussians (each Gaussian integrated
 over unit pixels) to the activity image with a bounded Levenberg-Marquardt
 solver (:func:`_lsq_curvefit`, using the analytical Jacobian from
 :func:`_gaussian_peaks_integrated_val_jac`). Per plane, an initial set of local
@@ -34,13 +34,13 @@ from scipy.special import erf
 _AMP_SCALE = 1.0 / 0.75
 
 # MAD -> Gaussian-sigma scale factor (median absolute deviation / 0.6745).
-_MAD_TO_SIGMA = 0.6741891400433162
+_MAD_TO_SIGMA = 0.67449
 
 
 def gaussian_peaks_integrated(
     theta: np.ndarray, yxdata: np.ndarray
 ) -> np.ndarray:
-    """Evaluate integrated isotropic 2-D Gaussians at selected pixels.
+    """Evaluate integrated axis-aligned 2-D Gaussians at selected pixels.
 
     Each Gaussian is integrated over unit pixels on a regular grid (port of
     ``gaussianPeaksIntegrated``). Only the ``M`` requested pixels are evaluated
@@ -48,8 +48,9 @@ def gaussian_peaks_integrated(
 
     Parameters
     ----------
-    theta : ndarray of shape (N, 4)
-        Per-Gaussian ``[amp, mu_y, mu_x, sigma]``.
+    theta : ndarray of shape (N, 5) or (N, 4)
+        Per-Gaussian ``[amp, mu_y, mu_x, sigma_y, sigma_x]``. A four-column
+        array uses a shared ``sigma`` for both axes (legacy isotropic form).
     yxdata : ndarray of shape (M, 2)
         Pixel-center ``[y, x]`` coordinates.
 
@@ -70,7 +71,8 @@ def gaussian_peaks_integrated(
     amp = theta[:, 0]
     my = theta[:, 1]
     mx = theta[:, 2]
-    s = np.maximum(theta[:, 3], np.finfo(float).eps)
+    sy = np.maximum(theta[:, 3], np.finfo(float).eps)
+    sx = np.maximum(theta[:, -1], np.finfo(float).eps)
 
     c = np.sqrt(np.pi / 2)
     rt2 = np.sqrt(2.0)
@@ -80,10 +82,10 @@ def gaussian_peaks_integrated(
     xr = (xc + 0.5)[:, np.newaxis]
     ix = (
         c
-        * s[np.newaxis, :]
+        * sx[np.newaxis, :]
         * (
-            erf((xr - mx[np.newaxis, :]) / (rt2 * s[np.newaxis, :]))
-            - erf((xl - mx[np.newaxis, :]) / (rt2 * s[np.newaxis, :]))
+            erf((xr - mx[np.newaxis, :]) / (rt2 * sx[np.newaxis, :]))
+            - erf((xl - mx[np.newaxis, :]) / (rt2 * sx[np.newaxis, :]))
         )
     )
 
@@ -92,10 +94,10 @@ def gaussian_peaks_integrated(
     yt = (yc + 0.5)[:, np.newaxis]
     iy = (
         c
-        * s[np.newaxis, :]
+        * sy[np.newaxis, :]
         * (
-            erf((yt - my[np.newaxis, :]) / (rt2 * s[np.newaxis, :]))
-            - erf((yb - my[np.newaxis, :]) / (rt2 * s[np.newaxis, :]))
+            erf((yt - my[np.newaxis, :]) / (rt2 * sy[np.newaxis, :]))
+            - erf((yb - my[np.newaxis, :]) / (rt2 * sy[np.newaxis, :]))
         )
     )
 
@@ -109,12 +111,13 @@ def _gaussian_peaks_integrated_val_jac(
 
     Shares the integrated-profile intermediates between the forward value and
     the Jacobian so the LM solver needs one evaluation per iteration instead of
-    ``4*N`` finite differences.
+    ``P*N`` finite differences, where ``P`` is the number of parameters.
 
     Parameters
     ----------
-    theta : ndarray of shape (N, 4)
-        Per-Gaussian ``[amp, mu_y, mu_x, sigma]``.
+    theta : ndarray of shape (N, 5) or (N, 4)
+        Per-Gaussian ``[amp, mu_y, mu_x, sigma_y, sigma_x]``, or the legacy
+        isotropic form ``[amp, mu_y, mu_x, sigma]``.
     yxdata : ndarray of shape (M, 2)
         Pixel-center ``[y, x]`` coordinates.
 
@@ -122,10 +125,9 @@ def _gaussian_peaks_integrated_val_jac(
     -------
     val : ndarray of shape (M,)
         Forward value at each pixel.
-    jac : ndarray of shape (M, 4*N)
-        Column-major-per-Gaussian Jacobian (columns ``0::4`` are ``d/dA``,
-        ``1::4`` are ``d/dmu_y``, ``2::4`` are ``d/dmu_x``, ``3::4`` are
-        ``d/dsigma``).
+    jac : ndarray of shape (M, P*N)
+        Derivatives in the same order as ``theta.ravel()``. The isotropic
+        form sums the two width derivatives into one shared-sigma derivative.
     """
     x_int = yxdata[:, 1].astype(np.intp)
     y_int = yxdata[:, 0].astype(np.intp)
@@ -142,29 +144,31 @@ def _gaussian_peaks_integrated_val_jac(
     amp = theta[:, 0]
     my = theta[:, 1]
     mx = theta[:, 2]
-    s = np.maximum(theta[:, 3], np.finfo(float).eps)
+    sy = np.maximum(theta[:, 3], np.finfo(float).eps)
+    sx = np.maximum(theta[:, -1], np.finfo(float).eps)
 
     c = np.sqrt(np.pi / 2)
     rt2 = np.sqrt(2.0)
-    inv_rt2s = 1.0 / (rt2 * s[np.newaxis, :])
+    inv_rt2sx = 1.0 / (rt2 * sx[np.newaxis, :])
+    inv_rt2sy = 1.0 / (rt2 * sy[np.newaxis, :])
 
     xc = np.arange(x_min, x_max + 1, dtype=float)
     xl = (xc - 0.5)[:, np.newaxis]
     xr = (xc + 0.5)[:, np.newaxis]
-    ux_l = (xl - mx[np.newaxis, :]) * inv_rt2s
-    ux_r = (xr - mx[np.newaxis, :]) * inv_rt2s
+    ux_l = (xl - mx[np.newaxis, :]) * inv_rt2sx
+    ux_r = (xr - mx[np.newaxis, :]) * inv_rt2sx
     erf_ux_l = erf(ux_l)
     erf_ux_r = erf(ux_r)
-    ix = c * s[np.newaxis, :] * (erf_ux_r - erf_ux_l)
+    ix = c * sx[np.newaxis, :] * (erf_ux_r - erf_ux_l)
 
     yc = np.arange(y_min, y_max + 1, dtype=float)
     yb = (yc - 0.5)[:, np.newaxis]
     yt = (yc + 0.5)[:, np.newaxis]
-    uy_b = (yb - my[np.newaxis, :]) * inv_rt2s
-    uy_t = (yt - my[np.newaxis, :]) * inv_rt2s
+    uy_b = (yb - my[np.newaxis, :]) * inv_rt2sy
+    uy_t = (yt - my[np.newaxis, :]) * inv_rt2sy
     erf_uy_b = erf(uy_b)
     erf_uy_t = erf(uy_t)
-    iy = c * s[np.newaxis, :] * (erf_uy_t - erf_uy_b)
+    iy = c * sy[np.newaxis, :] * (erf_uy_t - erf_uy_b)
 
     iy_m = iy[y_idx, :]
     ix_m = ix[x_idx, :]
@@ -184,18 +188,24 @@ def _gaussian_peaks_integrated_val_jac(
 
     sqrt2 = rt2
     d_iy_ds_m = (
-        iy / s[np.newaxis, :] + sqrt2 * (uy_b * exp_uyb2 - uy_t * exp_uyt2)
+        iy / sy[np.newaxis, :] + sqrt2 * (uy_b * exp_uyb2 - uy_t * exp_uyt2)
     )[y_idx, :]
     d_ix_ds_m = (
-        ix / s[np.newaxis, :] + sqrt2 * (ux_l * exp_uxl2 - ux_r * exp_uxr2)
+        ix / sx[np.newaxis, :] + sqrt2 * (ux_l * exp_uxl2 - ux_r * exp_uxr2)
     )[x_idx, :]
-    dval_ds = amp[np.newaxis, :] * (d_iy_ds_m * ix_m + iy_m * d_ix_ds_m)
+    dval_dsy = amp[np.newaxis, :] * d_iy_ds_m * ix_m
+    dval_dsx = amp[np.newaxis, :] * iy_m * d_ix_ds_m
 
-    jac = np.empty((m, 4 * n), dtype=float)
-    jac[:, 0::4] = dval_da
-    jac[:, 1::4] = dval_dmy
-    jac[:, 2::4] = dval_dmx
-    jac[:, 3::4] = dval_ds
+    n_params = theta.shape[1]
+    jac = np.empty((m, n_params * n), dtype=float)
+    jac[:, 0::n_params] = dval_da
+    jac[:, 1::n_params] = dval_dmy
+    jac[:, 2::n_params] = dval_dmx
+    if n_params == 4:
+        jac[:, 3::n_params] = dval_dsy + dval_dsx
+    else:
+        jac[:, 3::n_params] = dval_dsy
+        jac[:, 4::n_params] = dval_dsx
 
     return val, jac
 
@@ -216,25 +226,27 @@ def _lsq_curvefit(
 
     Parameters
     ----------
-    theta0 : ndarray of shape (N, 4)
-        Initial ``[amp, mu_y, mu_x, sigma]`` per Gaussian.
+    theta0 : ndarray of shape (N, P)
+        Initial ``[amp, mu_y, mu_x, sigma_y, sigma_x]`` per Gaussian (P=5),
+        or legacy isotropic parameters (P=4).
     xdata : ndarray of shape (M, 2)
         Pixel-center ``[y, x]`` coordinates.
     ydata : ndarray of shape (M,)
         Observed values (``act_im(sel) - mu_bg``).
-    lb_flat, ub_flat : ndarray of shape (4*N,)
+    lb_flat, ub_flat : ndarray of shape (P*N,)
         Row-major-flattened lower/upper bounds.
     max_nfev : int
         Cap on value+Jacobian evaluations.
 
     Returns
     -------
-    ndarray of shape (N, 4)
+    ndarray of shape (N, P)
         Optimized parameters.
     """
+    n_params = theta0.shape[1]
     x = np.clip(theta0.ravel().copy(), lb_flat, ub_flat)
 
-    val, jac = _gaussian_peaks_integrated_val_jac(x.reshape(-1, 4), xdata)
+    val, jac = _gaussian_peaks_integrated_val_jac(x.reshape(-1, n_params), xdata)
     r = val - ydata
     cost = np.dot(r, r)
     nfev = 1
@@ -253,7 +265,7 @@ def _lsq_curvefit(
         x_new = np.clip(x + delta, lb_flat, ub_flat)
 
         val_new, jac_new = _gaussian_peaks_integrated_val_jac(
-            x_new.reshape(-1, 4), xdata
+            x_new.reshape(-1, n_params), xdata
         )
         r_new = val_new - ydata
         cost_new = np.dot(r_new, r_new)
@@ -274,7 +286,54 @@ def _lsq_curvefit(
         else:
             lam = min(lam * 10.0, 1e10)
 
-    return x.reshape(-1, 4)
+    return x.reshape(-1, n_params)
+
+
+def _fit_isotropic_then_anisotropic(
+    theta0: np.ndarray,
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    lb_flat: np.ndarray,
+    ub_flat: np.ndarray,
+    max_nfev: int = 5000,
+) -> np.ndarray:
+    """Fit shared widths first, then relax to independent y/x widths.
+
+    All peaks in the supplied fit region are optimized jointly in both stages.
+    The first stage uses four parameters per peak and constrains its shared
+    sigma to the intersection of the y/x bounds (normally [0.35, 1] pixels).
+    The second stage starts from that solution with sigma_y == sigma_x and
+    restores the original five-parameter bounds. Each stage has its own
+    ``max_nfev`` budget.
+
+    This is an initialization preference, not an anisotropy penalty: widths
+    can separate whenever that lowers the residual sum of squares. The LM
+    solver accepts only improving steps, retaining the isotropic solution
+    when relaxation cannot improve it.
+    """
+    if theta0.shape[0] == 0:
+        return theta0.copy()
+
+    lb = lb_flat.reshape(-1, 5)
+    ub = ub_flat.reshape(-1, 5)
+    iso_lb = lb[:, :4].copy()
+    iso_ub = ub[:, :4].copy()
+    iso_lb[:, 3] = np.maximum(lb[:, 3], lb[:, 4])
+    iso_ub[:, 3] = np.minimum(ub[:, 3], ub[:, 4])
+    if np.any(iso_lb[:, 3] > iso_ub[:, 3]):
+        raise ValueError("Isotropic fitting requires overlapping y/x width bounds")
+
+    clipped = np.clip(theta0, lb, ub)
+    iso0 = clipped[:, :4].copy()
+    iso0[:, 3] = np.sqrt(clipped[:, 3] * clipped[:, 4])
+    isotropic = _lsq_curvefit(
+        iso0, xdata, ydata, iso_lb.ravel(), iso_ub.ravel(),
+        max_nfev=max_nfev,
+    )
+    relaxed0 = np.column_stack([isotropic, isotropic[:, 3]])
+    return _lsq_curvefit(
+        relaxed0, xdata, ydata, lb_flat, ub_flat, max_nfev=max_nfev
+    )
 
 
 def _make_bounds(
@@ -283,7 +342,8 @@ def _make_bounds(
     """Return flattened LM bounds for peaks located at ``plocs``.
 
     Amplitude is unbounded above; means are constrained to +/- 1.5 px of the
-    seed (clipped to the image); sigma to ``[0.35, 5.0]``.
+    seed (clipped to the image); sigma_y to ``[0.35, 8.0]`` and sigma_x to
+    ``[0.35, 1.0]``, in pixels.
 
     Parameters
     ----------
@@ -294,7 +354,7 @@ def _make_bounds(
 
     Returns
     -------
-    lb_flat, ub_flat : ndarray of shape (4*N,)
+    lb_flat, ub_flat : ndarray of shape (5*N,)
         Row-major-flattened lower/upper bounds.
     """
     n = plocs.shape[0]
@@ -304,6 +364,7 @@ def _make_bounds(
             np.maximum(0, plocs[:, 0] - 1.5),
             np.maximum(0, plocs[:, 1] - 1.5),
             np.ones(n) * 0.35,
+            np.ones(n) * 0.35,
         ]
     )
     ub = np.column_stack(
@@ -311,7 +372,8 @@ def _make_bounds(
             np.full(n, np.inf),
             np.minimum(height - 1, plocs[:, 0] + 1.5),
             np.minimum(width - 1, plocs[:, 1] + 1.5),
-            np.full(n, 5.0),
+            np.full(n, 8.0),
+            np.full(n, 1.0),
         ]
     )
     return lb.ravel(), ub.ravel()
@@ -358,7 +420,7 @@ def _process_cc_new_peak(
     ----------
     new_peak : tuple
         ``((pY, pX), cc_label)`` for the candidate.
-    thetaf : ndarray of shape (N, 4)
+    thetaf : ndarray of shape (N, 5)
         Current Gaussian parameters.
     p_locs : ndarray of shape (N, 2)
         Current seed locations.
@@ -383,7 +445,9 @@ def _process_cc_new_peak(
     amp_new = act_im_2d[py_new, px_new] * _AMP_SCALE
 
     n_before = thetaf.shape[0]
-    thetaf = np.vstack([thetaf, [amp_new, float(py_new), float(px_new), 0.5]])
+    thetaf = np.vstack(
+        [thetaf, [amp_new, float(py_new), float(px_new), 0.5, 0.5]]
+    )
     p_locs = np.vstack([p_locs, [float(py_new), float(px_new)]])
     new_idx = n_before
 
@@ -396,7 +460,7 @@ def _process_cc_new_peak(
     in_cc = cc_mask[iy, ix]
 
     lb_cc, ub_cc = _make_bounds(p_locs[in_cc], height, width)
-    thetaf[in_cc] = _lsq_curvefit(
+    thetaf[in_cc] = _fit_isotropic_then_anisotropic(
         thetaf[in_cc], cc_yx, cc_vals, lb_cc, ub_cc, max_nfev=5000
     )
 
@@ -410,7 +474,7 @@ def _process_cc_new_peak(
         refit_mask[new_idx] = False
         if np.any(refit_mask):
             lb_rf, ub_rf = _make_bounds(p_locs[refit_mask], height, width)
-            thetaf[refit_mask] = _lsq_curvefit(
+            thetaf[refit_mask] = _fit_isotropic_then_anisotropic(
                 thetaf[refit_mask], cc_yx, cc_vals, lb_rf, ub_rf, max_nfev=5000
             )
         thetaf = np.delete(thetaf, new_idx, axis=0)
@@ -463,7 +527,7 @@ def _refine_residual_peaks(
 
     Returns
     -------
-    ndarray of shape (N, 4)
+    ndarray of shape (N, 5)
         The refined Gaussian parameters.
     """
     reject_mask = np.zeros((height, width), dtype=bool)
@@ -533,6 +597,7 @@ def detect_peaks_2d(
     Finds initial local maxima (above ``peak_thresh``), fits them jointly, then
     iteratively adds residual peaks (:func:`_refine_residual_peaks`), and
     finally drops peaks whose amplitude falls below a sigma-adjusted threshold.
+    Every fit/refit optimizes shared widths first, then allows anisotropy.
 
     Parameters
     ----------
@@ -552,11 +617,12 @@ def detect_peaks_2d(
 
     Returns
     -------
-    ndarray of shape (N, 4)
-        ``[amp, mu_y, mu_x, sigma]`` per peak, or ``(0, 4)`` if none.
+    ndarray of shape (N, 5)
+        ``[amp, mu_y, mu_x, sigma_y, sigma_x]`` per peak, or ``(0, 5)`` if
+        none. Widths are bounded to ``[0.35, 8]`` in y and ``[0.35, 1]`` in x.
     """
     height, width = act_im_2d.shape
-    empty = np.zeros((0, 4))
+    empty = np.zeros((0, 5))
 
     explored = act_im_2d.copy()
     explored[exclusion_mask | np.isnan(explored)] = -np.inf
@@ -576,7 +642,8 @@ def detect_peaks_2d(
     act_sel_pix &= ~np.isnan(act_im_2d)
 
     thetaf = np.column_stack(
-        [amp, py.astype(float), px.astype(float), 0.5 * np.ones(n_peaks)]
+        [amp, py.astype(float), px.astype(float),
+         0.5 * np.ones(n_peaks), 0.5 * np.ones(n_peaks)]
     )
     p_locs = np.column_stack([py.astype(float), px.astype(float)])
 
@@ -584,7 +651,9 @@ def detect_peaks_2d(
     sel_vals = act_im_2d[act_sel_pix] - mu_bg
 
     lb_f, ub_f = _make_bounds(p_locs, height, width)
-    thetaf = _lsq_curvefit(thetaf, sel_yx, sel_vals, lb_f, ub_f, max_nfev=5000)
+    thetaf = _fit_isotropic_then_anisotropic(
+        thetaf, sel_yx, sel_vals, lb_f, ub_f, max_nfev=5000
+    )
 
     p_im = _peak_mask(thetaf, height, width)
     buffer_mask = _buffer_mask(p_im, buffer_size)
@@ -613,9 +682,12 @@ def detect_peaks_2d(
     )
 
     if thetaf.shape[0] > 0:
-        s = thetaf[:, 3]
+        sy = thetaf[:, 3]
+        sx = thetaf[:, 4]
         adj_thresh = peak_thresh / (
-            np.pi / 2 * s**2 * erf(1 / (np.sqrt(2) * s)) ** 2
+            np.pi / 2 * sy * sx
+            * erf(1 / (np.sqrt(2) * sy))
+            * erf(1 / (np.sqrt(2) * sx))
         )
         thetaf = thetaf[thetaf[:, 0] >= adj_thresh]
 
@@ -633,6 +705,12 @@ def get_act_im_peaks(
     Background statistics (median and MAD-scaled sigma) and the detection
     threshold are computed once across all planes for uniform sensitivity, then
     each plane is detected independently (:func:`detect_peaks_2d`).
+
+    Gaussians have independent, axis-aligned standard deviations, bounded to
+    ``0.35 <= sigma_y <= 8`` and ``0.35 <= sigma_x <= 1`` pixels.
+    Each fit starts with an optimized isotropic Gaussian (shared sigma in
+    [0.35, 1]) before relaxing to independent widths. This favors isotropic
+    local minima through initialization without an explicit shape penalty.
 
     Parameters
     ----------

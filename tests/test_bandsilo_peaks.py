@@ -8,6 +8,7 @@ development notes; here we assert structural/numerical behavior on small cases.
 """
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -22,15 +23,31 @@ def _grid(height, width):
     )
 
 
-def _single_gaussian_plane(height, width, cy, cx, amp, sigma):
+def _single_gaussian_plane(height, width, cy, cx, amp, sigma, sigma_x=0.8):
     """Render one integrated Gaussian over an ``(H, W)`` plane."""
     yx = _grid(height, width)
-    theta = np.array([[amp, cy, cx, sigma]])
+    theta = np.array([[amp, cy, cx, sigma, sigma_x]])
     return pk.gaussian_peaks_integrated(theta, yx).reshape(height, width)
 
 
 class TestGaussianForward(unittest.TestCase):
     """gaussian_peaks_integrated analytic properties."""
+
+    def test_anisotropic_total_integral(self):
+        """Unequal widths integrate to amp*2*pi*sigma_y*sigma_x."""
+        theta = np.array([[3.0, 50.3, 12.7, 8.0, 0.7]])
+        total = pk.gaussian_peaks_integrated(theta, _grid(101, 27)).sum()
+        self.assertAlmostEqual(total, 3.0 * 2 * np.pi * 8.0 * 0.7, places=6)
+
+    def test_equal_widths_match_legacy_isotropic(self):
+        yx = _grid(25, 25)
+        isotropic = np.array([[2.0, 12.3, 10.7, 0.9]])
+        anisotropic = np.column_stack([isotropic, isotropic[:, 3]])
+        np.testing.assert_allclose(
+            pk.gaussian_peaks_integrated(anisotropic, yx),
+            pk.gaussian_peaks_integrated(isotropic, yx),
+            rtol=1e-12,
+        )
 
     def test_total_integral(self):
         """Integrated Gaussian summed over a wide grid gives amp*2*pi*s^2."""
@@ -54,6 +71,30 @@ class TestGaussianForward(unittest.TestCase):
 
 class TestValJac(unittest.TestCase):
     """_gaussian_peaks_integrated_val_jac value + analytical Jacobian."""
+
+    def test_anisotropic_jacobian_matches_finite_difference(self):
+        """Both width derivatives are independent and correctly ordered."""
+        yx = _grid(35, 19)
+        theta = np.array([
+            [2.0, 16.3, 7.7, 8.0, 0.7],
+            [1.2, 21.0, 12.0, 3.0, 1.0],
+        ])
+        val, jac = pk._gaussian_peaks_integrated_val_jac(theta, yx)
+        np.testing.assert_allclose(
+            val, pk.gaussian_peaks_integrated(theta, yx), rtol=1e-12
+        )
+        self.assertEqual(jac.shape, (len(yx), theta.size))
+        eps = 1e-6
+        for k in range(theta.size):
+            hi = theta.ravel().copy()
+            lo = theta.ravel().copy()
+            hi[k] += eps
+            lo[k] -= eps
+            fd = (
+                pk.gaussian_peaks_integrated(hi.reshape(-1, 5), yx)
+                - pk.gaussian_peaks_integrated(lo.reshape(-1, 5), yx)
+            ) / (2 * eps)
+            np.testing.assert_allclose(jac[:, k], fd, rtol=1e-4, atol=1e-7)
 
     def test_value_matches_forward(self):
         """The val_jac value equals the forward-only evaluation."""
@@ -87,17 +128,25 @@ class TestLsqCurvefit(unittest.TestCase):
     def test_recovers_known_gaussian(self):
         """Fitting noise-free data recovers the generating parameters."""
         yx = _grid(21, 21)
-        true = np.array([[5.0, 10.4, 9.6, 1.3]])
+        true = np.array([[5.0, 10.4, 9.6, 6.0, 0.7]])
         ydata = pk.gaussian_peaks_integrated(true, yx)
-        theta0 = np.array([[3.0, 10.0, 10.0, 1.0]])
+        theta0 = np.array([[3.0, 10.0, 10.0, 0.5, 0.5]])
         lb, ub = pk._make_bounds(theta0[:, 1:3], 21, 21)
-        # widen sigma/amp bounds for a clean recovery
-        lb[0::4] = 0.0
-        ub[0::4] = np.inf
         fit = pk._lsq_curvefit(theta0, yx, ydata, lb, ub)
-        np.testing.assert_allclose(fit[0, 1], 10.4, atol=1e-2)
-        np.testing.assert_allclose(fit[0, 2], 9.6, atol=1e-2)
-        np.testing.assert_allclose(fit[0, 3], 1.3, atol=1e-2)
+        np.testing.assert_allclose(fit, true, atol=1e-2)
+
+    def test_width_limits(self):
+        """A target wider than either limit cannot exceed the fitted bounds."""
+        yx = _grid(41, 21)
+        true = np.array([[5.0, 20.4, 9.6, 10.0, 1.5]])
+        theta0 = np.array([[4.0, 20.0, 10.0, 6.0, 0.8]])
+        lb, ub = pk._make_bounds(theta0[:, 1:3], 41, 21)
+        fit = pk._lsq_curvefit(
+            theta0, yx, pk.gaussian_peaks_integrated(true, yx), lb, ub
+        )
+        self.assertTrue(np.all(fit.ravel() >= lb))
+        self.assertTrue(np.all(fit.ravel() <= ub))
+        np.testing.assert_allclose(fit[0, 3:], [8.0, 1.0], atol=1e-2)
 
     def test_max_nfev_early_break(self):
         """max_nfev=1 returns the (clipped) initial parameters immediately."""
@@ -105,10 +154,8 @@ class TestLsqCurvefit(unittest.TestCase):
         ydata = pk.gaussian_peaks_integrated(
             np.array([[4.0, 5.0, 5.0, 1.0]]), yx
         )
-        theta0 = np.array([[3.0, 5.0, 5.0, 1.0]])
+        theta0 = np.array([[3.0, 5.0, 5.0, 1.0, 1.0]])
         lb, ub = pk._make_bounds(theta0[:, 1:3], 11, 11)
-        lb[0::4] = 0.0
-        ub[0::4] = np.inf
         out = pk._lsq_curvefit(theta0, yx, ydata, lb, ub, max_nfev=1)
         np.testing.assert_allclose(out, theta0)
 
@@ -132,18 +179,86 @@ class TestLsqCurvefit(unittest.TestCase):
         self.assertTrue(np.all(out.ravel() <= ub + 1e-9))
 
 
+class TestIsotropicWarmStart(unittest.TestCase):
+    """Two-stage fitting preserves round peaks while permitting elongation."""
+
+    def test_stages_and_bounds(self):
+        """Relaxation starts from the fitted shared widths, not the seed."""
+        theta0 = np.array([[3.0, 10.0, 10.0, 4.0, 0.8]])
+        original = theta0.copy()
+        lb, ub = pk._make_bounds(theta0[:, 1:3], 21, 21)
+        iso_fit = np.array([[5.0, 10.3, 9.7, 0.9]])
+        final_fit = np.array([[5.0, 10.3, 9.7, 4.0, 0.7]])
+        with patch.object(
+            pk, "_lsq_curvefit", side_effect=[iso_fit, final_fit]
+        ) as solver:
+            out = pk._fit_isotropic_then_anisotropic(
+                theta0, _grid(21, 21), np.zeros(441), lb, ub,
+                max_nfev=100,
+            )
+        self.assertEqual(solver.call_count, 2)
+        first, second = solver.call_args_list
+        self.assertEqual(first.args[0].shape, (1, 4))
+        self.assertEqual(first.args[3][3], 0.35)
+        self.assertEqual(first.args[4][3], 1.0)
+        np.testing.assert_array_equal(
+            second.args[0], [[5.0, 10.3, 9.7, 0.9, 0.9]]
+        )
+        np.testing.assert_array_equal(second.args[3], lb)
+        np.testing.assert_array_equal(second.args[4], ub)
+        self.assertEqual(first.kwargs["max_nfev"], 100)
+        self.assertEqual(second.kwargs["max_nfev"], 100)
+        np.testing.assert_array_equal(out, final_fit)
+        np.testing.assert_array_equal(theta0, original)
+
+    def test_recovers_round_and_elongated_peaks(self):
+        """Joint fitting recovers round and tall peaks after relaxation."""
+        yx = _grid(65, 31)
+        true = np.array([
+            [5.0, 15.3, 8.7, 0.8, 0.8],
+            [8.0, 40.4, 22.2, 7.0, 0.7],
+        ])
+        theta0 = np.array([
+            [3.0, 15.0, 9.0, 0.5, 0.5],
+            [4.0, 40.0, 22.0, 0.5, 0.5],
+        ])
+        lb, ub = pk._make_bounds(theta0[:, 1:3], 65, 31)
+        out = pk._fit_isotropic_then_anisotropic(
+            theta0, yx, pk.gaussian_peaks_integrated(true, yx), lb, ub
+        )
+        np.testing.assert_allclose(out, true, atol=0.01)
+
+    def test_exact_isotropic_minimum_stays_isotropic(self):
+        """Relaxing an already exact round fit does not change it."""
+        theta = np.array([[5.0, 10.3, 9.7, 0.8, 0.8]])
+        yx = _grid(21, 21)
+        lb, ub = pk._make_bounds(theta[:, 1:3], 21, 21)
+        out = pk._fit_isotropic_then_anisotropic(
+            theta, yx, pk.gaussian_peaks_integrated(theta, yx), lb, ub
+        )
+        np.testing.assert_array_equal(out, theta)
+
+    def test_empty_parameters(self):
+        """No peaks need no optimization."""
+        theta = np.empty((0, 5))
+        out = pk._fit_isotropic_then_anisotropic(
+            theta, _grid(3, 3), np.zeros(9), np.array([]), np.array([])
+        )
+        self.assertEqual(out.shape, (0, 5))
+
+
 class TestSmallHelpers(unittest.TestCase):
     """_make_bounds / _peak_mask / _buffer_mask."""
 
     def test_make_bounds(self):
-        """Means bound to +/-1.5 px (clipped); sigma to [0.35, 5]."""
+        """Means clip to the image; sigma_y <= 8 and sigma_x <= 1."""
         plocs = np.array([[0.0, 9.0]])
         lb, ub = pk._make_bounds(plocs, 10, 10)
         # y lower clipped to 0; x within range
         self.assertAlmostEqual(lb[1], 0.0)
         self.assertAlmostEqual(ub[2], 9.0)  # min(W-1, 9+1.5) = 9
-        self.assertAlmostEqual(lb[3], 0.35)
-        self.assertAlmostEqual(ub[3], 5.0)
+        np.testing.assert_array_equal(lb[3:], [0.35, 0.35])
+        np.testing.assert_array_equal(ub[3:], [8.0, 1.0])
 
     def test_peak_mask_and_empty(self):
         """Peak centers mark the mask; an empty parameter set marks nothing."""
@@ -174,7 +289,7 @@ class TestProcessCcNewPeak(unittest.TestCase):
         # a blob centered exactly on the integer seed -> fit stays near-integer
         act = _single_gaussian_plane(h, w, 5.0, 5.0, 8.0, 1.1)
         labeled = np.ones((h, w), dtype=int)
-        thetaf = np.array([[1.0, 10.0, 10.0, 1.0]])  # existing peak in cc
+        thetaf = np.array([[1.0, 10.0, 10.0, 1.0, 0.8]])  # existing peak in cc
         p_locs = np.array([[10.0, 10.0]])
         reject_mask = np.zeros((h, w), dtype=bool)
         new_thetaf, _, _, _ = pk._process_cc_new_peak(
@@ -189,7 +304,7 @@ class TestProcessCcNewPeak(unittest.TestCase):
         act = np.zeros((h, w))
         labeled = np.zeros((h, w), dtype=int)
         labeled[3:12, 3:12] = 1
-        thetaf = np.zeros((0, 4))
+        thetaf = np.zeros((0, 5))
         p_locs = np.zeros((0, 2))
         reject_mask = np.zeros((h, w), dtype=bool)
         new_thetaf, _, _, _ = pk._process_cc_new_peak(
@@ -203,7 +318,7 @@ class TestProcessCcNewPeak(unittest.TestCase):
         h = w = 15
         act = _single_gaussian_plane(h, w, 5.4, 5.6, 6.0, 1.1)
         labeled = np.ones((h, w), dtype=int)
-        thetaf = np.zeros((0, 4))
+        thetaf = np.zeros((0, 5))
         p_locs = np.zeros((0, 2))
         reject_mask = np.zeros((h, w), dtype=bool)
         new_thetaf, _, _, _ = pk._process_cc_new_peak(
@@ -223,7 +338,7 @@ class TestRefineResidualPeaks(unittest.TestCase):
     def test_empty_support_returns_unchanged(self):
         """No support (labels max 0) exits immediately, returning thetaf."""
         h = w = 10
-        thetaf = np.array([[1.0, 5.0, 5.0, 1.0]])
+        thetaf = np.array([[1.0, 5.0, 5.0, 1.0, 0.8]])
         p_locs = np.array([[5.0, 5.0]])
         act = np.zeros((h, w))
         empty2d = np.zeros((h, w), dtype=bool)
@@ -262,7 +377,19 @@ class TestDetectPeaks2d(unittest.TestCase):
             peak_thresh=100.0,  # unreachable
             peak_th=100.0,
         )
-        self.assertEqual(out.shape, (0, 4))
+        self.assertEqual(out.shape, (0, 5))
+
+    def test_elongated_blob_detected(self):
+        """A tall, narrow blob is fit as one anisotropic Gaussian."""
+        act = _single_gaussian_plane(65, 25, 32.3, 12.4, 10.0, 7.0, 0.7)
+        out = pk.detect_peaks_2d(
+            act, np.zeros_like(act, dtype=bool),
+            mu_bg=0.0, sigma_bg=0.05, peak_thresh=1.0, peak_th=3.0,
+        )
+        self.assertEqual(out.shape, (1, 5))
+        np.testing.assert_allclose(
+            out[0], [10.0, 32.3, 12.4, 7.0, 0.7], atol=0.05
+        )
 
     def test_single_blob_detected(self):
         """A single blob yields one peak near its true center."""
@@ -286,7 +413,7 @@ class TestDetectPeaks2d(unittest.TestCase):
         recovered by the residual-peak refinement loop."""
         act = _single_gaussian_plane(
             34, 34, 16.4, 15.0, 10.0, 1.2
-        ) + _single_gaussian_plane(34, 34, 16.4, 17.5, 9.0, 1.2)
+        ) + _single_gaussian_plane(34, 34, 16.4, 16.8, 9.0, 1.2)
         out = pk.detect_peaks_2d(
             act,
             np.zeros((34, 34), dtype=bool),
@@ -301,6 +428,15 @@ class TestDetectPeaks2d(unittest.TestCase):
 
 class TestGetActImPeaks(unittest.TestCase):
     """get_act_im_peaks 3-D driver and its guard branches."""
+
+    def test_elongated_blob_seed(self):
+        """The 3-D driver retains its [z, y, x] output for unequal widths."""
+        rng = np.random.default_rng(42)
+        act = rng.normal(0.0, 0.01, (1, 65, 25))
+        act[0] += _single_gaussian_plane(65, 25, 32.3, 12.4, 10.0, 7.0, 0.7)
+        seeds = pk.get_act_im_peaks(act, peak_th=6.0, buffer_size=3)
+        self.assertEqual(seeds.shape, (1, 3))
+        np.testing.assert_allclose(seeds[0], [0.0, 32.3, 12.4], atol=0.1)
 
     def _act_im(self, seed=0):
         """Two-plane activity image with a blob per plane, low noise, NaNs."""
