@@ -149,7 +149,7 @@ class SiloParams:
     phi: Optional[float] = None
     tau_s: Optional[float] = None
     photon_scale: Optional[float] = None
-    peakth: float = 8.0
+    peakth: float = 7.0
     activity_channel: int = 0
     draw_user_rois: bool = False
     interactive: Optional[bool] = None
