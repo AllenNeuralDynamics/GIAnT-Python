@@ -1010,6 +1010,7 @@ def _localize(
         act_im, peak_th=peak_th, buffer_size=params.peak_buffer
     )
     act_im_peaks = source_seeds.copy()
+    print(f"Number of detected sources: {act_im_peaks.shape[0]}")
 
     result = fit_sources(
         source_seeds,
