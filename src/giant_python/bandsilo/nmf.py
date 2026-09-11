@@ -499,8 +499,8 @@ def fit_gaussian_profiles(
 
         with torch.no_grad():
             optim_loc.clamp_(min=loc_min, max=loc_max)
-            optim_scale[:, 0].clamp_(min=0.3, max=5)
-            optim_scale[:, 1].clamp_(min=0.3, max=5)
+            optim_scale[:, 0].clamp_(min=0.3, max=2)
+            optim_scale[:, 1].clamp_(min=0.3, max=2)
 
         if epoch % n_motions == n_motions - 1:
             total_loss = 0
