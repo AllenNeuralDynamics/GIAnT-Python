@@ -377,7 +377,7 @@ class TestBandWorkflow(unittest.TestCase):
         self.assertEqual(
             before, (asdict(params), asdict(options), asdict(annotation))
         )
-        self.assertIsNone(params.num_channels)
+        self.assertFalse(hasattr(params, "num_channels"))
 
     def test_exact_nonstandard_selected_trial_table_path(self):
         """Preserve the chosen filename through extraction and persistence."""
@@ -417,13 +417,13 @@ class TestBandWorkflow(unittest.TestCase):
             process = stack.enter_context(patch.object(wf, "_process_dmd"))
             writer = stack.enter_context(patch.object(wf, "write_summary"))
             with self.assertRaisesRegex(
-                ValueError, "num_channels.*determined"
+                ValueError, "num_channels.*provide acquisition metadata"
             ):
                 wf.extract_band_sources("selected.h5", params)
             rois.assert_not_called()
             process.assert_not_called()
             writer.assert_not_called()
-            self.assertIsNone(params.num_channels)
+            self.assertFalse(hasattr(params, "num_channels"))
 
     def test_enabled_empty_annotations_keep_resolution_context(self):
         """An enabled empty selection retains geometry and headless policy."""

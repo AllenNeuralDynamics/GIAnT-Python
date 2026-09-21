@@ -1,6 +1,6 @@
 """Scientific configuration and independent execution and annotation policy.
 
-``BandSiloParams`` contains only band science and channel overrides.
+``BandSiloParams`` contains only band science.
 ``ExecutionOptions`` controls scheduling/debug limits; ``AnnotationOptions``
 controls ROI use and GUI policy. Resolution copies inputs without retuning
 the existing algorithm.
@@ -53,17 +53,14 @@ class BandSiloParams:
     psf_dilation : int
         Positive dilation size selecting the bundled PSF template. Template
         availability is checked by the backend when loading the PSF.
-    num_channels : int or None
-        Positive channel-count override; otherwise infer from acquisition
-        metadata without modifying this object.
-    activity_channel : int
-        Zero-based activity channel. Only channel zero is implemented.
 
     Notes
     -----
     Scheduling, trial limits, logging and annotation policy are deliberately
     separate from science. Numerical defaults preserve the band algorithm.
     Sparse-superpixel background interpolation always uses cubic splines.
+    Channel count is inferred from acquisition metadata; source activity
+    extraction always uses channel zero.
     """
 
     analyze_hz: float = 100.0
@@ -76,8 +73,6 @@ class BandSiloParams:
     peakth: float = 7.0
     peak_buffer: int = 3
     psf_dilation: int = 17
-    num_channels: Optional[int] = None
-    activity_channel: int = 0
 
     def __post_init__(self) -> None:
         """Validate values supported by the existing numerical path."""
@@ -93,14 +88,6 @@ class BandSiloParams:
             _positive(name, getattr(self, name))
         for name in ("d_xy", "peak_buffer", "psf_dilation"):
             _positive(name, getattr(self, name), integer=True)
-        if self.num_channels is not None:
-            _positive("num_channels", self.num_channels, integer=True)
-        if (
-            isinstance(self.activity_channel, bool)
-            or not isinstance(self.activity_channel, Integral)
-            or self.activity_channel != 0
-        ):
-            raise ValueError("Only activity_channel=0 is implemented")
 
 
 @dataclass

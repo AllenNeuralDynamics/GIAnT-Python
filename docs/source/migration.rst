@@ -43,7 +43,7 @@ drawing; missing required annotations fail explicitly.
      - Scope
    * - ``params``
      - ``BandSiloParams``
-     - Band science and optional ``num_channels`` override
+     - Band science only
    * - ``execution``
      - ``ExecutionOptions``
      - ``max_workers``, ``verbose``, ``max_trials``
@@ -63,7 +63,12 @@ Defaults remain peak threshold 7, analysis rate 100 Hz, decay 0.15 seconds,
 baseline window 4 seconds, denoise window 1 second, VIF 1.38 and PSF dilation 17.
 Execution defaults to six workers, no trial limit and verbosity off. Annotation
 defaults to disabled with automatic interactivity and operator ``SLAP2 User``.
-``BandSiloParams.activity_channel`` is zero-based and only ``0`` is implemented.
+``num_channels`` and ``activity_channel`` have been removed from
+``BandSiloParams``. Channel count is inferred from acquisition metadata and
+retained in output metadata; source activity extraction always uses channel
+zero (zero-based). Supplying either removed option raises ``TypeError``.
+If channel count cannot be inferred, extraction fails with ``ValueError``;
+provide acquisition metadata for a kept trial rather than a manual override.
 ``AlignParams`` has been removed; registration has no Python configuration API.
 
 Canonical owner map

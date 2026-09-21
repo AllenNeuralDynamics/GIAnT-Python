@@ -61,8 +61,15 @@ class TestDataclasses(unittest.TestCase):
         self.assertEqual(UserRoi().type, "polygon")
 
     def test_param_models(self):
-        """Fixed interpolation is not exposed as a model parameter."""
-        self.assertFalse(hasattr(BandSiloParams(), "background_interpolation"))
+        """Fixed algorithms and acquisition metadata are not parameters."""
+        params = BandSiloParams()
+        for name in (
+            "background_interpolation",
+            "num_channels",
+            "activity_channel",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(params, name))
 
     def test_band_value_params_have_concrete_defaults(self):
         """Value params default to concrete (non-None) values."""
@@ -70,8 +77,7 @@ class TestDataclasses(unittest.TestCase):
         self.assertEqual(p.analyze_hz, 100.0)
         # Seven is the current implementation default, not a new retuning.
         self.assertEqual(p.peakth, 7.0)
-        # Only genuinely runtime-resolved fields stay None sentinels.
-        self.assertIsNone(p.num_channels)
+        # Only runtime-resolved annotation policy retains a None sentinel.
         self.assertIsNone(AnnotationOptions().interactive)
 
 

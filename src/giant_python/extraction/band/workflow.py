@@ -99,20 +99,15 @@ def extract_band_sources(
     trial_table["keep_trials"] = compute_keep_trials(
         trial_table["fn_adata"], trial_table["filename"], trial_table["datadr"]
     )
-    align_hz, inferred_channels = read_align_info(
+    align_hz, num_channels = read_align_info(
         trial_table["fn_adata"],
         trial_table["keep_trials"],
         trial_table["n_dmds"],
     )
-    num_channels = (
-        params.num_channels
-        if params.num_channels is not None
-        else inferred_channels
-    )
     if num_channels is None:
         raise ValueError(
             "num_channels could not be determined from the alignment data "
-            "(no kept trials?); set BandSiloParams.num_channels explicitly."
+            "(no kept trials?); provide acquisition metadata for a kept trial."
         )
     acquisition = ResolvedAcquisition(num_channels, align_hz)
     user_rois = _resolve_session_user_rois(result_dr, trial_table, lookup, roi)
