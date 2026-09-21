@@ -1,5 +1,6 @@
 """Headless checks for the parameter form's canonical split-option API."""
 
+import math
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -50,13 +51,13 @@ class TestParameterGui(unittest.TestCase):
         """Scientific, execution, and annotation controls stay independent."""
         params = BandSiloParams(peakth=8)
         run = ExecutionOptions(max_workers=2, verbose=True, max_trials=4)
-        roi = AnnotationOptions(interactive=False, operator="original")
+        roi = AnnotationOptions(interactive=False)
 
         def interact():
             """Simulate edits to a scientific field and both policy groups."""
             self.variables[0].get.return_value = "125"
             self.variables[8].get.return_value = "3"
-            self.variables[9].get.return_value = "reviewer"
+            self.variables[9].get.return_value = "-2"
             self.roi_var.get.return_value = True
             self.buttons["OK"]()
 
@@ -66,14 +67,17 @@ class TestParameterGui(unittest.TestCase):
         science, execution, annotations = result
         self.assertEqual(science.analyze_hz, 125)
         self.assertEqual(science.peakth, 8)
+        self.assertAlmostEqual(science.sparse_fac, math.exp(-2))
+        labels = [
+            call.kwargs["text"] for call in self.tk.ttk.Label.call_args_list
+        ]
+        self.assertNotIn("Operator:", labels)
         self.assertEqual(execution, ExecutionOptions(3, True, 4))
-        self.assertEqual(
-            annotations, AnnotationOptions(True, False, "reviewer")
-        )
+        self.assertEqual(annotations, AnnotationOptions(True, False))
         self.assertEqual(params.analyze_hz, 100)
         self.assertEqual(run.max_workers, 2)
         self.assertFalse(roi.enabled)
-        self.assertEqual(roi.operator, "original")
+        self.assertFalse(roi.interactive)
         for supplied, returned in zip((params, run, roi), result):
             self.assertIsNot(supplied, returned)
         self.root.destroy.assert_called_once()

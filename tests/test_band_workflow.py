@@ -45,9 +45,7 @@ class TestBandWorkflow(unittest.TestCase):
         frames = np.arange(n_frames, dtype=float) + 11
         psf = np.ones((3, 3), dtype=np.float32)
         options = ExecutionOptions(max_workers=3, max_trials=2)
-        annotation = AnnotationOptions(
-            enabled=rois, interactive=False, operator="workflow test"
-        )
+        annotation = AnnotationOptions(enabled=rois, interactive=False)
         science_args = dict(
             analyze_hz=10, denoise_window_s=0.3, baseline_window_s=0.5
         )
@@ -325,8 +323,11 @@ class TestBandWorkflow(unittest.TestCase):
             restored = read_summary(output)
             self.assertEqual(len(summary.paths), 2)
             self.assertEqual(len(restored.paths), 2)
+            assert summary.params is not None
+            assert restored.params is not None
             self.assertEqual(summary.params["numChannels"], 2)
-            self.assertEqual(summary.params["operator"], "workflow test")
+            self.assertNotIn("operator", summary.params)
+            self.assertNotIn("operator", restored.params)
             self.assertEqual(summary.params["draw_user_rois"], rois)
             for dmd_ix, (path, saved) in enumerate(
                 zip(summary.paths, restored.paths)

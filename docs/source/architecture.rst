@@ -77,7 +77,7 @@ preparation derives raw and alignment locations from the model's explicit
 
 ``BandSiloParams`` owns scientific settings, ``ExecutionOptions`` owns worker
 count, verbose reporting and the optional trial limit, and
-``AnnotationOptions`` owns ROI inclusion, interactivity and operator metadata.
+``AnnotationOptions`` owns ROI inclusion and interactivity.
 Resolution does not mutate the caller's options to store inferred channel
 counts. ``ResolvedAcquisition`` carries resolved backend metadata separately.
 Annotation-disabled and enabled-but-empty are distinct states.

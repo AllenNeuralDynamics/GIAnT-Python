@@ -59,11 +59,6 @@ def _add_silo_options(parser: argparse.ArgumentParser) -> None:
         help="Never open a GUI; fail fast if annotations are missing.",
     )
     parser.add_argument(
-        "--operator",
-        default=AnnotationOptions.operator,
-        help="Operator name recorded in the output metadata.",
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print per-stage status messages and progress bars.",
@@ -122,7 +117,6 @@ def _options_from_args(
         AnnotationOptions(
             enabled=args.draw_user_rois or args.command == "annotate",
             interactive=args.interactive,
-            operator=args.operator,
         ),
     )
 

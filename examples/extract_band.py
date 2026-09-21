@@ -101,7 +101,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--use-rois", action="store_true")
     parser.add_argument("--interactive", action="store_true")
-    parser.add_argument("--operator", default="SLAP2 User")
     parser.add_argument("--analyze-hz", type=float, default=100.0)
     parser.add_argument("--decay-tau-s", type=float, default=0.15)
     parser.add_argument("--baseline-window-s", type=float, default=4.0)
@@ -243,7 +242,6 @@ def prepare_run(args: argparse.Namespace) -> PreparedRun:
     annotations = AnnotationOptions(
         enabled=args.use_rois,
         interactive=args.interactive,
-        operator=args.operator,
     )
     return PreparedRun(paths, table, params, execution, annotations)
 

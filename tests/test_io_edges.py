@@ -515,9 +515,9 @@ class TestAnnotationGeometryAssembly(unittest.TestCase):
 
     def test_annotation_option_resolution_preserves_input(self):
         """Annotation uses scoped option conversion without mutation."""
-        original = AnnotationOptions(operator="operator μ", interactive=False)
+        original = AnnotationOptions(interactive=False)
         _, _, resolved = annotation.resolve_band_options(annotations=original)
-        self.assertEqual(resolved.operator, "operator μ")
+        self.assertEqual(resolved, original)
+        self.assertIsNot(resolved, original)
         self.assertFalse(resolved.interactive)
-        self.assertEqual(original.operator, "operator μ")
         self.assertFalse(original.interactive)

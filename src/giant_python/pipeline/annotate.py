@@ -37,7 +37,7 @@ def annotate_rois(
     execution : ExecutionOptions, dict or None
         Run policy, including logging.
     annotations : AnnotationOptions, dict or None
-        GUI policy and operator metadata. Calling this explicit annotation
+        ROI inclusion and GUI policy. Calling this explicit annotation
         step enables ROI handling for this call even if ``enabled=False``.
 
     Returns

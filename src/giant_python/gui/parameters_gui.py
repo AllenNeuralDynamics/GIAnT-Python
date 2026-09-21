@@ -25,7 +25,6 @@ _PARAM_GUI_FIELDS = (
     ("peakth", "Peak Threshold:"),
     ("peak_buffer", "Peak Buffer:"),
     ("max_workers", "Max Workers:"),
-    ("operator", "Operator:"),
 )
 
 
@@ -93,11 +92,7 @@ def run_parameter_gui(
             result["options"] = (
                 replace(base, **updates),
                 replace(run, max_workers=int(entries["max_workers"].get())),
-                replace(
-                    roi,
-                    operator=entries["operator"].get(),
-                    enabled=bool(draw_rois_var.get()),
-                ),
+                replace(roi, enabled=bool(draw_rois_var.get())),
             )
             root.destroy()
         except ValueError as error:

@@ -39,6 +39,19 @@ class TestBuildParser(unittest.TestCase):
                 self.assertIn("invalid choice", stderr.getvalue())
                 self.assertIn(command, stderr.getvalue())
 
+    def test_operator_flag_is_rejected(self):
+        """Neither command accepts the removed operator option."""
+        for command in ("annotate", "extract"):
+            with self.subTest(command=command):
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit) as error:
+                        self.parser.parse_args(
+                            [command, "tt.h5", "--operator", "Ada"]
+                        )
+                self.assertEqual(error.exception.code, 2)
+                args = self.parser.parse_args([command, "tt.h5"])
+                self.assertFalse(hasattr(args, "operator"))
+
     def test_annotate_defaults(self):
         """annotate defaults to band scan, no draw, auto interactivity."""
         args = self.parser.parse_args(["annotate", "tt.h5"])
@@ -94,8 +107,6 @@ class TestOptionsFromArgs(unittest.TestCase):
                 "band",
                 "--draw-user-rois",
                 "--interactive",
-                "--operator",
-                "Alice",
                 "--verbose",
             ]
         )
@@ -104,7 +115,7 @@ class TestOptionsFromArgs(unittest.TestCase):
         self.assertFalse(hasattr(params, "scan_mode"))
         self.assertTrue(annotations.enabled)
         self.assertTrue(annotations.interactive)
-        self.assertEqual(annotations.operator, "Alice")
+        self.assertFalse(hasattr(annotations, "operator"))
         self.assertTrue(execution.verbose)
         self.assertEqual(execution.max_workers, 6)
         self.assertIsNone(execution.max_trials)

@@ -164,7 +164,7 @@ class TestAnnotationService(unittest.TestCase):
         input = TrialTable()
         params = BandSiloParams()
         execution = ExecutionOptions(verbose=True)
-        annotations = AnnotationOptions(interactive=False, operator="Ada")
+        annotations = AnnotationOptions(interactive=False)
         before = deepcopy((params, execution, annotations))
         table = {
             "fn_adata": np.array([["a.h5"]]),

@@ -49,7 +49,7 @@ drawing; missing required annotations fail explicitly.
      - ``max_workers``, ``verbose``, ``max_trials``
    * - ``annotations``
      - ``AnnotationOptions``
-     - ``enabled``, ``interactive``, ``operator``
+     - ``enabled``, ``interactive``
 
 ``resolve_band_options(params=None, execution=None, annotations=None)`` returns
 fresh validated objects in the order shown above. Each input accepts **only
@@ -62,7 +62,11 @@ counts or GUI policy are later resolved.
 Defaults remain peak threshold 7, analysis rate 100 Hz, decay 0.15 seconds,
 baseline window 4 seconds, denoise window 1 second, VIF 1.38 and PSF dilation 17.
 Execution defaults to six workers, no trial limit and verbosity off. Annotation
-defaults to disabled with automatic interactivity and operator ``SLAP2 User``.
+defaults to disabled with automatic interactivity.
+``operator`` has been removed from ``AnnotationOptions``, the parameter GUI,
+the CLI and the staging example. Supplying it as an annotation option raises
+``TypeError``; ``--operator`` is no longer accepted. New extraction summaries
+do not emit operator metadata; existing summary metadata remains readable.
 ``num_channels`` and ``activity_channel`` have been removed from
 ``BandSiloParams``. Channel count is inferred from acquisition metadata and
 retained in output metadata; source activity extraction always uses channel

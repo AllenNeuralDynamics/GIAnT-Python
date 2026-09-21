@@ -127,13 +127,10 @@ class AnnotationOptions:
         Include user ROIs during extraction.
     interactive : bool or None
         Allow or forbid drawing; ``None`` retains backend auto-detection.
-    operator : str
-        Operator name recorded in metadata.
     """
 
     enabled: bool = False
     interactive: Optional[bool] = None
-    operator: str = "SLAP2 User"
 
     def __post_init__(self) -> None:
         """Validate the explicit and automatic annotation policies."""
@@ -143,8 +140,6 @@ class AnnotationOptions:
             self.interactive, bool
         ):
             raise ValueError("interactive must be a bool or None")
-        if not isinstance(self.operator, str):
-            raise ValueError("operator must be a string")
 
 
 BandParamsInput = Optional[Union[BandSiloParams, dict]]

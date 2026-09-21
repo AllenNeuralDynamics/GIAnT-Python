@@ -174,7 +174,7 @@ class TestSharedServices(unittest.TestCase):
         """Annotation forwards split options directly to the backend."""
         table = TrialTable()
         params = BandSiloParams()
-        options = AnnotationOptions(interactive=False, operator="Ada")
+        options = AnnotationOptions(interactive=False)
         before = deepcopy((params, options))
         result = annotate_rois(table, params, annotations=options)
         self.assertEqual(result, "annotations.h5")

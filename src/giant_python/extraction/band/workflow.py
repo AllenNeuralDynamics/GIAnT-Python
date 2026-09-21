@@ -161,7 +161,6 @@ def _params_dict(
         "peakth": params.peakth,
         "peak_buffer": params.peak_buffer,
         "draw_user_rois": annotations.enabled,
-        "operator": annotations.operator,
     }
 
 

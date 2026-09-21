@@ -23,9 +23,8 @@ class TestBandConfiguration(unittest.TestCase):
         self.assertEqual(science.vif, 1.38)
         self.assertEqual(science.sparse_fac, math.exp(-3.0))
         self.assertEqual(execution, ExecutionOptions(6, False, None))
-        self.assertEqual(
-            annotations, AnnotationOptions(False, None, "SLAP2 User")
-        )
+        self.assertEqual(annotations, AnnotationOptions(False, None))
+        self.assertFalse(hasattr(annotations, "operator"))
         self.assertFalse(hasattr(science, "max_workers"))
         self.assertFalse(hasattr(science, "scan_mode"))
         self.assertFalse(hasattr(science, "interactive"))
@@ -68,7 +67,6 @@ class TestBandConfiguration(unittest.TestCase):
         annotations = {
             "enabled": True,
             "interactive": False,
-            "operator": "Grace",
         }
         original = deepcopy((params, execution, annotations))
         science, run, roi = resolve_band_options(
@@ -76,7 +74,7 @@ class TestBandConfiguration(unittest.TestCase):
         )
         self.assertEqual(science.analyze_hz, 80.0)
         self.assertEqual(run, ExecutionOptions(2, True, None))
-        self.assertEqual(roi, AnnotationOptions(True, False, "Grace"))
+        self.assertEqual(roi, AnnotationOptions(True, False))
         self.assertEqual((params, execution, annotations), original)
 
 
@@ -136,6 +134,16 @@ class TestConfigurationValidation(unittest.TestCase):
                 with self.assertRaisesRegex(TypeError, name):
                     resolve_band_options(options)
 
+    def test_operator_is_not_configurable(self):
+        """Removed operator metadata is rejected rather than ignored."""
+        for value in ("Ada", "SLAP2 User", None):
+            with self.subTest(value=value):
+                options = {"operator": value}
+                with self.assertRaisesRegex(TypeError, "operator"):
+                    AnnotationOptions(**options)
+                with self.assertRaisesRegex(TypeError, "operator"):
+                    resolve_band_options(annotations=options)
+
     def test_execution_and_annotation_policy(self):
         """Execution counts and tri-state GUI settings are validated."""
         for name in ("max_workers", "max_trials"):
@@ -148,7 +156,6 @@ class TestConfigurationValidation(unittest.TestCase):
         for name, value in (
             ("enabled", 1),
             ("interactive", "false"),
-            ("operator", None),
         ):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, name):

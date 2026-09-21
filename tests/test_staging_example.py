@@ -89,6 +89,7 @@ class TestExampleImport(unittest.TestCase):
             example.main(["--help"])
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--stage-data", output.getvalue())
+        self.assertNotIn("--operator", output.getvalue())
         prepare.assert_not_called()
 
 
@@ -248,7 +249,7 @@ class TestStagingExample(unittest.TestCase):
         self.assertEqual(kwargs["execution"], ExecutionOptions())
         self.assertEqual(
             kwargs["annotations"],
-            AnnotationOptions(False, False, "SLAP2 User"),
+            AnnotationOptions(False, False),
         )
         self.assertEqual(
             table.source_path.read_bytes(), self.table_path.read_bytes()
@@ -258,6 +259,19 @@ class TestStagingExample(unittest.TestCase):
             b"alignment",
         )
         self.assertFalse((self.results / "input").exists())
+
+    def test_operator_option_is_rejected_before_staging(self):
+        """The removed CLI option fails before any extraction or staging."""
+        before = self.snapshot()
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            self.invoke("--operator", "Ada")
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unrecognized arguments: --operator", stderr.getvalue())
+        self.assertEqual(self.snapshot(), before)
+        self.extract.assert_not_called()
 
     def test_copy_stages_sidecars_references_annotations_and_options(self):
         """Copy input trees and forward split policy/science overrides."""
@@ -272,8 +286,6 @@ class TestStagingExample(unittest.TestCase):
             "--max-trials",
             3,
             "--verbose",
-            "--operator",
-            "Ada",
             "--denoise-window-s",
             2,
             "--vif",
@@ -295,7 +307,7 @@ class TestStagingExample(unittest.TestCase):
             self.extract.call_args.kwargs,
             {
                 "execution": ExecutionOptions(2, True, 3),
-                "annotations": AnnotationOptions(True, False, "Ada"),
+                "annotations": AnnotationOptions(True, False),
             },
         )
 
