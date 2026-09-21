@@ -61,8 +61,8 @@ class TestDataclasses(unittest.TestCase):
         self.assertEqual(UserRoi().type, "polygon")
 
     def test_param_models(self):
-        """Param models expose typed defaults."""
-        self.assertEqual(BandSiloParams().background_interpolation, "cubic")
+        """Fixed interpolation is not exposed as a model parameter."""
+        self.assertFalse(hasattr(BandSiloParams(), "background_interpolation"))
 
     def test_band_value_params_have_concrete_defaults(self):
         """Value params default to concrete (non-None) values."""

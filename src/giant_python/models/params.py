@@ -39,8 +39,6 @@ class BandSiloParams:
         Calcium-decay time constant in seconds.
     baseline_window_s, denoise_window_s : float
         Baseline and temporal denoising windows in seconds.
-    background_interpolation : {'cubic', 'linear'}
-        Sparse-superpixel background interpolation method.
     vif : float
         Noise-model variance inflation factor.
     d_xy : int
@@ -65,12 +63,12 @@ class BandSiloParams:
     -----
     Scheduling, trial limits, logging and annotation policy are deliberately
     separate from science. Numerical defaults preserve the band algorithm.
+    Sparse-superpixel background interpolation always uses cubic splines.
     """
 
     analyze_hz: float = 100.0
     decay_tau_s: float = 0.15
     baseline_window_s: float = 4.0
-    background_interpolation: str = "cubic"
     denoise_window_s: float = 1.0
     vif: float = 1.38
     d_xy: int = 5
@@ -97,10 +95,6 @@ class BandSiloParams:
             _positive(name, getattr(self, name), integer=True)
         if self.num_channels is not None:
             _positive("num_channels", self.num_channels, integer=True)
-        if self.background_interpolation not in ("cubic", "linear"):
-            raise ValueError(
-                "background_interpolation must be 'cubic' or 'linear'"
-            )
         if (
             isinstance(self.activity_channel, bool)
             or not isinstance(self.activity_channel, Integral)

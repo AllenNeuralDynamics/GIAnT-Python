@@ -109,17 +109,22 @@ class TestConfigurationValidation(unittest.TestCase):
         self.assertIsNone(BandSiloParams().num_channels)
         self.assertEqual(BandSiloParams(num_channels=2).num_channels, 2)
 
-    def test_interpolation_and_activity_channel(self):
-        """Only existing interpolation modes and activity channel zero work."""
-        for mode in ("linear", "cubic"):
-            self.assertEqual(
-                BandSiloParams(
-                    background_interpolation=mode
-                ).background_interpolation,
-                mode,
-            )
-        with self.assertRaisesRegex(ValueError, "interpolation"):
-            BandSiloParams(background_interpolation="nearest")
+    def test_background_interpolation_is_not_configurable(self):
+        """Neither typed nor dictionary options accept interpolation modes."""
+        for mode in ("linear", "cubic", "nearest"):
+            with self.subTest(mode=mode):
+                options = {"background_interpolation": mode}
+                with self.assertRaisesRegex(
+                    TypeError, "background_interpolation"
+                ):
+                    BandSiloParams(**options)
+                with self.assertRaisesRegex(
+                    TypeError, "background_interpolation"
+                ):
+                    resolve_band_options(options)
+
+    def test_activity_channel(self):
+        """Only activity channel zero is supported."""
         for channel in (1, -1, 0.0, False, None):
             with self.subTest(channel=channel):
                 with self.assertRaisesRegex(ValueError, "activity_channel"):

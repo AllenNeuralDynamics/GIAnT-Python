@@ -16,13 +16,20 @@ import torch
 
 from giant_python.extraction.band import result_assembly as pl
 from giant_python.extraction.band import workflow as wf
-from giant_python.extraction.band.types import TrialTraceResult
+from giant_python.extraction.band.types import (
+    ResolvedAcquisition,
+    TrialTraceResult,
+)
 from giant_python.io.experiment_summary import write_summary
 from giant_python.models.experiment_summary import (
     FRAME_INFO_KEYS,
     ExperimentSummary,
 )
-from giant_python.models.params import BandSiloParams, ExecutionOptions
+from giant_python.models.params import (
+    AnnotationOptions,
+    BandSiloParams,
+    ExecutionOptions,
+)
 
 
 def _trial(n_frames, n_sources, n_channels, n_soma):
@@ -265,6 +272,15 @@ class TestLocalizeMedianMotion(unittest.TestCase):
 class TestStageComposition(unittest.TestCase):
     """Check background wiring and empty localization without sparse fits."""
 
+    def test_persisted_background_interpolation_is_cubic(self):
+        """Output metadata records the fixed background algorithm."""
+        metadata = wf._params_dict(
+            BandSiloParams(),
+            ResolvedAcquisition(num_channels=1, align_hz=100.0),
+            AnnotationOptions(),
+        )
+        self.assertEqual(metadata["backgroundInterpolation"], "cubic")
+
     def test_default_execution_skips_empty_planes_and_preserves_grid(self):
         """Interpolate selected planes; baseline and assembly share data."""
         data = np.array([[3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
@@ -336,7 +352,7 @@ class TestStageComposition(unittest.TestCase):
         self.assertIs(interpolate.call_args.args[3], plane_pixels)
         self.assertEqual(
             interpolate.call_args.kwargs["method"],
-            params.background_interpolation,
+            "cubic",
         )
         rolling.assert_called_once()
         np.testing.assert_array_equal(rolling.call_args.args[0], interpolated)

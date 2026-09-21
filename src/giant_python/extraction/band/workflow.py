@@ -158,7 +158,7 @@ def _params_dict(
         "analyzeHz": params.analyze_hz,
         "denoiseWindow_s": params.denoise_window_s,
         "baselineWindow_s": params.baseline_window_s,
-        "backgroundInterpolation": params.background_interpolation,
+        "backgroundInterpolation": "cubic",
         "decayTau_s": params.decay_tau_s,
         "dXY": params.d_xy,
         "sparse_fac": params.sparse_fac,
@@ -436,7 +436,7 @@ def _estimate_background(
             sel_2d,
             umyx,
             mot_inds_yx,
-            method=params.background_interpolation,
+            method="cubic",
         )
     baseline_window = bg.baseline_window_frames(
         align_hz, params.baseline_window_s
