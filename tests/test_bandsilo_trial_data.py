@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.trial_data (pure + mocked-reader paths)."""
+"""Tests for canonical band trial reduction and shared numerical helpers."""
 
 import os
 import tempfile
@@ -6,7 +6,8 @@ import unittest
 
 import numpy as np
 
-from giant_python.bandsilo import trial_data as td
+from giant_python.extraction.band import trial_data as td
+from giant_python.numerics import interpolation, morphology
 
 
 class _MockDataFile:
@@ -50,14 +51,16 @@ class TestNearestInterp(unittest.TestCase):
     def test_single_point(self):
         """A single sample returns yp unchanged."""
         yp = np.array([7.0])
-        out = td.nearest_interp(np.array([0.0, 5.0]), np.array([2.0]), yp)
+        out = interpolation.nearest_interp(
+            np.array([0.0, 5.0]), np.array([2.0]), yp
+        )
         np.testing.assert_array_equal(out, yp)
 
     def test_midpoint_rounding(self):
         """Query points snap to the nearest sample boundary."""
         xp = np.array([0.0, 10.0])
         yp = np.array([1.0, 2.0])
-        out = td.nearest_interp(np.array([4.0, 6.0]), xp, yp)
+        out = interpolation.nearest_interp(np.array([4.0, 6.0]), xp, yp)
         np.testing.assert_array_equal(out, np.array([1.0, 2.0]))
 
 
@@ -68,7 +71,7 @@ class TestFastDilation(unittest.TestCase):
         """A single point dilates to its 8-neighborhood."""
         mask = np.zeros((5, 5), dtype=bool)
         mask[2, 2] = True
-        out = td.fast_dilation(mask, np.ones((3, 3), np.uint8))
+        out = morphology.fast_dilation(mask, np.ones((3, 3), np.uint8))
         self.assertEqual(out[1:4, 1:4].sum(), 9)
         self.assertEqual(out.sum(), 9)
 
@@ -76,7 +79,7 @@ class TestFastDilation(unittest.TestCase):
         """The fast path dilates only the trailing two axes."""
         mask = np.zeros((2, 5, 5), dtype=bool)
         mask[0, 2, 2] = True
-        out = td.fast_dilation(mask, np.ones((3, 3), np.uint8))
+        out = morphology.fast_dilation(mask, np.ones((3, 3), np.uint8))
         self.assertEqual(out[0].sum(), 9)
         self.assertEqual(out[1].sum(), 0)
 
@@ -84,7 +87,7 @@ class TestFastDilation(unittest.TestCase):
         """A non-3x3 kernel routes through the cv2 fallback."""
         mask = np.zeros((5, 5), dtype=bool)
         mask[2, 2] = True
-        out = td.fast_dilation(mask, np.ones((1, 3), np.uint8))
+        out = morphology.fast_dilation(mask, np.ones((1, 3), np.uint8))
         # 1x3 horizontal kernel dilates left/right only.
         self.assertTrue(out[2, 1] and out[2, 3] and out[2, 2])
         self.assertFalse(out[1, 2] or out[3, 2])
@@ -93,7 +96,7 @@ class TestFastDilation(unittest.TestCase):
         """A None kernel uses the 7x7 default (generic path)."""
         mask = np.zeros((9, 9), dtype=bool)
         mask[4, 4] = True
-        out = td.fast_dilation(mask)
+        out = morphology.fast_dilation(mask)
         self.assertEqual(out[1:8, 1:8].sum(), 49)
 
 
@@ -199,9 +202,9 @@ class TestReadBandTrialData(unittest.TestCase):
             "fn_adata": np.array([["a.h5"]], dtype=object),
         }
 
-        orig_open = td._open_slap2_file
+        orig_open = td.open_slap2_file
         orig_align = td.load_alignment_data_h5
-        td._open_slap2_file = lambda path: df
+        td.open_slap2_file = lambda path: df
         td.load_alignment_data_h5 = lambda path: {
             "motionDSr": np.zeros(2),
             "motionDSc": np.zeros(2),
@@ -220,7 +223,7 @@ class TestReadBandTrialData(unittest.TestCase):
                 all_channels=False,
             )
         finally:
-            td._open_slap2_file = orig_open
+            td.open_slap2_file = orig_open
             td.load_alignment_data_h5 = orig_align
 
         self.assertIsNotNone(out)

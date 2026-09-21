@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.peaks (Phase 5 peak detection).
+"""Tests for giant_python.numerics.peaks (Phase 5 peak detection).
 
 Covers the integrated-Gaussian forward/Jacobian kernels, the bounded LM
 solver, the per-plane detector, and the 3-D ``get_act_im_peaks`` driver with
@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from giant_python.bandsilo import peaks as pk
+from giant_python.numerics import peaks as pk
 
 
 def _grid(height, width):
@@ -39,34 +39,80 @@ class TestGaussianForward(unittest.TestCase):
         total = pk.gaussian_peaks_integrated(theta, _grid(101, 27)).sum()
         self.assertAlmostEqual(total, 3.0 * 2 * np.pi * 8.0 * 0.7, places=6)
 
-    def test_equal_widths_match_legacy_isotropic(self):
+    def test_four_column_parameters_rejected(self):
+        """A missing x width fails instead of silently sharing the y width."""
         yx = _grid(25, 25)
-        isotropic = np.array([[2.0, 12.3, 10.7, 0.9]])
-        anisotropic = np.column_stack([isotropic, isotropic[:, 3]])
-        np.testing.assert_allclose(
-            pk.gaussian_peaks_integrated(anisotropic, yx),
-            pk.gaussian_peaks_integrated(isotropic, yx),
-            rtol=1e-12,
-        )
+        theta = np.array([[2.0, 12.3, 10.7, 0.9]])
+        with self.assertRaisesRegex(ValueError, r"shape \(N, 5\).*sigma_x"):
+            pk.gaussian_peaks_integrated(theta, yx)
 
     def test_total_integral(self):
         """Integrated Gaussian summed over a wide grid gives amp*2*pi*s^2."""
         yx = _grid(60, 60)
         amp, s = 3.0, 2.0
-        theta = np.array([[amp, 30.0, 30.0, s]])
+        theta = np.array([[amp, 30.0, 30.0, s, s]])
         total = pk.gaussian_peaks_integrated(theta, yx).sum()
         self.assertAlmostEqual(total, amp * 2 * np.pi * s**2, places=3)
 
     def test_superposition(self):
         """Two Gaussians sum to the sum of their individual renders."""
         yx = _grid(30, 30)
-        t1 = np.array([[2.0, 10.0, 12.0, 1.5]])
-        t2 = np.array([[3.0, 20.0, 18.0, 1.0]])
+        t1 = np.array([[2.0, 10.0, 12.0, 1.5, 1.5]])
+        t2 = np.array([[3.0, 20.0, 18.0, 1.0, 1.0]])
         both = pk.gaussian_peaks_integrated(np.vstack([t1, t2]), yx)
         sep = pk.gaussian_peaks_integrated(
             t1, yx
         ) + pk.gaussian_peaks_integrated(t2, yx)
         np.testing.assert_allclose(both, sep, rtol=1e-10)
+
+
+class TestParameterContract(unittest.TestCase):
+    """Gaussian kernels and both fit stages require five explicit columns."""
+
+    def test_invalid_parameter_shapes_rejected(self):
+        """Reject missing widths, extra columns and non-matrix inputs early."""
+        yx = _grid(3, 3)
+        for shape in [(1, 4), (0, 4), (1, 6), (1, 0), (5,), (1, 1, 5)]:
+            theta = np.ones(shape)
+            for kernel in [
+                pk.gaussian_peaks_integrated,
+                pk._gaussian_peaks_integrated_val_jac,
+                pk._lsq_curvefit,
+                pk._fit_isotropic_then_anisotropic,
+            ]:
+                with self.subTest(shape=shape, kernel=kernel.__name__):
+                    args = (theta, yx)
+                    if kernel in [
+                        pk._lsq_curvefit,
+                        pk._fit_isotropic_then_anisotropic,
+                    ]:
+                        args += (
+                            np.zeros(9),
+                            np.zeros(theta.size),
+                            np.ones(theta.size),
+                        )
+                    with self.assertRaisesRegex(
+                        ValueError, r"shape \(N, 5\).*sigma_y, sigma_x"
+                    ):
+                        kernel(*args)
+
+    def test_bounds_cannot_broadcast(self):
+        """Fitters reject scalar, four-column and unflattened bounds."""
+        theta = np.array([[1.0, 1.0, 1.0, 0.5, 0.5]])
+        for fitter in [pk._lsq_curvefit, pk._fit_isotropic_then_anisotropic]:
+            for shape in [(), (1,), (4,), (1, 5)]:
+                for invalid_lower in [True, False]:
+                    lb = np.zeros(shape if invalid_lower else (5,))
+                    ub = np.ones((5,) if invalid_lower else shape)
+                    with self.subTest(
+                        fitter=fitter.__name__,
+                        shape=shape,
+                        invalid_lower=invalid_lower,
+                    ):
+                        with self.assertRaisesRegex(
+                            ValueError, r"bounds must have shape \(5\*N,\)"
+                        ):
+                            fitter(theta, _grid(3, 3), np.zeros(9), lb, ub)
 
 
 class TestValJac(unittest.TestCase):
@@ -75,10 +121,12 @@ class TestValJac(unittest.TestCase):
     def test_anisotropic_jacobian_matches_finite_difference(self):
         """Both width derivatives are independent and correctly ordered."""
         yx = _grid(35, 19)
-        theta = np.array([
-            [2.0, 16.3, 7.7, 8.0, 0.7],
-            [1.2, 21.0, 12.0, 3.0, 1.0],
-        ])
+        theta = np.array(
+            [
+                [2.0, 16.3, 7.7, 8.0, 0.7],
+                [1.2, 21.0, 12.0, 3.0, 1.0],
+            ]
+        )
         val, jac = pk._gaussian_peaks_integrated_val_jac(theta, yx)
         np.testing.assert_allclose(
             val, pk.gaussian_peaks_integrated(theta, yx), rtol=1e-12
@@ -99,7 +147,9 @@ class TestValJac(unittest.TestCase):
     def test_value_matches_forward(self):
         """The val_jac value equals the forward-only evaluation."""
         yx = _grid(20, 20)
-        theta = np.array([[2.0, 9.3, 11.7, 1.4], [1.5, 14.0, 6.0, 1.1]])
+        theta = np.array(
+            [[2.0, 9.3, 11.7, 1.4, 1.4], [1.5, 14.0, 6.0, 1.1, 1.1]]
+        )
         val, _ = pk._gaussian_peaks_integrated_val_jac(theta, yx)
         fwd = pk.gaussian_peaks_integrated(theta, yx)
         np.testing.assert_allclose(val, fwd, rtol=1e-12)
@@ -107,7 +157,9 @@ class TestValJac(unittest.TestCase):
     def test_jacobian_matches_finite_difference(self):
         """Analytical Jacobian matches a central finite-difference estimate."""
         yx = _grid(16, 16)
-        theta = np.array([[2.0, 8.3, 7.7, 1.3], [1.2, 11.0, 5.0, 0.9]])
+        theta = np.array(
+            [[2.0, 8.3, 7.7, 1.3, 1.3], [1.2, 11.0, 5.0, 0.9, 0.9]]
+        )
         _, jac = pk._gaussian_peaks_integrated_val_jac(theta, yx)
         flat = theta.ravel().copy()
         eps = 1e-6
@@ -116,8 +168,8 @@ class TestValJac(unittest.TestCase):
             hi[k] += eps
             lo = flat.copy()
             lo[k] -= eps
-            v_hi = pk.gaussian_peaks_integrated(hi.reshape(-1, 4), yx)
-            v_lo = pk.gaussian_peaks_integrated(lo.reshape(-1, 4), yx)
+            v_hi = pk.gaussian_peaks_integrated(hi.reshape(-1, 5), yx)
+            v_lo = pk.gaussian_peaks_integrated(lo.reshape(-1, 5), yx)
             fd = (v_hi - v_lo) / (2 * eps)
             np.testing.assert_allclose(jac[:, k], fd, rtol=1e-4, atol=1e-4)
 
@@ -152,7 +204,7 @@ class TestLsqCurvefit(unittest.TestCase):
         """max_nfev=1 returns the (clipped) initial parameters immediately."""
         yx = _grid(11, 11)
         ydata = pk.gaussian_peaks_integrated(
-            np.array([[4.0, 5.0, 5.0, 1.0]]), yx
+            np.array([[4.0, 5.0, 5.0, 1.0, 1.0]]), yx
         )
         theta0 = np.array([[3.0, 5.0, 5.0, 1.0, 1.0]])
         lb, ub = pk._make_bounds(theta0[:, 1:3], 11, 11)
@@ -168,11 +220,11 @@ class TestLsqCurvefit(unittest.TestCase):
         yx = _grid(21, 21)
         # data has its peak far from the seed; bounds pin the mean near seed
         ydata = pk.gaussian_peaks_integrated(
-            np.array([[6.0, 15.0, 15.0, 1.2]]), yx
+            np.array([[6.0, 15.0, 15.0, 1.2, 1.2]]), yx
         )
-        theta0 = np.array([[6.0, 4.0, 4.0, 1.2]])
-        lb = np.array([5.9, 3.9, 3.9, 1.1])
-        ub = np.array([6.1, 4.1, 4.1, 1.3])
+        theta0 = np.array([[6.0, 4.0, 4.0, 1.2, 1.2]])
+        lb = np.array([5.9, 3.9, 3.9, 1.1, 1.1])
+        ub = np.array([6.1, 4.1, 4.1, 1.3, 1.3])
         out = pk._lsq_curvefit(theta0, yx, ydata, lb, ub, max_nfev=50)
         # stays within the tight bounds (no crash, no bound violation)
         self.assertTrue(np.all(out.ravel() >= lb - 1e-9))
@@ -182,25 +234,75 @@ class TestLsqCurvefit(unittest.TestCase):
 class TestIsotropicWarmStart(unittest.TestCase):
     """Two-stage fitting preserves round peaks while permitting elongation."""
 
+    def test_shared_width_fit(self):
+        """The constrained LM stage recovers a round peak in five columns."""
+        yx = _grid(21, 21)
+        true = np.array([[5.0, 10.3, 9.7, 0.8, 0.8]])
+        theta0 = np.array([[3.0, 10.0, 10.0, 0.5, 0.5]])
+        lb, ub = pk._make_bounds(theta0[:, 1:3], 21, 21)
+        ub[3] = ub[4]
+        out = pk._lsq_curvefit(
+            theta0,
+            yx,
+            pk.gaussian_peaks_integrated(true, yx),
+            lb,
+            ub,
+            shared_widths=True,
+        )
+        np.testing.assert_allclose(out, true, atol=0.01)
+        np.testing.assert_array_equal(out[:, 3], out[:, 4])
+
+    def test_shared_width_constraint_requires_matching_columns(self):
+        """Tied updates must not silently reinterpret unequal inputs/bounds."""
+        for mismatch in ["theta", "lower", "upper"]:
+            theta = np.array([[1.0, 1.0, 1.0, 0.5, 0.5]])
+            lb = np.array([0.0, 0.0, 0.0, 0.35, 0.35])
+            ub = np.array([2.0, 2.0, 2.0, 1.0, 1.0])
+            if mismatch == "theta":
+                theta[0, 4] = 0.6
+            elif mismatch == "lower":
+                lb[4] = 0.4
+            else:
+                ub[4] = 0.9
+            with self.subTest(mismatch=mismatch):
+                with self.assertRaisesRegex(
+                    ValueError, "requires equal y/x widths and bounds"
+                ):
+                    pk._lsq_curvefit(
+                        theta,
+                        _grid(3, 3),
+                        np.zeros(9),
+                        lb,
+                        ub,
+                        shared_widths=True,
+                    )
+
     def test_stages_and_bounds(self):
         """Relaxation starts from the fitted shared widths, not the seed."""
         theta0 = np.array([[3.0, 10.0, 10.0, 4.0, 0.8]])
         original = theta0.copy()
         lb, ub = pk._make_bounds(theta0[:, 1:3], 21, 21)
-        iso_fit = np.array([[5.0, 10.3, 9.7, 0.9]])
+        iso_fit = np.array([[5.0, 10.3, 9.7, 0.9, 0.9]])
         final_fit = np.array([[5.0, 10.3, 9.7, 4.0, 0.7]])
         with patch.object(
             pk, "_lsq_curvefit", side_effect=[iso_fit, final_fit]
         ) as solver:
             out = pk._fit_isotropic_then_anisotropic(
-                theta0, _grid(21, 21), np.zeros(441), lb, ub,
+                theta0,
+                _grid(21, 21),
+                np.zeros(441),
+                lb,
+                ub,
                 max_nfev=100,
             )
         self.assertEqual(solver.call_count, 2)
         first, second = solver.call_args_list
-        self.assertEqual(first.args[0].shape, (1, 4))
-        self.assertEqual(first.args[3][3], 0.35)
-        self.assertEqual(first.args[4][3], 1.0)
+        self.assertEqual(first.args[0].shape, (1, 5))
+        np.testing.assert_array_equal(first.args[0][:, 3], first.args[0][:, 4])
+        np.testing.assert_array_equal(first.args[3][3:], [0.35, 0.35])
+        np.testing.assert_array_equal(first.args[4][3:], [1.0, 1.0])
+        self.assertTrue(first.kwargs["shared_widths"])
+        self.assertNotIn("shared_widths", second.kwargs)
         np.testing.assert_array_equal(
             second.args[0], [[5.0, 10.3, 9.7, 0.9, 0.9]]
         )
@@ -214,14 +316,18 @@ class TestIsotropicWarmStart(unittest.TestCase):
     def test_recovers_round_and_elongated_peaks(self):
         """Joint fitting recovers round and tall peaks after relaxation."""
         yx = _grid(65, 31)
-        true = np.array([
-            [5.0, 15.3, 8.7, 0.8, 0.8],
-            [8.0, 40.4, 22.2, 7.0, 0.7],
-        ])
-        theta0 = np.array([
-            [3.0, 15.0, 9.0, 0.5, 0.5],
-            [4.0, 40.0, 22.0, 0.5, 0.5],
-        ])
+        true = np.array(
+            [
+                [5.0, 15.3, 8.7, 0.8, 0.8],
+                [8.0, 40.4, 22.2, 7.0, 0.7],
+            ]
+        )
+        theta0 = np.array(
+            [
+                [3.0, 15.0, 9.0, 0.5, 0.5],
+                [4.0, 40.0, 22.0, 0.5, 0.5],
+            ]
+        )
         lb, ub = pk._make_bounds(theta0[:, 1:3], 65, 31)
         out = pk._fit_isotropic_then_anisotropic(
             theta0, yx, pk.gaussian_peaks_integrated(true, yx), lb, ub
@@ -262,11 +368,11 @@ class TestSmallHelpers(unittest.TestCase):
 
     def test_peak_mask_and_empty(self):
         """Peak centers mark the mask; an empty parameter set marks nothing."""
-        tf = np.array([[1.0, 3.2, 4.8, 1.0]])
+        tf = np.array([[1.0, 3.2, 4.8, 1.0, 1.0]])
         mask = pk._peak_mask(tf, 8, 8)
         self.assertTrue(mask[3, 5])
         self.assertEqual(mask.sum(), 1)
-        empty = pk._peak_mask(np.zeros((0, 4)), 8, 8)
+        empty = pk._peak_mask(np.zeros((0, 5)), 8, 8)
         self.assertFalse(empty.any())
 
     def test_buffer_mask(self):
@@ -383,8 +489,12 @@ class TestDetectPeaks2d(unittest.TestCase):
         """A tall, narrow blob is fit as one anisotropic Gaussian."""
         act = _single_gaussian_plane(65, 25, 32.3, 12.4, 10.0, 7.0, 0.7)
         out = pk.detect_peaks_2d(
-            act, np.zeros_like(act, dtype=bool),
-            mu_bg=0.0, sigma_bg=0.05, peak_thresh=1.0, peak_th=3.0,
+            act,
+            np.zeros_like(act, dtype=bool),
+            mu_bg=0.0,
+            sigma_bg=0.05,
+            peak_thresh=1.0,
+            peak_th=3.0,
         )
         self.assertEqual(out.shape, (1, 5))
         np.testing.assert_allclose(

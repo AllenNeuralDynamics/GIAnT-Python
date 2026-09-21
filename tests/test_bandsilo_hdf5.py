@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.hdf5."""
+"""Tests for shared HDF5 IO and band runtime input preparation."""
 
 import os
 import tempfile
@@ -7,19 +7,21 @@ import unittest
 import h5py
 import numpy as np
 
-from giant_python.bandsilo.hdf5 import (
-    _decode_h5_strings,
-    _decode_one,
-    _reshape_1d,
+from giant_python.extraction.band.inputs import (
     _resolve_fn_adata,
     compute_keep_trials,
     load_alignment_data_h5,
-    load_struct_from_h5,
     load_trial_table,
     read_align_info,
+)
+from giant_python.io.hdf5 import (
+    _decode_one,
+    _decode_strings,
+    load_struct_h5,
     to_serializable,
     write_dict_to_h5group,
 )
+from giant_python.io.slap2 import _reshape_1d
 
 
 def _str_dt():
@@ -47,7 +49,7 @@ class TestToSerializable(unittest.TestCase):
 
 
 class TestDecodeHelpers(unittest.TestCase):
-    """_decode_one / _decode_h5_strings handle bytes, str, arrays."""
+    """_decode_one / _decode_strings handle bytes, str, arrays."""
 
     def test_decode_one(self):
         """bytes decode to str; str stays str."""
@@ -56,18 +58,18 @@ class TestDecodeHelpers(unittest.TestCase):
 
     def test_decode_scalar_and_array(self):
         """Scalar bytes -> str; object array -> decoded object array."""
-        self.assertEqual(_decode_h5_strings(b"z"), "z")
-        arr = _decode_h5_strings(np.array([b"a", b"b"], dtype=object))
+        self.assertEqual(_decode_strings(b"z"), "z")
+        arr = _decode_strings(np.array([b"a", b"b"], dtype=object))
         self.assertEqual(list(arr), ["a", "b"])
 
     def test_decode_empty_array(self):
         """An empty array is returned unchanged (no vectorize crash)."""
-        out = _decode_h5_strings(np.array([], dtype=object))
+        out = _decode_strings(np.array([], dtype=object))
         self.assertEqual(out.size, 0)
 
 
 class TestReadDataset(unittest.TestCase):
-    """load_struct_from_h5 read-side orientation and string handling."""
+    """load_struct_h5 read-side orientation and string handling."""
 
     def test_scalar_string(self):
         """A scalar string dataset reads back as plain str."""
@@ -75,7 +77,7 @@ class TestReadDataset(unittest.TestCase):
             path = os.path.join(d, "s.h5")
             with h5py.File(path, "w") as f:
                 f.create_dataset("datadr", data="hello", dtype=_str_dt())
-            out = load_struct_from_h5(path)
+            out = load_struct_h5(path)
             self.assertEqual(out["datadr"], "hello")
 
     def test_single_element_string_array(self):
@@ -88,7 +90,7 @@ class TestReadDataset(unittest.TestCase):
                     data=np.array(["x"], dtype=object),
                     dtype=_str_dt(),
                 )
-            out = load_struct_from_h5(path)
+            out = load_struct_h5(path)
             self.assertEqual(out["name"], "x")
 
     def test_string_grid_column_major_transposed(self):
@@ -98,7 +100,7 @@ class TestReadDataset(unittest.TestCase):
             grid = np.array([["a", "b", "c"], ["d", "e", "f"]], dtype=object)
             with h5py.File(path, "w") as f:
                 f.create_dataset("filename", data=grid, dtype=_str_dt())
-            out = load_struct_from_h5(path)
+            out = load_struct_h5(path)
             self.assertEqual(out["filename"].shape, (3, 2))
 
     def test_numeric_transpose_and_row_major(self):
@@ -108,13 +110,13 @@ class TestReadDataset(unittest.TestCase):
             col = os.path.join(d, "c.h5")
             with h5py.File(col, "w") as f:
                 f.create_dataset("m", data=arr)
-            self.assertEqual(load_struct_from_h5(col)["m"].shape, (3, 2))
+            self.assertEqual(load_struct_h5(col)["m"].shape, (3, 2))
 
             rowm = os.path.join(d, "r.h5")
             with h5py.File(rowm, "w") as f:
                 f.create_dataset("row_major", data=1)
                 f.create_dataset("m", data=arr)
-            got = load_struct_from_h5(rowm)["m"]
+            got = load_struct_h5(rowm)["m"]
             self.assertEqual(got.shape, (2, 3))
             np.testing.assert_array_equal(got, arr)
 
@@ -126,7 +128,7 @@ class TestReadDataset(unittest.TestCase):
                 f.create_dataset("row_major", data=1)
                 g = f.create_group("inner")
                 g.create_dataset("v", data=np.arange(3))
-            out = load_struct_from_h5(path)
+            out = load_struct_h5(path)
             np.testing.assert_array_equal(out["inner"]["v"], np.arange(3))
 
 
@@ -152,7 +154,7 @@ class TestWriteRoundTrip(unittest.TestCase):
             path = os.path.join(d, "w.h5")
             with h5py.File(path, "w") as f:
                 write_dict_to_h5group(f, payload)
-            out = load_struct_from_h5(path)
+            out = load_struct_h5(path)
 
         self.assertNotIn("empty", out)
         self.assertNotIn("missing", out)

@@ -3,21 +3,22 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import h5py
 import numpy as np
 
 from giant_python.models import (
-    AlignmentData,
-    AlignParams,
+    AnnotationOptions,
+    BandSiloParams,
     ExperimentSummary,
-    SiloParams,
+    FrameInfo,
+    PathSummary,
     Slap2Info,
     Source,
     TrialTable,
     UserRoi,
     Visualizations,
-    set_params,
 )
 
 
@@ -34,15 +35,25 @@ class TestDataclasses(unittest.TestCase):
         """Slap2Info constructs with empty collections."""
         self.assertEqual(Slap2Info().ref_stack, {})
 
-    def test_alignment_data_defaults(self):
-        """AlignmentData defaults to a non-failed registration."""
-        self.assertFalse(AlignmentData().registration_failed)
-
     def test_experiment_summary_defaults(self):
-        """ExperimentSummary nests a Visualizations instance."""
+        """ExperimentSummary owns per-path results, not aggregate aliases."""
         summary = ExperimentSummary()
-        self.assertIsInstance(summary.visualizations, Visualizations)
-        self.assertEqual(summary.sources, [])
+        self.assertEqual(summary.paths, [])
+        path = PathSummary()
+        summary.paths.append(path)
+        self.assertIsInstance(summary.paths[0].visualizations, Visualizations)
+        self.assertIsInstance(summary.paths[0].frame_info, FrameInfo)
+        self.assertEqual(summary.paths[0].sources, [])
+        for name in (
+            "sources",
+            "user_rois",
+            "visualizations",
+            "frame_info",
+            "global_f",
+            "z_depths",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(summary, name))
 
     def test_source_and_user_roi(self):
         """Source and UserRoi construct with defaults."""
@@ -51,23 +62,21 @@ class TestDataclasses(unittest.TestCase):
 
     def test_param_models(self):
         """Param models expose typed defaults."""
-        self.assertEqual(AlignParams().align_hz, 80.0)
-        self.assertEqual(SiloParams().microscope, "slap2")
-        self.assertEqual(SiloParams().scan_mode, "standard")
-        self.assertEqual(SiloParams().background_interpolation, "cubic")
+        self.assertEqual(BandSiloParams().background_interpolation, "cubic")
 
-    def test_silo_value_params_have_concrete_defaults(self):
+    def test_band_value_params_have_concrete_defaults(self):
         """Value params default to concrete (non-None) values."""
-        p = SiloParams()
+        p = BandSiloParams()
         self.assertEqual(p.analyze_hz, 100.0)
-        self.assertEqual(p.peakth, 8.0)
+        # Seven is the current implementation default, not a new retuning.
+        self.assertEqual(p.peakth, 7.0)
         # Only genuinely runtime-resolved fields stay None sentinels.
         self.assertIsNone(p.num_channels)
-        self.assertIsNone(p.interactive)
+        self.assertIsNone(AnnotationOptions().interactive)
 
 
 class TestH5RoundTrip(unittest.TestCase):
-    """from_h5/to_h5 are not implemented yet."""
+    """Implemented model codecs preserve data and delegate to shared IO."""
 
     def test_trial_table_from_h5(self):
         """from_h5 faithfully mirrors the trial_table.h5 group hierarchy."""
@@ -125,39 +134,25 @@ class TestH5RoundTrip(unittest.TestCase):
         self.assertIsNone(tt.slap2_info)
         self.assertIsNone(tt.motion_correction)
 
-    def test_trial_table_to_h5(self):
-        """TrialTable.to_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            TrialTable().to_h5("trial_table.h5")
-
-    def test_alignment_data_from_h5(self):
-        """AlignmentData.from_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            AlignmentData.from_h5("a.h5")
-
-    def test_alignment_data_to_h5(self):
-        """AlignmentData.to_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            AlignmentData().to_h5("a.h5")
-
     def test_experiment_summary_from_h5(self):
-        """ExperimentSummary.from_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            ExperimentSummary.from_h5("experiment_summary.h5")
+        """ExperimentSummary.from_h5 delegates to the shared band codec."""
+        expected = ExperimentSummary()
+        with mock.patch(
+            "giant_python.io.experiment_summary.read_summary",
+            return_value=expected,
+        ) as reader:
+            result = ExperimentSummary.from_h5("custom_summary.h5")
+        self.assertIs(result, expected)
+        reader.assert_called_once_with("custom_summary.h5")
 
     def test_experiment_summary_to_h5(self):
-        """ExperimentSummary.to_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            ExperimentSummary().to_h5("experiment_summary.h5")
-
-
-class TestSetParams(unittest.TestCase):
-    """Tests for the set_params compatibility shim."""
-
-    def test_not_implemented(self):
-        """set_params raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            set_params("SILo")
+        """ExperimentSummary.to_h5 delegates without rewriting the model."""
+        summary = ExperimentSummary()
+        with mock.patch(
+            "giant_python.io.experiment_summary.write_summary"
+        ) as writer:
+            self.assertIsNone(summary.to_h5("custom_summary.h5"))
+        writer.assert_called_once_with(summary, "custom_summary.h5")
 
 
 if __name__ == "__main__":

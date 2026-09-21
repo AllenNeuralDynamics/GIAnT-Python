@@ -5,7 +5,7 @@ Centralizes the choice of parallel backend (e.g. joblib /
 trials without each stage reimplementing the plumbing.
 """
 
-from typing import Callable, Iterable, List, Optional, TypeVar
+from typing import Callable, Iterable, List, Optional, TypeVar, cast
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -59,8 +59,11 @@ def map_trials(
     # trial *completes*, so wrapping this generator in tqdm tracks real
     # progress. Wrapping the dispatch generator instead would fill the bar as
     # soon as tasks are submitted, long before the workers finish.
-    results = Parallel(n_jobs=n_workers, return_as="generator")(
-        delayed(func)(t) for t in trials
+    results = cast(
+        Iterable[R],
+        Parallel(n_jobs=n_workers, return_as="generator")(
+            delayed(func)(t) for t in trials
+        ),
     )
     if desc is not None:
         from tqdm import tqdm

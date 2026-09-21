@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.gui (pure + annotation-IO paths)."""
+"""Tests for canonical band ROI geometry and annotation IO."""
 
 import os
 import tempfile
@@ -7,14 +7,14 @@ import unittest
 import h5py
 import numpy as np
 
-from giant_python.bandsilo.gui import (
-    _h5_scalar_str,
+from giant_python.extraction.band.annotation import load_annotations_h5
+from giant_python.extraction.band.rois import (
     _read_roi_records,
     compute_user_roi_geometry,
-    load_annotations_h5,
-    save_annotations_h5,
     user_roi_superpixel_lists_from_masks,
 )
+from giant_python.io.annotations import _h5_scalar_str, save_annotations_h5
+from giant_python.io.hdf5 import _read_group
 
 
 def _str_dt():
@@ -219,7 +219,7 @@ class TestReadRoiRecords(unittest.TestCase):
                 grp.create_group("roi_000")
             with h5py.File(path, "r") as f:
                 masks, labels, recs, bad = _read_roi_records(
-                    f["Path1"], expected
+                    _read_group(f["Path1"], row_major=True), expected
                 )
         self.assertFalse(bad)
         self.assertEqual(labels, ["ROI1"])

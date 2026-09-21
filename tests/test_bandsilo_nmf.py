@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.nmf (Phase 6 source localization).
+"""Tests for canonical band localization (Phase 6 source localization).
 
 Covers the profile/init kernels, the least-squares/SNR helpers, and the full
 ``fit_sources`` driver (multiplicative NMF + Adam Gaussian fit + variance
@@ -13,8 +13,8 @@ import unittest
 import numpy as np
 import torch
 
-from giant_python.bandsilo import background as bg
-from giant_python.bandsilo import nmf
+from giant_python.extraction.band import geometry
+from giant_python.extraction.band import localization as nmf
 from tests.test_bandsilo_background import _small_geometry
 
 
@@ -136,7 +136,7 @@ class TestPhiAndSnr(unittest.TestCase):
         n_pix = nz * npc * npr
         sel = g["sel_pix_idxs"]
         pct = torch.tensor(
-            bg.pixel_coords_from_idxs(sel, npc, npr), dtype=torch.float32
+            geometry.pixel_coords_from_idxs(sel, npc, npr), dtype=torch.float32
         )
         seeds = np.array([[0.0, 7.0, 7.0], [1.0, 7.0, 8.0]])
         params = nmf.init_source_params(seeds)
@@ -201,7 +201,7 @@ class TestLocalizeSources(unittest.TestCase):
         npc, npr, nz = g["npc"], g["npr"], g["num_fast_zs"]
         n_pix = nz * npc * npr
         sel = g["sel_pix_idxs"]
-        coords = bg.pixel_coords_from_idxs(sel, npc, npr)
+        coords = geometry.pixel_coords_from_idxs(sel, npc, npr)
         seeds = np.array([[0.0, 7.0, 7.0], [0.0, 7.0, 9.0], [1.0, 7.0, 8.0]])
         rng = np.random.default_rng(seed + 100)
         n_frames = 16

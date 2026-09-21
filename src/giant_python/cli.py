@@ -1,4 +1,4 @@
-"""Command-line interface: ``giant organize|register|annotate|extract``.
+"""Command-line interface: ``giant annotate|extract``.
 
 Thin wrapper over the pipeline stages for batch / cluster use. Wired as the
 ``giant`` console script in pyproject.toml. The ``annotate`` subcommand is the
@@ -6,9 +6,10 @@ standalone ROI-annotation step (the BandSILo analog of the GIAnT-MATLAB
 annotation capsule): it writes ``annotations.h5``, which a later ``extract``
 run consumes without opening a GUI.
 
-The argument parser and the ``SiloParams`` builder are pure and unit-tested;
-the individual command handlers drive heavy IO / GUI code and are excluded
-from coverage.
+CLI, standalone functions and Pipeline share the same workflow services.
+Scientific defaults are unchanged; execution and annotation flags build
+separate options. Heavy acquisition and GUI modules are imported only by
+the selected backend when needed.
 """
 
 from __future__ import annotations
@@ -16,16 +17,26 @@ from __future__ import annotations
 import argparse
 from typing import Optional, Sequence
 
-from .models.params import SiloParams
+from .models.params import (
+    AnnotationOptions,
+    BandSiloParams,
+    ExecutionOptions,
+)
 
 
 def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     """Attach the shared source-extraction options to a subparser."""
     parser.add_argument(
+        "--microscope",
+        choices=("slap2",),
+        default="slap2",
+        help="Acquisition type (currently only SLAP2 band is implemented).",
+    )
+    parser.add_argument(
         "--scan-mode",
-        choices=("standard", "band"),
+        choices=("band",),
         default="band",
-        help="SLAP2 scan mode selecting the extraction backend.",
+        help="Supported scan mode.",
     )
     parser.add_argument(
         "--draw-user-rois",
@@ -49,13 +60,25 @@ def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--operator",
-        default=SiloParams.operator,
+        default=AnnotationOptions.operator,
         help="Operator name recorded in the output metadata.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print per-stage status messages and progress bars.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=ExecutionOptions.max_workers,
+        help="Positive worker count (default: 6).",
+    )
+    parser.add_argument(
+        "--max-trials",
+        type=int,
+        default=None,
+        help="Positive debug trial limit per DMD (default: all trials).",
     )
 
 
@@ -65,21 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
     Returns
     -------
     argparse.ArgumentParser
-        Parser with ``organize``, ``register``, ``annotate``, and ``extract``
-        subcommands. Each subcommand stores its 0-based ``command`` name in the
+        Parser with ``annotate`` and ``extract``
+        subcommands. Each subcommand stores its ``command`` name in the
         parsed namespace.
     """
     parser = argparse.ArgumentParser(prog="giant")
     subparsers = parser.add_subparsers(dest="command")
-
-    organize = subparsers.add_parser(
-        "organize", help="Build the trial table from raw data."
-    )
-    organize.add_argument("data_dir", help="Raw recording directory.")
-    organize.add_argument("save_dir", help="Results directory.")
-
-    register = subparsers.add_parser("register", help="Run motion correction.")
-    register.add_argument("trial_table", help="Path to trial_table.h5.")
 
     annotate = subparsers.add_parser(
         "annotate", help="Draw / save user ROIs (standalone step)."
@@ -94,50 +108,55 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _params_from_args(args: argparse.Namespace) -> SiloParams:
-    """Build a :class:`SiloParams` from parsed annotate/extract args."""
-    return SiloParams(
-        scan_mode=args.scan_mode,
-        draw_user_rois=args.draw_user_rois,
-        interactive=args.interactive,
-        operator=args.operator,
-        verbose=args.verbose,
+def _options_from_args(
+    args: argparse.Namespace,
+) -> tuple[BandSiloParams, ExecutionOptions, AnnotationOptions]:
+    """Build independent science, execution and annotation configuration."""
+    return (
+        BandSiloParams(),
+        ExecutionOptions(
+            max_workers=args.max_workers,
+            verbose=args.verbose,
+            max_trials=args.max_trials,
+        ),
+        AnnotationOptions(
+            enabled=args.draw_user_rois or args.command == "annotate",
+            interactive=args.interactive,
+            operator=args.operator,
+        ),
     )
-
-
-def _cmd_organize(args: argparse.Namespace) -> int:  # pragma: no cover - IO
-    """Handle ``giant organize`` (delegates to the trial-table builder)."""
-    from .pipeline import TrialTableBuilder
-
-    TrialTableBuilder("slap2").run(args.data_dir, args.save_dir)
-    return 0
-
-
-def _cmd_register(args: argparse.Namespace) -> int:  # pragma: no cover - IO
-    """Handle ``giant register`` (delegates to motion correction)."""
-    from .pipeline import MotionCorrector
-
-    MotionCorrector.for_microscope("slap2").run(args.trial_table)
-    return 0
 
 
 def _cmd_annotate(
     args: argparse.Namespace,
-) -> int:  # pragma: no cover - GUI/IO
+) -> int:
     """Handle ``giant annotate`` (standalone ROI annotation)."""
-    from .bandsilo.annotate import annotate_band_rois
+    from .pipeline.annotate import annotate_rois
 
-    annotate_band_rois(args.trial_table, _params_from_args(args))
+    params, execution, annotations = _options_from_args(args)
+    annotate_rois(
+        args.trial_table,
+        params,
+        microscope=args.microscope,
+        scan_mode=args.scan_mode,
+        execution=execution,
+        annotations=annotations,
+    )
     return 0
 
 
-def _cmd_extract(args: argparse.Namespace) -> int:  # pragma: no cover - IO
+def _cmd_extract(args: argparse.Namespace) -> int:
     """Handle ``giant extract`` (source extraction)."""
-    from .pipeline import SourceExtractor
+    from .pipeline.extract import extract_sources
 
-    params = _params_from_args(args)
-    SourceExtractor.for_scan_mode(params.scan_mode, params).run(
-        args.trial_table
+    params, execution, annotations = _options_from_args(args)
+    extract_sources(
+        args.trial_table,
+        params,
+        microscope=args.microscope,
+        scan_mode=args.scan_mode,
+        execution=execution,
+        annotations=annotations,
     )
     return 0
 
@@ -145,8 +164,7 @@ def _cmd_extract(args: argparse.Namespace) -> int:  # pragma: no cover - IO
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point for the ``giant`` console script.
 
-    Dispatches the ``organize``, ``register``, ``annotate``, and ``extract``
-    subcommands to the corresponding pipeline stages.
+    Dispatches ``annotate`` and ``extract`` to their workflow services.
 
     Parameters
     ----------
@@ -157,19 +175,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     -------
     int
         Process exit code (``2`` when no subcommand is given).
+
+    Raises
+    ------
+    SystemExit
+        Invalid options and unsupported workflows print an argparse error
+        and exit with code two, without claiming the operation succeeded.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
-        "organize": _cmd_organize,
-        "register": _cmd_register,
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
     }
     if args.command is None:
         parser.print_help()
         return 2
-    return handlers[args.command](args)
+    try:
+        return handlers[args.command](args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":  # pragma: no cover

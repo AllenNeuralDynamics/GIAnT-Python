@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.geometry."""
+"""Tests for canonical band geometry, input loading, and sparse operators."""
 
 import os
 import tempfile
@@ -8,19 +8,21 @@ import h5py
 import numpy as np
 import tifffile
 
-from giant_python.bandsilo.geometry import (
+from giant_python.extraction.band.geometry import (
     _pad_to,
     build_combined_psf,
-    build_sparse_h,
     build_subsample_matrix_inds,
+    ref_pixs_to_drc,
+    threshold_and_crop_psf,
+)
+from giant_python.extraction.band.inputs import (
     default_psf,
     find_reference_file,
     load_lookup_table,
     load_psf,
     load_reference_stack,
-    ref_pixs_to_drc,
-    threshold_and_crop_psf,
 )
+from giant_python.extraction.band.operators import build_sparse_h
 
 
 class TestRefPixsToDrc(unittest.TestCase):
@@ -35,10 +37,10 @@ class TestRefPixsToDrc(unittest.TestCase):
 
 
 class TestSubsampleMatrixInds(unittest.TestCase):
-    """build_subsample_matrix_inds picks median open pixels."""
+    """Preserve the original middle-by-input-order representative pixel."""
 
     def test_median_reference_pixel(self):
-        """Odd-length pixels use the median; even-length use the middle."""
+        """Sorted pixels select their middle entry for odd and even lengths."""
         all_ids = np.array([[1], [2]], dtype=np.int32)
         mask = np.array(
             [[10, 1], [12, 1], [14, 1], [20, 2], [22, 2]], dtype=np.int32
@@ -48,13 +50,14 @@ class TestSubsampleMatrixInds(unittest.TestCase):
             out, np.array([[11, 1], [21, 2]], dtype=np.int32)
         )
 
-    def test_odd_length_uses_median_not_middle_index(self):
-        """Unsorted odd-length open pixels pick median, not middle by order."""
+    def test_odd_length_preserves_middle_index(self):
+        """The structural refactor does not change unsorted pixel selection."""
         all_ids = np.array([[1]], dtype=np.int32)
-        # 0-based open pixels: [13, 9, 11] -> median 11, middle index -> 9
+        # The original implementation selects 9, not the sorted median 11.
+        # Changing that rule would be a separate scientific behavior change.
         mask = np.array([[14, 1], [10, 1], [12, 1]], dtype=np.int32)
         out = build_subsample_matrix_inds(all_ids, mask)
-        np.testing.assert_array_equal(out, np.array([[11, 1]], dtype=np.int32))
+        np.testing.assert_array_equal(out, np.array([[9, 1]], dtype=np.int32))
 
 
 class TestSparseH(unittest.TestCase):

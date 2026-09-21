@@ -1,10 +1,10 @@
-"""Tests for giant_python.bandsilo.progress (opt-in logging + bars)."""
+"""Tests for giant_python.progress (opt-in logging + bars)."""
 
 import contextlib
 import io
 import unittest
 
-from giant_python.bandsilo.progress import log, progress
+from giant_python.progress import log, progress
 
 
 class TestLog(unittest.TestCase):

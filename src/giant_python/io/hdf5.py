@@ -1,11 +1,13 @@
-"""Generic struct <-> HDF5 (de)serialization (port of load/saveStructFromH5).
+"""MATLAB-style HDF5 decoding and experiment-parameter group writing.
 
 This module is the foundation of MATLAB interoperability: the model
 ``from_h5`` / ``to_h5`` methods build on these helpers. Round-trip tests
 against real MATLAB-produced ``.h5`` files are the acceptance criterion.
 
-Serialization conventions (shared with GIAnT-MATLAB; see the package README)
-------------------------------------------------------------------------
+Serialization conventions
+-------------------------
+Shared with GIAnT-MATLAB; see the package README.
+
 * Writers set ``/row_major`` to ``1`` (Python / h5py) or ``0`` (MATLAB).
 * Dimension tuples in the README match h5py ``shape`` when ``row_major=1``.
 * Vectors documented as ``1 x N`` or ``N x 1`` are written as rank-2
@@ -15,7 +17,7 @@ Serialization conventions (shared with GIAnT-MATLAB; see the package README)
 """
 
 from pathlib import Path
-from typing import Union
+from typing import Union, cast
 
 import h5py
 import numpy as np
@@ -129,25 +131,73 @@ def load_struct_h5(path: Union[str, Path]) -> dict:
     with h5py.File(path, "r") as f:
         row_major = False
         if "row_major" in f:
-            row_major = bool(np.asarray(f["row_major"][()]).reshape(-1)[0])
+            flag = cast(h5py.Dataset, f["row_major"])
+            row_major = bool(np.asarray(flag[()]).reshape(-1)[0])
         return _read_group(f, row_major)
 
 
-def save_struct_h5(struct: dict, path: Union[str, Path]) -> None:
-    """Write a (possibly nested) dict to an HDF5 file as a MATLAB-style struct.
+def to_serializable(val):
+    """Convert nested NumPy values to ordinary Python parameter values."""
+    if isinstance(val, dict):
+        return {k: to_serializable(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return type(val)(to_serializable(v) for v in val)
+    if isinstance(val, np.ndarray):
+        return val.tolist()
+    if isinstance(val, np.generic):
+        return val.item()
+    return val
 
-    Recursively writes nested dictionaries to HDF5 groups/datasets so that the
-    result is readable by GIAnT-MATLAB. Corresponds to saveStructToH5.m in
-    GIAnT-MATLAB.
 
-    Sets ``/row_major = 1``. Rank-2 vector shapes (``1 x N`` / ``N x 1``) are
-    preserved on disk; singleton dimensions are not squeezed.
+def _write_preserved_array(grp: h5py.Group, key: str, value) -> None:
+    """Write a NumPy value with its original shape and numeric dtype."""
+    arr = np.asarray(value)
+    if arr.dtype.kind in ("U", "S", "O"):
+        grp.create_dataset(
+            key,
+            data=np.asarray(_decode_strings(arr), dtype=object),
+            dtype=h5py.string_dtype(encoding="utf-8"),
+        )
+    else:
+        grp.create_dataset(key, data=arr)
 
-    Parameters
-    ----------
-    struct : dict
-        Nested dictionary to serialize.
-    path : str or Path
-        Destination path for the HDF5 file.
+
+def _write_sequence(grp: h5py.Group, key: str, value) -> None:
+    """Skip empty sequences and preserve persisted element stringification."""
+    arr = np.asarray(value)
+    if arr.size == 0:
+        return
+    if arr.dtype.kind in ("U", "S", "O"):
+        grp.create_dataset(
+            key,
+            data=np.array([str(x) for x in value], dtype=object),
+            dtype=h5py.string_dtype(encoding="utf-8"),
+        )
+    else:
+        grp.create_dataset(key, data=arr)
+
+
+def write_dict_to_h5group(grp: h5py.Group, d: dict) -> None:
+    """Write params, skipping empty sequences/None and stringifying unknowns.
+
+    This is deliberately NOT a general lossless struct serializer. Its policy
+    preserves the existing experiment-summary params contract. Decoded arrays
+    retain their dtype/rank (including uint8 boolean parameter scalars).
     """
-    raise NotImplementedError
+    str_dt = h5py.string_dtype(encoding="utf-8")
+    for key, v in d.items():
+        key = str(key)
+        if isinstance(v, dict):
+            write_dict_to_h5group(grp.create_group(key), v)
+        elif isinstance(v, (np.ndarray, np.generic)):
+            _write_preserved_array(grp, key, v)
+        elif isinstance(v, bool):
+            grp.create_dataset(key, data=np.uint8(v))
+        elif isinstance(v, str):
+            grp.create_dataset(key, data=v, dtype=str_dt)
+        elif isinstance(v, (int, float)):
+            grp.create_dataset(key, data=v)
+        elif isinstance(v, (list, tuple)):
+            _write_sequence(grp, key, v)
+        elif v is not None:
+            grp.create_dataset(key, data=str(v), dtype=str_dt)

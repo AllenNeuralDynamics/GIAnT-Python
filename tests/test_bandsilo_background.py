@@ -1,11 +1,11 @@
-"""Tests for giant_python.bandsilo.background (Phase 4 kernels).
+"""Tests for canonical band background, activity, and motion kernels.
 
 Covers the motion-binning, PSF/convolution, interpolated-background,
 noise-model, and rho kernels with synthetic fixtures. ``build_interp_data`` is
 additionally cross-checked against a verbatim copy of the reference in the
 project's development notes; here we assert its structural behavior. The rho
 path is exercised end-to-end on a small synthetic geometry built from the real
-:mod:`giant_python.bandsilo.geometry` helpers, and checked for linearity in the
+:mod:`giant_python.extraction.band.geometry` helpers, checked for linearity in
 residual (rho is a linear projection of the residual).
 """
 
@@ -14,8 +14,10 @@ import unittest
 import numpy as np
 import torch
 
-from giant_python.bandsilo import background as bg
-from giant_python.bandsilo import geometry as geo
+from giant_python.extraction.band import activity
+from giant_python.extraction.band import background as bg
+from giant_python.extraction.band import geometry as geo
+from giant_python.extraction.band import motion_binning, operators
 
 
 def _small_geometry(seed=0, positions_per_plane=None):
@@ -53,31 +55,33 @@ def _small_geometry(seed=0, positions_per_plane=None):
     ref_d, ref_c, ref_r = geo.ref_pixs_to_drc(
         subsample_matrix_inds[:, 0], npc, npr
     )
-    sparse_h_inds, sparse_h_vals = geo.build_sparse_h(
+    sparse_h_inds, sparse_h_vals = operators.build_sparse_h(
         subsample_matrix_inds, psf2d, npc, npr
     )
 
     umyx = np.array([[0, 0], [1, 0]], dtype=np.float64)
-    sel_pix_mask, sel_pix_idxs = bg.build_selected_pixel_mask(
+    sel_pix_mask, sel_pix_idxs = geo.build_selected_pixel_mask(
         umyx, ref_d, ref_r, ref_c, num_fast_zs, npc, npr, psf2d
     )
 
-    psf_tensor, psf_center, psf_tensor_exp, psf_center_exp = bg.expand_psf(
-        psf2d
+    psf_tensor, psf_center, psf_tensor_exp, psf_center_exp = (
+        operators.expand_psf(psf2d)
     )
 
     d_mats = []
     d_mats_exp = []
     for z in range(num_fast_zs):
-        _, sel_2d = bg.selected_pixels_2d_for_plane(sel_pix_idxs, z, npc, npr)
+        _, sel_2d = geo.selected_pixels_2d_for_plane(sel_pix_idxs, z, npc, npr)
         d_mats.append(
-            bg.build_convolution_matrix(sel_2d, psf_tensor, psf_center)
+            operators.build_convolution_matrix(sel_2d, psf_tensor, psf_center)
         )
         d_mats_exp.append(
-            bg.build_convolution_matrix(sel_2d, psf_tensor_exp, psf_center_exp)
+            operators.build_convolution_matrix(
+                sel_2d, psf_tensor_exp, psf_center_exp
+            )
         )
 
-    h_mots = bg.build_motion_h_matrices(
+    h_mots = operators.build_motion_h_matrices(
         sparse_h_inds, sparse_h_vals, umyx, sel_pix_idxs, num_super_pixels, npr
     )
 
@@ -107,7 +111,7 @@ class TestMotionBinning(unittest.TestCase):
         mr = np.array([0.1, 0.2, 5.0])
         mc = np.array([0.0, 0.0, 0.0])
         mz = np.array([0.0, 0.0, 0.0])
-        unique_motion, mot_inds = bg.bin_motion(mr, mc, mz)
+        unique_motion, mot_inds = motion_binning.bin_motion(mr, mc, mz)
         self.assertEqual(unique_motion.shape[1], 3)
         self.assertEqual(mot_inds[0], mot_inds[1])
         self.assertNotEqual(mot_inds[0], mot_inds[2])
@@ -121,7 +125,7 @@ class TestMotionBinning(unittest.TestCase):
         )
         mot_inds = np.array([0] * 5 + [1] * 2 + [2] * 5)
         motion_z = np.zeros(12)
-        keep, frames = bg.select_motion_bins(
+        keep, frames = motion_binning.select_motion_bins(
             unique_motion, mot_inds, motion_z, z_thresh=1.5, min_frames=3
         )
         self.assertEqual(list(keep), [0])
@@ -132,7 +136,9 @@ class TestMotionBinning(unittest.TestCase):
         mr = np.array([0.0, 0.0, 1.0, 1.0])
         mc = np.array([0.0, 0.0, 0.0, 0.0])
         frames_to_keep = np.array([True, True, True, False])
-        umyx, mot_inds_yx = bg.bin_motion_yx(mr, mc, frames_to_keep)
+        umyx, mot_inds_yx = motion_binning.bin_motion_yx(
+            mr, mc, frames_to_keep
+        )
         self.assertEqual(mot_inds_yx[3], -1)
         self.assertEqual(mot_inds_yx[0], mot_inds_yx[1])
         self.assertEqual(umyx.shape[1], 2)
@@ -148,11 +154,11 @@ class TestSelectedPixels(unittest.TestCase):
         ref_c = np.array([5])
         umyx = np.array([[0, 0]], dtype=float)
         psf2d = np.ones((3, 3), dtype=np.float32)
-        mask, idxs = bg.build_selected_pixel_mask(
+        mask, idxs = geo.build_selected_pixel_mask(
             umyx, ref_d, ref_r, ref_c, 1, 12, 12, psf2d
         )
         self.assertEqual(int(mask.sum()), idxs.size)
-        coords = bg.pixel_coords_from_idxs(idxs, 12, 12)
+        coords = geo.pixel_coords_from_idxs(idxs, 12, 12)
         # every decoded coordinate should be marked in the mask
         for z, r, c in coords:
             self.assertTrue(mask[z, r, c])
@@ -160,9 +166,9 @@ class TestSelectedPixels(unittest.TestCase):
     def test_selected_pixels_2d_for_plane(self):
         """Plane selection returns the in-plane row/col for that z only."""
         idxs = np.array([0 * 25 + 2 * 5 + 3, 1 * 25 + 4 * 5 + 1])
-        z0, sel0 = bg.selected_pixels_2d_for_plane(idxs, 0, 5, 5)
+        z0, sel0 = geo.selected_pixels_2d_for_plane(idxs, 0, 5, 5)
         self.assertEqual(sel0.tolist(), [[2, 3]])
-        z1, sel1 = bg.selected_pixels_2d_for_plane(idxs, 1, 5, 5)
+        z1, sel1 = geo.selected_pixels_2d_for_plane(idxs, 1, 5, 5)
         self.assertEqual(sel1.tolist(), [[4, 1]])
 
 
@@ -173,7 +179,7 @@ class TestPsfConvolution(unittest.TestCase):
         """Both PSFs sum to 1 and the expanded one is ex_fac larger."""
         yy, xx = np.mgrid[-2:3, -2:3]
         psf2d = np.exp(-(yy**2 + xx**2) / 2.0).astype(np.float32)
-        pt, pc, pte, pce = bg.expand_psf(psf2d, ex_fac=2)
+        pt, pc, pte, pce = operators.expand_psf(psf2d, ex_fac=2)
         self.assertAlmostEqual(float(pt.sum()), 1.0, places=5)
         self.assertAlmostEqual(float(pte.sum()), 1.0, places=5)
         self.assertEqual(tuple(pte.shape), (10, 10))
@@ -184,9 +190,9 @@ class TestPsfConvolution(unittest.TestCase):
         """D[t, s] equals the PSF weight at the target-source offset."""
         yy, xx = np.mgrid[-2:3, -2:3]
         psf2d = np.exp(-(yy**2 + xx**2) / 2.0).astype(np.float32)
-        pt, pc, _, _ = bg.expand_psf(psf2d)
+        pt, pc, _, _ = operators.expand_psf(psf2d)
         sel_2d = np.array([[5, 5], [6, 5], [5, 8]])
-        d = bg.build_convolution_matrix(sel_2d, pt, pc)
+        d = operators.build_convolution_matrix(sel_2d, pt, pc)
         # self entry == center weight
         self.assertAlmostEqual(float(d[0, 0]), float(pt[pc[0], pc[1]]), 5)
         # offset (1, 0): target row+1 -> psf[center+1, center]
@@ -199,7 +205,7 @@ class TestPsfConvolution(unittest.TestCase):
     def test_convolution_matrix_empty(self):
         """An empty plane yields a 0x0 matrix."""
         pt = torch.ones((3, 3))
-        d = bg.build_convolution_matrix(
+        d = operators.build_convolution_matrix(
             np.zeros((0, 2), dtype=int), pt, (1, 1)
         )
         self.assertEqual(tuple(d.shape), (0, 0))
@@ -340,6 +346,7 @@ class TestRollingBaseline(unittest.TestCase):
         """With no NaNs, the baseline is a centered moving median."""
 
         def brute_rolling_median(data, window):
+            """Compute clipped centered medians from finite row samples."""
             n = data.shape[1]
             out = np.full(data.shape, np.nan, dtype=float)
             for r in range(data.shape[0]):
@@ -472,11 +479,11 @@ class TestRho(unittest.TestCase):
             dmd_pixels_per_row=g["npr"],
             psf2d=g["psf2d"],
         )
-        rho = bg.compute_rho(residual, mot_yx, **kwargs)
+        rho = activity.compute_rho(residual, mot_yx, **kwargs)
         self.assertEqual(rho.shape, (g["sel_pix_idxs"].shape[0], n_frames))
         self.assertTrue(np.any(np.isfinite(rho)))
 
-        rho2 = bg.compute_rho(2.0 * residual, mot_yx, **kwargs)
+        rho2 = activity.compute_rho(2.0 * residual, mot_yx, **kwargs)
         finite = np.isfinite(rho) & np.isfinite(rho2)
         np.testing.assert_allclose(
             rho2[finite], 2.0 * rho[finite], rtol=1e-4, atol=1e-5
@@ -494,7 +501,7 @@ class TestRho(unittest.TestCase):
         # All frames in bin 0; bin 1 gets none -> motion_frames empty branch
         mot_yx = np.zeros(n_frames, dtype=np.int32)
         # Add a third, always-empty z-plane -> new_ncols == 0 branch
-        rho = bg.compute_rho(
+        rho = activity.compute_rho(
             residual,
             mot_yx,
             unique_motion_to_keep_yx=g["umyx"],
@@ -526,7 +533,7 @@ class TestRho(unittest.TestCase):
             .astype(np.float32)
         )
         mot_yx = np.array([0, 1] * (n_frames // 2), dtype=np.int32)
-        rho = bg.compute_rho(
+        rho = activity.compute_rho(
             residual,
             mot_yx,
             unique_motion_to_keep_yx=g["umyx"],
@@ -554,7 +561,7 @@ class TestRho(unittest.TestCase):
             [[1.0, 2.0, 3.0, 4.0], [np.nan, np.nan, np.nan, 1.0]],
             dtype=np.float32,
         )
-        nan_ct = bg.mask_high_nan_rho(rho, thresh=0.5)
+        nan_ct = activity.mask_high_nan_rho(rho, thresh=0.5)
         self.assertAlmostEqual(nan_ct[0], 0.0)
         self.assertAlmostEqual(nan_ct[1], 0.75)
         self.assertTrue(np.all(np.isnan(rho[1])))
@@ -562,7 +569,7 @@ class TestRho(unittest.TestCase):
 
     def test_decay_kernel_normalized(self):
         """The decay kernel sums to 1 and rises to its last sample."""
-        k = bg.decay_kernel_1d(0.15, 80.0)
+        k = activity.decay_kernel_1d(0.15, 80.0)
         self.assertAlmostEqual(float(k.sum()), 1.0, places=6)
         self.assertEqual(np.argmax(k), len(k) - 1)
 
@@ -574,8 +581,8 @@ class TestRho(unittest.TestCase):
                 np.full((1, 50), np.nan, dtype=np.float32),
             ]
         )
-        k = bg.decay_kernel_1d(0.05, 80.0)
-        out = bg.smooth_rho(rho, k)
+        k = activity.decay_kernel_1d(0.05, 80.0)
+        out = activity.smooth_rho(rho, k)
         # interior samples of the constant row remain ~2.0
         np.testing.assert_allclose(out[0, 10:40], 2.0, rtol=1e-4)
         self.assertTrue(np.all(np.isnan(out[1])))
@@ -583,8 +590,8 @@ class TestRho(unittest.TestCase):
     def test_smooth_rho_all_nan_chunk(self):
         """A chunk with no finite data is passed through unchanged."""
         rho = np.full((3, 20), np.nan, dtype=np.float32)
-        k = bg.decay_kernel_1d(0.05, 80.0)
-        out = bg.smooth_rho(rho, k)
+        k = activity.decay_kernel_1d(0.05, 80.0)
+        out = activity.smooth_rho(rho, k)
         self.assertTrue(np.all(np.isnan(out)))
 
 

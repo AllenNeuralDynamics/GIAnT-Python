@@ -26,15 +26,13 @@ dependencies = [
     "h5py",
     "tifffile",
     "joblib",
+    "tqdm",
     "torch",
     "opencv-python",
     "pandas",
     "bottleneck",
     "slap2_utils @ git+https://github.com/m-xie/SLAP2_Utils.git@multidatafiles",
 ]
-
-[project.optional-dependencies]
-gui = ["napari"]
 
 [project.scripts]
 giant = "giant_python.cli:main"

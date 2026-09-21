@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.traces (Phase 7 high-res traces).
+"""Tests for canonical band traces (Phase 7 high-res traces).
 
 Covers the per-trial compute (motion interp/binning, per-motion least-squares
 ``phi``/``F0``, global and per-ROI fluorescence) and the IO wrapper's
@@ -12,8 +12,9 @@ import unittest
 import numpy as np
 import torch
 
-from giant_python.bandsilo import geometry as geo
-from giant_python.bandsilo import traces as tr
+from giant_python.extraction.band import operators
+from giant_python.extraction.band import traces as tr
+from giant_python.extraction.band.types import TrialTraceResult
 
 
 def _geometry(npc=15, npr=15, num_fast_zs=2):
@@ -27,7 +28,7 @@ def _geometry(npc=15, npr=15, num_fast_zs=2):
     smi = np.array(rows, dtype=np.int32)
     yy, xx = np.mgrid[-2:3, -2:3]
     psf2d = np.exp(-(yy**2 + xx**2) / 2.0).astype(np.float32)
-    sh_inds, sh_vals = geo.build_sparse_h(smi, psf2d, npc, npr)
+    sh_inds, sh_vals = operators.build_sparse_h(smi, psf2d, npc, npr)
     return dict(
         npc=npc,
         npr=npr,
@@ -120,6 +121,15 @@ class TestComputeHighResTraces(unittest.TestCase):
         """Returns the 8-tuple; phi/F0 are per-frame per-source with fits."""
         inp = _trial_inputs(num_channels=1)
         out = _compute(inp)
+        self.assertIsInstance(out, TrialTraceResult)
+        self.assertIs(out.d_f, out[0])
+        self.assertIs(out.f0_ls, out[1])
+        self.assertIs(out.frame_line_idxs, out[2])
+        self.assertIs(out.selected_pixels, out[3])
+        self.assertIs(out.global_f, out[4])
+        self.assertIs(out.reference_offsets, out[5])
+        self.assertIs(out.online_shifts, out[6])
+        self.assertIs(out.user_roi_f, out[7])
         phi, f0, frames, sel, global_f, motion, online, f_soma = out
         n_sources = inp["a_final"].shape[1]
         self.assertEqual(phi.shape, (inp["n_frames"], n_sources))
@@ -183,6 +193,7 @@ class TestGetHighResTraces(unittest.TestCase):
             2,
             inp["soma_sps"],
         )
+        self.assertIsInstance(out, TrialTraceResult)
         self.assertEqual(out[0].shape, (0, inp["a_final"].shape[1]))
         self.assertEqual(out[4].shape, (0, 2))  # globalF (0, channels)
         self.assertEqual(out[2].shape, (0,))  # frames

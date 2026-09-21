@@ -7,15 +7,9 @@ import unittest
 import h5py
 import numpy as np
 
-from giant_python.io import (
-    get_online_motion,
-    load_struct_h5,
-    read_band_trial_data,
-    ref_pixs_to_drc,
-    save_struct_h5,
-    scanimagetiff_data_wrapper,
-    scanimagetiff_wrapper,
-)
+from giant_python import io
+from giant_python.extraction.band import geometry, trial_data
+from giant_python.io import load_struct_h5, slap2
 from giant_python.io.hdf5 import _decode_one, _decode_strings
 
 
@@ -34,7 +28,7 @@ class TestDecodeHelpers(unittest.TestCase):
 
 
 class TestHdf5(unittest.TestCase):
-    """Tests for the generic struct <-> HDF5 helpers."""
+    """Tests for the generic HDF5 struct reader."""
 
     def test_load_struct_h5_faithful(self):
         """load_struct_h5 mirrors groups, decodes strings, honors row_major."""
@@ -71,43 +65,29 @@ class TestHdf5(unittest.TestCase):
             out = load_struct_h5(path)
         np.testing.assert_array_equal(out["mat"], np.array([[1, 2, 3]]))
 
-    def test_save_struct_h5(self):
-        """save_struct_h5 raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            save_struct_h5({}, "dummy.h5")
-
-
-class TestTiff(unittest.TestCase):
-    """Tests for the ScanImage TIFF readers."""
-
-    def test_scanimagetiff_wrapper(self):
-        """scanimagetiff_wrapper raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            scanimagetiff_wrapper("dummy.tif")
-
-    def test_scanimagetiff_data_wrapper(self):
-        """scanimagetiff_data_wrapper raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            scanimagetiff_data_wrapper(None, "dummy.tif")
-
 
 class TestSlap2(unittest.TestCase):
-    """Tests for SLAP2 readers (online motion + band)."""
-
-    def test_get_online_motion(self):
-        """get_online_motion raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            get_online_motion(None, np.arange(10))
+    """Tests for SLAP2 reader and band reduction ownership."""
 
     def test_ref_pixs_to_drc(self):
-        """ref_pixs_to_drc raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            ref_pixs_to_drc(np.arange(10), 4, 4)
+        """Reference-pixel conversion belongs to band geometry, not IO."""
+        self.assertTrue(callable(geometry.ref_pixs_to_drc))
+        self.assertEqual(
+            geometry.ref_pixs_to_drc.__module__, geometry.__name__
+        )
+        for module in (io, slap2):
+            self.assertFalse(hasattr(module, "ref_pixs_to_drc"))
+        self.assertNotIn("ref_pixs_to_drc", io.__all__)
 
     def test_read_band_trial_data(self):
-        """read_band_trial_data raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            read_band_trial_data(None, np.arange(5), np.arange(3))
+        """Band reduction remains canonical without an IO compatibility API."""
+        self.assertTrue(callable(trial_data.read_band_trial_data))
+        self.assertEqual(
+            trial_data.read_band_trial_data.__module__, trial_data.__name__
+        )
+        for module in (io, slap2):
+            self.assertFalse(hasattr(module, "read_band_trial_data"))
+        self.assertNotIn("read_band_trial_data", io.__all__)
 
 
 if __name__ == "__main__":

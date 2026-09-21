@@ -1,12 +1,21 @@
-"""Tests for giant_python.bandsilo.annotate (pure seams + load/fail-fast)."""
+"""Tests for band annotation's pure seams and split-policy orchestration."""
 
+import os
 import tempfile
 import unittest
+from copy import deepcopy
+from unittest import mock
 
 import numpy as np
 
-from giant_python.bandsilo import annotate as an
-from giant_python.bandsilo.gui import save_annotations_h5
+from giant_python.extraction.band import annotation as an
+from giant_python.io.annotations import save_annotations_h5
+from giant_python.models import (
+    AnnotationOptions,
+    BandSiloParams,
+    ExecutionOptions,
+    TrialTable,
+)
 
 
 class TestFirstValidTrial(unittest.TestCase):
@@ -145,6 +154,73 @@ class TestResolveUserRois(unittest.TestCase):
                 )
         draw.assert_called_once()
         self.assertIs(out, sentinel)
+
+
+class TestAnnotationService(unittest.TestCase):
+    """Annotation validates scoped options before IO without legacy bridges."""
+
+    def test_split_options_and_in_memory_input(self):
+        """The explicit step uses GUI/run policy and never mutates callers."""
+        input = TrialTable()
+        params = BandSiloParams()
+        execution = ExecutionOptions(verbose=True)
+        annotations = AnnotationOptions(interactive=False, operator="Ada")
+        before = deepcopy((params, execution, annotations))
+        table = {
+            "fn_adata": np.array([["a.h5"]]),
+            "filename": np.array([["trial"]]),
+            "datadr": "/data",
+            "annotation_save_dr": "/annotations",
+            "moco_save_dr": "/motion",
+            "n_dmds": 1,
+        }
+        with (
+            mock.patch.object(
+                an, "load_trial_table", return_value=table
+            ) as load,
+            mock.patch.object(
+                an, "compute_keep_trials", return_value=np.array([[True]])
+            ),
+            mock.patch.object(an.inputs, "load_lookup_table"),
+            mock.patch.object(
+                an, "build_user_roi_geometry", return_value=({}, {})
+            ),
+            mock.patch.object(an, "resolve_user_rois") as resolve,
+            mock.patch.object(an, "log") as log,
+        ):
+            result = an.annotate_band_rois(
+                input,
+                params=params,
+                execution=execution,
+                annotations=annotations,
+            )
+        load.assert_called_once_with(input)
+        resolve.assert_called_once_with(
+            "/annotations", 1, {}, interactive=False, ref_files={}
+        )
+        self.assertEqual(
+            result, os.path.join("/annotations", "annotations.h5")
+        )
+        self.assertTrue(all(call.args[1] for call in log.call_args_list))
+        self.assertEqual((params, execution, annotations), before)
+        self.assertFalse(annotations.enabled)
+
+    def test_mixed_options_rejected_before_io(self):
+        """Mis-scoped dictionaries and removed keywords cannot load data."""
+        with mock.patch.object(an, "load_trial_table") as load:
+            for kwargs in (
+                {"params": {"max_workers": 2}},
+                {"params": {"operator": "Ada"}},
+                {"params": {"scan_mode": "band"}},
+                {"execution": {"enabled": True}},
+                {"annotations": {"draw_user_rois": True}},
+                {"params_in": {}},
+            ):
+                with self.subTest(kwargs=kwargs):
+                    with self.assertRaises(TypeError):
+                        an.annotate_band_rois("trial.h5", **kwargs)
+        load.assert_not_called()
+        self.assertFalse(hasattr(an, "_resolve_params"))
 
 
 if __name__ == "__main__":

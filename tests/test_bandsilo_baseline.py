@@ -1,4 +1,4 @@
-"""Tests for giant_python.bandsilo.baseline (Phase 7 F0 / dF-F).
+"""Tests for giant_python.numerics.baseline (Phase 7 F0 / dF-F).
 
 Covers the NaN-aware moving mean, the rolling-min-envelope ``compute_f0``
 baseline estimator, and the dF/F assembly. ``compute_f0`` is additionally
@@ -10,7 +10,7 @@ import unittest
 
 import numpy as np
 
-from giant_python.bandsilo import baseline as bl
+from giant_python.numerics import baseline as bl
 
 
 class TestMovmeanNan(unittest.TestCase):

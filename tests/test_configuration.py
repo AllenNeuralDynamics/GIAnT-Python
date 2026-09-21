@@ -1,0 +1,184 @@
+"""Contracts for scientific configuration and independent run policies."""
+
+import math
+import unittest
+from copy import deepcopy
+
+from giant_python.models.params import (
+    AnnotationOptions,
+    BandSiloParams,
+    ExecutionOptions,
+    resolve_band_options,
+)
+
+
+class TestBandConfiguration(unittest.TestCase):
+    """Resolution preserves numerical defaults and never mutates inputs."""
+
+    def test_defaults_match_existing_science(self):
+        """The split is architectural, not a scientific retuning."""
+        science, execution, annotations = resolve_band_options()
+        self.assertEqual(science.peakth, 7.0)
+        self.assertEqual(science.denoise_window_s, 1.0)
+        self.assertEqual(science.vif, 1.38)
+        self.assertEqual(science.sparse_fac, math.exp(-3.0))
+        self.assertEqual(execution, ExecutionOptions(6, False, None))
+        self.assertEqual(
+            annotations, AnnotationOptions(False, None, "SLAP2 User")
+        )
+        self.assertFalse(hasattr(science, "max_workers"))
+        self.assertFalse(hasattr(science, "scan_mode"))
+        self.assertFalse(hasattr(science, "interactive"))
+
+    def test_science_rejects_mixed_and_routing_fields(self):
+        """Science dictionaries never dispatch other scopes or old names."""
+        for name, value in (
+            ("microscope", "slap2"),
+            ("scan_mode", "band"),
+            ("max_workers", 2),
+            ("max_trials", 3),
+            ("verbose", True),
+            ("operator", "Ada"),
+            ("enabled", True),
+            ("interactive", False),
+            ("draw_user_rois", True),
+            ("sigma_px", 1.5),
+            ("lambda_", 0.1),
+            ("phi", None),
+            ("tau_s", None),
+            ("photon_scale", None),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(TypeError, name):
+                    resolve_band_options({"peakth": 7.0, name: value})
+
+    def test_every_result_is_fresh(self):
+        """Typed inputs and each default result are independent objects."""
+        original = (BandSiloParams(), ExecutionOptions(), AnnotationOptions())
+        resolved = resolve_band_options(*original)
+        for actual, expected in zip(resolved, original):
+            self.assertEqual(actual, expected)
+            self.assertIsNot(actual, expected)
+        self.assertIsNot(resolve_band_options()[0], resolved[0])
+
+    def test_dictionary_inputs_and_overrides_are_not_modified(self):
+        """Each dictionary affects only its scope and is copied."""
+        params = {"analyze_hz": 80.0}
+        execution = {"max_workers": 2, "verbose": True}
+        annotations = {
+            "enabled": True,
+            "interactive": False,
+            "operator": "Grace",
+        }
+        original = deepcopy((params, execution, annotations))
+        science, run, roi = resolve_band_options(
+            params, execution, annotations
+        )
+        self.assertEqual(science.analyze_hz, 80.0)
+        self.assertEqual(run, ExecutionOptions(2, True, None))
+        self.assertEqual(roi, AnnotationOptions(True, False, "Grace"))
+        self.assertEqual((params, execution, annotations), original)
+
+
+class TestConfigurationValidation(unittest.TestCase):
+    """Reject unsupported settings before they reach numerical kernels."""
+
+    def test_positive_scientific_values(self):
+        """Rates, windows and positive scale values must be finite."""
+        for name in (
+            "analyze_hz",
+            "decay_tau_s",
+            "baseline_window_s",
+            "denoise_window_s",
+            "vif",
+            "sparse_fac",
+            "peakth",
+        ):
+            for value in (0, -1, math.nan, math.inf, True, "1", None):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        BandSiloParams(**{name: value})
+
+    def test_positive_counts(self):
+        """Count overrides require positive integers, not floats or bools."""
+        for name in ("d_xy", "peak_buffer", "psf_dilation", "num_channels"):
+            for value in (0, -1, 1.5, True):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        BandSiloParams(**{name: value})
+        self.assertIsNone(BandSiloParams().num_channels)
+        self.assertEqual(BandSiloParams(num_channels=2).num_channels, 2)
+
+    def test_interpolation_and_activity_channel(self):
+        """Only existing interpolation modes and activity channel zero work."""
+        for mode in ("linear", "cubic"):
+            self.assertEqual(
+                BandSiloParams(
+                    background_interpolation=mode
+                ).background_interpolation,
+                mode,
+            )
+        with self.assertRaisesRegex(ValueError, "interpolation"):
+            BandSiloParams(background_interpolation="nearest")
+        for channel in (1, -1, 0.0, False, None):
+            with self.subTest(channel=channel):
+                with self.assertRaisesRegex(ValueError, "activity_channel"):
+                    BandSiloParams(activity_channel=channel)
+
+    def test_execution_and_annotation_policy(self):
+        """Execution counts and tri-state GUI settings are validated."""
+        for name in ("max_workers", "max_trials"):
+            for value in (0, -1, 1.5, True):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        ExecutionOptions(**{name: value})
+        with self.assertRaisesRegex(ValueError, "verbose"):
+            ExecutionOptions(verbose=1)
+        for name, value in (
+            ("enabled", 1),
+            ("interactive", "false"),
+            ("operator", None),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, name):
+                    AnnotationOptions(**{name: value})
+
+    def test_resolver_revalidates_mutated_carriers(self):
+        """Dataclass mutability cannot bypass validation at resolution."""
+        science = BandSiloParams()
+        science.num_channels = 0
+        with self.assertRaisesRegex(ValueError, "num_channels"):
+            resolve_band_options(science)
+        execution = ExecutionOptions()
+        execution.max_workers = 0
+        with self.assertRaisesRegex(ValueError, "max_workers"):
+            resolve_band_options(execution=execution)
+        annotations = AnnotationOptions()
+        annotations.interactive = "false"
+        with self.assertRaisesRegex(ValueError, "interactive"):
+            resolve_band_options(annotations=annotations)
+
+    def test_bad_input_and_unknown_keys(self):
+        """Typos and wrong container types do not silently use defaults."""
+        for params in (42, {"analyze_hzz": 80}):
+            with self.assertRaises(TypeError):
+                resolve_band_options(params)
+        for keyword, value in (
+            ("execution", False),
+            ("annotations", "headless"),
+            ("execution", {"max_worker": 2}),
+            ("annotations", {"draw_user_rois": True}),
+            ("execution", {"operator": "Ada"}),
+            ("execution", {"peakth": 7}),
+            ("annotations", {"max_workers": 2}),
+            ("annotations", {"scan_mode": "band"}),
+        ):
+            with self.subTest(keyword=keyword, value=value):
+                with self.assertRaises(TypeError):
+                    resolve_band_options(**{keyword: value})
+        with self.assertRaises(TypeError):
+            resolve_band_options({"enabled": True, "draw_user_rois": False})
+
+
+if __name__ == "__main__":
+    unittest.main()

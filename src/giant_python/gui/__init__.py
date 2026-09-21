@@ -1,10 +1,4 @@
-"""Interactive GUI for ROI annotation.
+"""Parameter and ROI editors with toolkit imports deferred until use.
 
-Import-isolated: the headless pipeline never imports this package, so
-``pip install giant-python`` works on a server without GUI dependencies. The
-GUI extras (e.g. napari) are pulled in via ``pip install giant-python[gui]``.
+Use the public pipeline annotation service for the complete ROI workflow.
 """
-
-from .draw_rois import DrawROIs, annotate_rois
-
-__all__ = ["annotate_rois", "DrawROIs"]

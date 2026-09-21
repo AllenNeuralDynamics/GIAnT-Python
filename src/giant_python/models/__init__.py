@@ -1,22 +1,33 @@
 """Typed data models for GIAnT-Python.
 
-These dataclasses are the single source of truth for the on-disk HDF5 schema
-shared with GIAnT-MATLAB. Each model knows how to (de)serialize itself via
-``from_h5`` / ``to_h5`` so that files written by either toolbox remain
-interchangeable.
+Scientific configuration is distinct from run and annotation policy.
+Implemented model codecs delegate to shared IO.
 """
 
-from .alignment import AlignmentData
-from .experiment import ExperimentSummary, Source, UserRoi, Visualizations
-from .params import AlignParams, SiloParams, set_params
+from .experiment_summary import (
+    ExperimentSummary,
+    FrameInfo,
+    PathSummary,
+    Source,
+    UserRoi,
+    Visualizations,
+)
+from .params import (
+    AnnotationOptions,
+    BandSiloParams,
+    ExecutionOptions,
+    resolve_band_options,
+)
 from .trial_table import Slap2Info, TrialTable
 
 __all__ = [
-    "AlignmentData",
-    "AlignParams",
+    "AnnotationOptions",
+    "BandSiloParams",
+    "ExecutionOptions",
     "ExperimentSummary",
-    "set_params",
-    "SiloParams",
+    "FrameInfo",
+    "PathSummary",
+    "resolve_band_options",
     "Slap2Info",
     "Source",
     "TrialTable",

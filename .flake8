@@ -7,3 +7,5 @@ exclude =
     venv, 
     .conda
 max-complexity = 10
+# Black's PEP 8-compliant slice formatting conflicts with pycodestyle E203.
+extend-ignore = E203
