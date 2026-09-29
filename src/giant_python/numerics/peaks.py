@@ -36,6 +36,9 @@ _AMP_SCALE = 1.0 / 0.75
 # MAD -> Gaussian-sigma scale factor (median absolute deviation / 0.6745).
 _MAD_TO_SIGMA = 0.67449
 
+# Minimum finite-pixel count for an independent background estimate.
+_MIN_COMPONENT_PIXELS = 100
+
 
 def _validate_theta(theta: np.ndarray) -> None:
     """Require explicit amplitude, center and both axis-width columns."""
@@ -654,7 +657,7 @@ def detect_peaks_2d(
     exclusion_mask : ndarray of bool, shape (H, W)
         Pixels to exclude from detection.
     mu_bg, sigma_bg : float
-        Global background median and MAD-scaled sigma.
+        Background median and MAD-scaled sigma for the supplied region.
     peak_thresh : float
         Absolute detection threshold ``mu_bg + peak_th * sigma_bg``.
     peak_th : float
@@ -758,9 +761,12 @@ def get_act_im_peaks(
 ) -> np.ndarray:
     """Find Gaussian source seeds in a 3-D (Z, H, W) activity image.
 
-    Background statistics (median and MAD-scaled sigma) and the detection
-    threshold are computed once across all planes for uniform sensitivity, then
-    each plane is detected independently (:func:`detect_peaks_2d`).
+    Each plane is split into 4-connected components of finite pixels. Regions
+    with fewer than 100 pixels or zero MAD are skipped. Background statistics
+    (median and MAD-scaled sigma) and the detection threshold are computed
+    independently for each remaining component. Detection and fitting are
+    restricted to that component (:func:`detect_peaks_2d`). Exclusion masks
+    suppress peak detection but do not affect connectivity or background stats.
 
     Gaussians have independent, axis-aligned standard deviations, bounded to
     ``0.35 <= sigma_y <= 8`` and ``0.35 <= sigma_x <= 1`` pixels.
@@ -771,9 +777,9 @@ def get_act_im_peaks(
     Parameters
     ----------
     act_im : ndarray of shape (Z, H, W)
-        Activity image (may contain NaNs).
+        Activity image; nonfinite pixels separate valid-pixel components.
     peak_th : float
-        Threshold in MAD-normalized standard deviations.
+        Threshold in component-local MAD-normalized standard deviations.
     exclusion_mask : None or ndarray
         ``None``, a 2-D ``(H, W)`` mask applied to every plane, or a 3-D
         ``(Z, H, W)`` per-plane mask (e.g. user soma ROIs).
@@ -796,35 +802,47 @@ def get_act_im_peaks(
     else:
         excl_planes = [exclusion_mask[z].astype(bool) for z in range(n_z)]
 
-    valid_vals = act_im[~np.isnan(act_im)]
-    if valid_vals.size == 0:
-        return empty
-
-    mu_bg = float(np.nanmedian(act_im))
-    sigma_bg = (
-        float(np.median(np.abs(valid_vals - np.median(valid_vals))))
-        / _MAD_TO_SIGMA
-    )
-    if sigma_bg <= 0:
-        return empty
-
-    peak_thresh = mu_bg + peak_th * sigma_bg
-
     source_seeds_list = []
     for z in range(n_z):
-        thetaf_z = detect_peaks_2d(
-            act_im[z],
-            excl_planes[z],
-            mu_bg,
-            sigma_bg,
-            peak_thresh,
-            peak_th,
-            buffer_size=buffer_size,
+        labels, _ = cast(
+            tuple[np.ndarray, int], ndimage.label(np.isfinite(act_im[z]))
         )
-        if thetaf_z.shape[0] > 0:
-            z_col = np.full((thetaf_z.shape[0], 1), z, dtype=float)
-            source_seeds_list.append(
-                np.column_stack([z_col, thetaf_z[:, 1], thetaf_z[:, 2]])
+        counts = np.bincount(labels.ravel())
+        for label, bounds in enumerate(ndimage.find_objects(labels), start=1):
+            if bounds is None or counts[label] < _MIN_COMPONENT_PIXELS:
+                continue
+
+            component = labels[bounds] == label
+            plane_crop = act_im[z][bounds]
+            valid_vals = plane_crop[component]
+            mu_bg = float(np.median(valid_vals))
+            sigma_bg = (
+                float(np.median(np.abs(valid_vals - mu_bg))) / _MAD_TO_SIGMA
             )
+            if sigma_bg <= 0:
+                continue
+
+            # NaN-mask other regions, including any inside this bounding box,
+            # so neither the initial fit nor residual refinement uses them.
+            thetaf = detect_peaks_2d(
+                np.where(component, plane_crop, np.nan),
+                excl_planes[z][bounds],
+                mu_bg,
+                sigma_bg,
+                mu_bg + peak_th * sigma_bg,
+                peak_th,
+                buffer_size=buffer_size,
+            )
+            if thetaf.shape[0] > 0:
+                z_col = np.full(thetaf.shape[0], z, dtype=float)
+                source_seeds_list.append(
+                    np.column_stack(
+                        [
+                            z_col,
+                            thetaf[:, 1] + bounds[0].start,
+                            thetaf[:, 2] + bounds[1].start,
+                        ]
+                    )
+                )
 
     return np.vstack(source_seeds_list) if source_seeds_list else empty

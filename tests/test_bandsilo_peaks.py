@@ -539,6 +539,121 @@ class TestDetectPeaks2d(unittest.TestCase):
 class TestGetActImPeaks(unittest.TestCase):
     """get_act_im_peaks 3-D driver and its guard branches."""
 
+    def test_component_local_statistics_and_coordinates(self):
+        """Each component and plane gets its own median, MAD and threshold."""
+        act = np.full((2, 16, 29), np.nan)
+        base = np.linspace(-1.0, 1.0, 100).reshape(10, 10)
+        regions = [
+            (0, 2, 3, base),
+            (0, 4, 18, 5.0 + 8.0 * base),
+            (1, 2, 3, 2.0 + 3.0 * base),
+        ]
+        for z, y, x, values in regions:
+            act[z, y : y + 10, x : x + 10] = values
+        original = act.copy()
+        fitted = np.array([[10.0, 4.2, 5.3, 0.5, 0.5]])
+        with patch.object(
+            pk, "detect_peaks_2d", return_value=fitted
+        ) as detect:
+            seeds = pk.get_act_im_peaks(act, peak_th=4.0, buffer_size=3)
+
+        self.assertEqual(detect.call_count, 3)
+        expected_seeds = []
+        for call, (z, y, x, values) in zip(detect.call_args_list, regions):
+            image, mask, mu, sigma, threshold, peak_th = call.args
+            expected_mu = np.median(values)
+            expected_sigma = np.median(np.abs(values - expected_mu)) / 0.67449
+            np.testing.assert_array_equal(image, values)
+            self.assertFalse(mask.any())
+            self.assertAlmostEqual(mu, expected_mu)
+            self.assertAlmostEqual(sigma, expected_sigma)
+            self.assertAlmostEqual(threshold, expected_mu + 4 * expected_sigma)
+            self.assertEqual(peak_th, 4.0)
+            self.assertEqual(call.kwargs, {"buffer_size": 3})
+            expected_seeds.append([z, y + 4.2, x + 5.3])
+        np.testing.assert_allclose(seeds, expected_seeds)
+        np.testing.assert_array_equal(act, original)
+
+    def test_minimum_size_is_per_plane_and_inclusive(self):
+        """99-pixel regions are skipped even across z; 100 pixels qualifies."""
+        act = np.full((2, 12, 23), np.nan)
+        act[:, :9, :11] = np.arange(99).reshape(9, 11)
+        act[0, :10, 13:23] = np.arange(100).reshape(10, 10)
+        with patch.object(
+            pk, "detect_peaks_2d", return_value=np.zeros((0, 5))
+        ) as detect:
+            seeds = pk.get_act_im_peaks(act)
+        self.assertEqual(detect.call_count, 1)
+        self.assertEqual(detect.call_args.args[0].shape, (10, 10))
+        self.assertEqual(seeds.shape, (0, 3))
+
+    def test_diagonal_regions_are_not_connected(self):
+        """Diagonal contact does not merge two sub-100-pixel regions."""
+        act = np.full((1, 18, 18), np.nan)
+        act[0, :9, :9] = np.arange(81).reshape(9, 9)
+        act[0, 9:, 9:] = np.arange(81).reshape(9, 9)
+        with patch.object(pk, "detect_peaks_2d") as detect:
+            seeds = pk.get_act_im_peaks(act)
+        detect.assert_not_called()
+        self.assertEqual(seeds.shape, (0, 3))
+
+    def test_nested_components_and_exclusion_masks(self):
+        """Regions never share fit pixels; exclusions do not split CCs."""
+        act = np.arange(900, dtype=float).reshape(1, 30, 30)
+        act[0, 8:22, 8:22] = np.inf
+        act[0, 10:20, 10:20] = np.arange(100).reshape(10, 10)
+        outer = np.isfinite(act[0])
+        outer[10:20, 10:20] = False
+        for shape in [(30, 30), (1, 30, 30)]:
+            with self.subTest(mask_shape=shape):
+                exclusion = np.zeros(shape, dtype=bool)
+                exclusion[..., 14:16, :] = True
+                mask = exclusion if exclusion.ndim == 2 else exclusion[0]
+                with patch.object(
+                    pk, "detect_peaks_2d", return_value=np.zeros((0, 5))
+                ) as detect:
+                    pk.get_act_im_peaks(act, exclusion_mask=exclusion)
+                self.assertEqual(detect.call_count, 2)
+                outer_call, inner_call = detect.call_args_list
+                np.testing.assert_array_equal(
+                    np.isfinite(outer_call.args[0]), outer
+                )
+                np.testing.assert_array_equal(outer_call.args[1], mask)
+                self.assertAlmostEqual(
+                    outer_call.args[2], np.median(act[0][outer])
+                )
+                np.testing.assert_array_equal(
+                    inner_call.args[0], act[0, 10:20, 10:20]
+                )
+                np.testing.assert_array_equal(
+                    inner_call.args[1], mask[10:20, 10:20]
+                )
+
+    def test_zero_mad_component_does_not_skip_other_components(self):
+        """A constant region is skipped independently of a noisy region."""
+        act = np.ones((1, 10, 21))
+        act[0, :, 10] = np.nan
+        act[0, :, 11:] = np.arange(100).reshape(10, 10)
+        with patch.object(
+            pk, "detect_peaks_2d", return_value=np.zeros((0, 5))
+        ) as detect:
+            pk.get_act_im_peaks(act)
+        self.assertEqual(detect.call_count, 1)
+        self.assertAlmostEqual(detect.call_args.args[2], 49.5)
+
+    def test_quiet_component_peak_survives_noisy_neighbor(self):
+        """A large noisy region cannot hide a quiet region's genuine peak."""
+        rng = np.random.default_rng(17)
+        act = np.full((1, 80, 112), np.nan)
+        act[0, 5:35, 4:34] = rng.normal(0, 0.03, (30, 30))
+        act[0, 5:35, 4:34] += _single_gaussian_plane(
+            30, 30, 14.3, 16.7, 3.0, 0.8
+        )
+        act[0, :, 36:] = rng.normal(0, 2.0, (80, 76))
+        seeds = pk.get_act_im_peaks(act, peak_th=6.0, buffer_size=3)
+        self.assertEqual(seeds.shape, (1, 3))
+        np.testing.assert_allclose(seeds[0], [0, 19.3, 20.7], atol=0.15)
+
     def test_elongated_blob_seed(self):
         """The 3-D driver retains its [z, y, x] output for unequal widths."""
         rng = np.random.default_rng(42)
