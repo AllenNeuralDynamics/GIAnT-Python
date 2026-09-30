@@ -286,6 +286,12 @@ class TestBandWorkflow(unittest.TestCase):
                 )
             )
 
+            bin_trial_motion = stack.enter_context(
+                patch.object(
+                    traces, "_bin_trial_motion", wraps=traces._bin_trial_motion
+                )
+            )
+
             input_value = table if loaded else source
             summary = extract_band_sources(
                 input=input_value,
@@ -311,8 +317,11 @@ class TestBandWorkflow(unittest.TestCase):
             self.assertEqual(low_read.call_count, 4)
             self.assertEqual(select_bins.call_count, 2)
             for call in select_bins.call_args_list:
-                self.assertEqual(call.kwargs["z_thresh"], params.z_tol)
+                self.assertEqual(call.kwargs["z_tol"], params.z_tol)
             self.assertEqual(high_read.call_count, 2)
+            self.assertEqual(bin_trial_motion.call_count, 2)
+            for call in bin_trial_motion.call_args_list:
+                self.assertEqual(call.kwargs["z_tol"], params.z_tol)
             self.assertEqual(mapper.call_count, 4)
             for call in mapper.call_args_list:
                 self.assertEqual(call.args[2], options.max_workers)

@@ -114,6 +114,29 @@ def _compute(inp):
     )
 
 
+class TestBinTrialMotion(unittest.TestCase):
+    """The configured z tolerance controls trial-frame retention."""
+
+    def test_z_tolerance_and_inclusive_boundaries(self):
+        motion_z = np.array([-3, -2, -1, 0, 1, 2, 3], dtype=float)
+        args = (
+            np.zeros(7), np.zeros(7), motion_z, 0.5,
+            np.array([[0, 0]]), np.array([0]),
+        )
+        default = tr._bin_trial_motion(*args)
+        np.testing.assert_array_equal(
+            default[3], np.abs(motion_z - 0.5) <= 1.5
+        )
+        for tolerance in (0.0, 0.5, 2.5, 4.0):
+            with self.subTest(z_tol=tolerance):
+                _, mot_inds, _, kept = tr._bin_trial_motion(
+                    *args, z_tol=tolerance
+                )
+                expected = np.abs(motion_z - 0.5) <= tolerance
+                np.testing.assert_array_equal(kept, expected)
+                np.testing.assert_array_equal(mot_inds[~expected], -1)
+
+
 class TestComputeHighResTraces(unittest.TestCase):
     """compute_high_res_traces per-trial numerics."""
 

@@ -126,7 +126,7 @@ class TestMotionBinning(unittest.TestCase):
         mot_inds = np.array([0] * 5 + [1] * 2 + [2] * 5)
         motion_z = np.zeros(12)
         keep, frames = motion_binning.select_motion_bins(
-            unique_motion, mot_inds, motion_z, z_thresh=1.5, min_frames=3
+            unique_motion, mot_inds, motion_z, z_tol=1.5, min_frames=3
         )
         self.assertEqual(list(keep), [0])
         self.assertEqual(int(frames.sum()), 5)
@@ -139,7 +139,7 @@ class TestMotionBinning(unittest.TestCase):
         for tolerance, expected in ((1.5, [0]), (2.0, [0, 1])):
             with self.subTest(tolerance=tolerance):
                 keep, frames = motion_binning.select_motion_bins(
-                    unique_motion, mot_inds, motion_z, z_thresh=tolerance
+                    unique_motion, mot_inds, motion_z, z_tol=tolerance
                 )
                 np.testing.assert_array_equal(keep, expected)
                 np.testing.assert_array_equal(frames, np.isin(mot_inds, expected))

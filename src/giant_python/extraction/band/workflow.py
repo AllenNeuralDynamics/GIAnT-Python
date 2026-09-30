@@ -246,7 +246,7 @@ def _process_dmd(
     )
     median_z = np.median(low["lowResMotionZ"])
     _, frames_to_keep = motion_binning.select_motion_bins(
-        unique_motion, mot_inds, low["lowResMotionZ"], z_thresh=params.z_tol
+        unique_motion, mot_inds, low["lowResMotionZ"], z_tol=params.z_tol
     )
     mean_im = si.compute_mean_image(
         low_res_data_norm,
@@ -348,6 +348,7 @@ def _process_dmd(
             dmd_pixels_per_row,
             num_channels,
             soma_sps,
+            z_tol=params.z_tol,
         )
 
     trace_results = map_trials(

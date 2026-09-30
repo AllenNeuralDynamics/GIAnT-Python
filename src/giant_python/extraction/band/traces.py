@@ -123,10 +123,11 @@ def _bin_trial_motion(
     median_z: float,
     unique_motion_ds: np.ndarray,
     mot_inds_to_keep_ds: np.ndarray,
+    z_tol: float = 1.5,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Bin trial frames by motion and match them to the low-res motion bins.
 
-    Frames within 1.5 um of the median z are rebinned into 2-D (row, col)
+    Frames within ``z_tol`` um of the median z are rebinned into 2-D (row, col)
     motion bins; each retained low-res bin is matched to its trial bin so the
     same PSF geometry is reused.
 
@@ -140,6 +141,8 @@ def _bin_trial_motion(
         The low-res kept 2-D motion vectors.
     mot_inds_to_keep_ds : ndarray
         Indices of the low-res bins to keep.
+    z_tol : float, optional
+        Maximum absolute rounded z offset from the median, in um (default 1.5).
 
     Returns
     -------
@@ -160,7 +163,7 @@ def _bin_trial_motion(
     mot_inds = np.reshape(mot_inds, -1)
     frames_to_keep = np.isin(
         mot_inds,
-        np.flatnonzero(np.abs(unique_motion3[:, 2] - median_z) <= 1.5),
+        np.flatnonzero(np.abs(unique_motion3[:, 2] - median_z) <= z_tol),
     )
 
     mot_inds = -1 * np.ones((len(mot_inds),), dtype=np.int32)
@@ -362,6 +365,7 @@ def compute_high_res_traces(
     dmd_pixels_per_row: int,
     num_channels: int,
     soma_sps: List[np.ndarray],
+    z_tol: float = 1.5,
 ) -> TrialTraceResult:
     """Compute one trial's high-res source traces from loaded arrays.
 
@@ -398,6 +402,8 @@ def compute_high_res_traces(
         Number of acquisition channels.
     soma_sps : list of ndarray
         Per-ROI superpixel index arrays.
+    z_tol : float, optional
+        Maximum absolute rounded z offset from the median, in um (default 1.5).
 
     Returns
     -------
@@ -428,6 +434,7 @@ def compute_high_res_traces(
         median_z,
         unique_motion_ds,
         mot_inds_to_keep_ds,
+        z_tol=z_tol,
     )
 
     ref_d, ref_c, ref_r = ref_pixs_to_drc(
@@ -534,6 +541,7 @@ def get_high_res_traces(
     dmd_pixels_per_row: int,
     num_channels: int,
     soma_sps: List[np.ndarray],
+    z_tol: float = 1.5,
 ) -> TrialTraceResult:
     """Read and extract one trial's high-res source traces.
 
@@ -572,6 +580,8 @@ def get_high_res_traces(
         Number of acquisition channels.
     soma_sps : list of ndarray
         Per-ROI superpixel index arrays.
+    z_tol : float, optional
+        Maximum absolute rounded z offset from the median, in um (default 1.5).
 
     Returns
     -------
@@ -618,4 +628,5 @@ def get_high_res_traces(
         dmd_pixels_per_row,
         num_channels,
         soma_sps,
+        z_tol=z_tol,
     )

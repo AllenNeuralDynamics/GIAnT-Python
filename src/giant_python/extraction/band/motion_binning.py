@@ -38,12 +38,12 @@ def select_motion_bins(
     unique_motion: np.ndarray,
     mot_inds: np.ndarray,
     motion_z: np.ndarray,
-    z_thresh: float = 1.5,
+    z_tol: float = 1.5,
     min_frames: int = 100,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Keep motion bins near the median z with enough frames.
 
-    A bin is kept when its z is within ``z_thresh`` of the median z (over all
+    A bin is kept when its z is within ``z_tol`` of the median z (over all
     frames) and it contains more than ``min_frames`` frames. After filtering,
     the remaining frames are treated as having no z motion.
 
@@ -55,7 +55,7 @@ def select_motion_bins(
         Per-frame motion-bin indices.
     motion_z : ndarray
         Per-frame z motion (used for the median).
-    z_thresh : float
+    z_tol : float
         Maximum absolute z deviation from the median, in microns.
     min_frames : int
         Minimum frame count (strictly greater) for a bin to be kept.
@@ -69,7 +69,7 @@ def select_motion_bins(
     """
     median_z = np.median(motion_z)
     bin_counts = np.bincount(mot_inds, minlength=unique_motion.shape[0])
-    keep_mask = (np.abs(unique_motion[:, 2] - median_z) <= z_thresh) & (
+    keep_mask = (np.abs(unique_motion[:, 2] - median_z) <= z_tol) & (
         bin_counts > min_frames
     )
     mot_inds_to_keep = np.nonzero(keep_mask)[0]
