@@ -47,7 +47,8 @@ class TestBandWorkflow(unittest.TestCase):
         options = ExecutionOptions(max_workers=3, max_trials=2)
         annotation = AnnotationOptions(enabled=rois, interactive=False)
         science_args = dict(
-            analyze_hz=10, denoise_window_s=0.3, baseline_window_s=0.5
+            analyze_hz=10, denoise_window_s=0.3, baseline_window_s=0.5,
+            z_tol=2.5,
         )
         params = BandSiloParams(**science_args)
         before = (asdict(params), asdict(options), asdict(annotation))
@@ -271,6 +272,12 @@ class TestBandWorkflow(unittest.TestCase):
                     wf, "assemble_path_summary", wraps=wf.assemble_path_summary
                 )
             )
+            select_bins = stack.enter_context(
+                patch.object(
+                    wf.motion_binning, "select_motion_bins",
+                    wraps=wf.motion_binning.select_motion_bins,
+                )
+            )
             writer = stack.enter_context(
                 patch.object(
                     wf,
@@ -302,6 +309,9 @@ class TestBandWorkflow(unittest.TestCase):
                 str(table.savedr / "motion_correction" / "p0-selected.h5"),
             )
             self.assertEqual(low_read.call_count, 4)
+            self.assertEqual(select_bins.call_count, 2)
+            for call in select_bins.call_args_list:
+                self.assertEqual(call.kwargs["z_thresh"], params.z_tol)
             self.assertEqual(high_read.call_count, 2)
             self.assertEqual(mapper.call_count, 4)
             for call in mapper.call_args_list:

@@ -27,6 +27,12 @@ from .models.params import (
 def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     """Attach the shared source-extraction options to a subparser."""
     parser.add_argument(
+        "--z-tol",
+        type=float,
+        default=BandSiloParams.z_tol,
+        help="Z tolerance for motion-bin selection in microns (default: 1.5).",
+    )
+    parser.add_argument(
         "--microscope",
         choices=("slap2",),
         default="slap2",
@@ -108,7 +114,7 @@ def _options_from_args(
 ) -> tuple[BandSiloParams, ExecutionOptions, AnnotationOptions]:
     """Build independent science, execution and annotation configuration."""
     return (
-        BandSiloParams(),
+        BandSiloParams(z_tol=args.z_tol),
         ExecutionOptions(
             max_workers=args.max_workers,
             verbose=args.verbose,

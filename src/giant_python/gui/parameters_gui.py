@@ -25,6 +25,7 @@ _PARAM_GUI_FIELDS = (
     ("peakth", "Peak Threshold:"),
     ("peak_buffer", "Peak Buffer:"),
     ("max_workers", "Max Workers:"),
+    ("z_tol", "Z Tolerance (µm):"),
 )
 
 
@@ -87,6 +88,7 @@ def run_parameter_gui(
                 "d_xy": int(entries["d_xy"].get()),
                 "peakth": float(entries["peakth"].get()),
                 "peak_buffer": int(entries["peak_buffer"].get()),
+                "z_tol": float(entries["z_tol"].get()),
                 "sparse_fac": float(np.exp(float(sparse_var.get()))),
             }
             result["options"] = (

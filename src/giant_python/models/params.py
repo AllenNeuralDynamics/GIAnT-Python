@@ -53,6 +53,9 @@ class BandSiloParams:
     psf_dilation : int
         Positive dilation size selecting the bundled PSF template. Template
         availability is checked by the backend when loading the PSF.
+    z_tol : float
+        Positive z tolerance in microns: maximum absolute motion-bin z
+        deviation from the median frame z for low-resolution frame selection.
 
     Notes
     -----
@@ -73,6 +76,7 @@ class BandSiloParams:
     peakth: float = 7.0
     peak_buffer: int = 3
     psf_dilation: int = 17
+    z_tol: float = 1.5
 
     def __post_init__(self) -> None:
         """Validate values supported by the existing numerical path."""
@@ -84,6 +88,7 @@ class BandSiloParams:
             "vif",
             "sparse_fac",
             "peakth",
+            "z_tol",
         ):
             _positive(name, getattr(self, name))
         for name in ("d_xy", "peak_buffer", "psf_dilation"):

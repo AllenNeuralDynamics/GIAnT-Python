@@ -57,7 +57,8 @@ class TestParameterGui(unittest.TestCase):
             """Simulate edits to a scientific field and both policy groups."""
             self.variables[0].get.return_value = "125"
             self.variables[8].get.return_value = "3"
-            self.variables[9].get.return_value = "-2"
+            self.variables[9].get.return_value = "2.5"
+            self.variables[10].get.return_value = "-2"
             self.roi_var.get.return_value = True
             self.buttons["OK"]()
 
@@ -67,6 +68,8 @@ class TestParameterGui(unittest.TestCase):
         science, execution, annotations = result
         self.assertEqual(science.analyze_hz, 125)
         self.assertEqual(science.peakth, 8)
+        self.assertEqual(science.z_tol, 2.5)
+        self.assertEqual(params.z_tol, 1.5)
         self.assertAlmostEqual(science.sparse_fac, math.exp(-2))
         labels = [
             call.kwargs["text"] for call in self.tk.ttk.Label.call_args_list

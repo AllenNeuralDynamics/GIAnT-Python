@@ -100,6 +100,12 @@ The `giant` CLI exposes only `annotate` and `extract`, each taking an exact tria
 
 ### Canonical API and ownership
 
+`BandSiloParams(z_tol=1.5)` controls the z tolerance in microns for low-resolution
+motion-bin selection: bins must lie within this absolute distance of the median
+frame z and still satisfy the existing minimum frame count. The value must be
+positive and finite; the default preserves previous behavior. The CLI and staging
+example accept `--z-tol`, and the parameter GUI labels it **Z Tolerance (µm)**.
+
 The Python API preceding this cleanup was unreleased and unused. Compatibility-only Python imports and adapters have been removed, not deprecated. MATLAB file-format compatibility is retained separately; there is no production Python API migration requirement.
 
 - `extract_band_sources(input, params=None, *, execution=None, annotations=None)` accepts an exact filename or loaded `TrialTable`. Use `Pipeline(..., params=...)` or `Pipeline.from_trial_table(..., params=...).extract()` for a session.

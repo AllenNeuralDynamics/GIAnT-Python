@@ -131,6 +131,19 @@ class TestMotionBinning(unittest.TestCase):
         self.assertEqual(list(keep), [0])
         self.assertEqual(int(frames.sum()), 5)
 
+    def test_z_tolerance_changes_selected_bins(self):
+        """Tolerance includes its boundary without relaxing frame counts."""
+        unique_motion = np.array([[0, 0, 0], [0, 0, 2], [1, 0, 0]])
+        mot_inds = np.array([0] * 202 + [1] * 101 + [2] * 100)
+        motion_z = unique_motion[mot_inds, 2]
+        for tolerance, expected in ((1.5, [0]), (2.0, [0, 1])):
+            with self.subTest(tolerance=tolerance):
+                keep, frames = motion_binning.select_motion_bins(
+                    unique_motion, mot_inds, motion_z, z_thresh=tolerance
+                )
+                np.testing.assert_array_equal(keep, expected)
+                np.testing.assert_array_equal(frames, np.isin(mot_inds, expected))
+
     def test_bin_motion_yx_marks_dropped_frames(self):
         """Frames outside frames_to_keep get index -1."""
         mr = np.array([0.0, 0.0, 1.0, 1.0])

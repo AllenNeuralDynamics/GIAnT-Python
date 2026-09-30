@@ -21,6 +21,7 @@ class TestBandConfiguration(unittest.TestCase):
         self.assertEqual(science.peakth, 7.0)
         self.assertEqual(science.denoise_window_s, 1.0)
         self.assertEqual(science.vif, 1.38)
+        self.assertEqual(science.z_tol, 1.5)
         self.assertEqual(science.sparse_fac, math.exp(-3.0))
         self.assertEqual(execution, ExecutionOptions(6, False, None))
         self.assertEqual(annotations, AnnotationOptions(False, None))
@@ -62,7 +63,7 @@ class TestBandConfiguration(unittest.TestCase):
 
     def test_dictionary_inputs_and_overrides_are_not_modified(self):
         """Each dictionary affects only its scope and is copied."""
-        params = {"analyze_hz": 80.0}
+        params = {"analyze_hz": 80.0, "z_tol": 2.5}
         execution = {"max_workers": 2, "verbose": True}
         annotations = {
             "enabled": True,
@@ -73,6 +74,7 @@ class TestBandConfiguration(unittest.TestCase):
             params, execution, annotations
         )
         self.assertEqual(science.analyze_hz, 80.0)
+        self.assertEqual(science.z_tol, 2.5)
         self.assertEqual(run, ExecutionOptions(2, True, None))
         self.assertEqual(roi, AnnotationOptions(True, False))
         self.assertEqual((params, execution, annotations), original)
@@ -91,6 +93,7 @@ class TestConfigurationValidation(unittest.TestCase):
             "vif",
             "sparse_fac",
             "peakth",
+            "z_tol",
         ):
             for value in (0, -1, math.nan, math.inf, True, "1", None):
                 with self.subTest(name=name, value=value):

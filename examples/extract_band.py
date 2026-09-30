@@ -109,6 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-xy", type=int, default=5)
     parser.add_argument("--peak-buffer", type=int, default=3)
     parser.add_argument("--psf-dilation", type=int, default=17)
+    parser.add_argument("--z-tol", type=float, default=1.5,
+                        help="Z tolerance for motion-bin selection (microns)")
     return parser
 
 
@@ -233,6 +235,7 @@ def prepare_run(args: argparse.Namespace) -> PreparedRun:
         d_xy=args.d_xy,
         peak_buffer=args.peak_buffer,
         psf_dilation=args.psf_dilation,
+        z_tol=args.z_tol,
     )
     execution = ExecutionOptions(
         max_workers=args.max_workers,
