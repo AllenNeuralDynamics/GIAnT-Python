@@ -257,19 +257,19 @@ class TestLocalizeSources(unittest.TestCase):
         a2 = nmf.fit_sources(seeds.copy(), residual, **kwargs)["A"]
         np.testing.assert_array_equal(a1.numpy(), a2.numpy())
 
-    def test_temporal_filter_matches_direct_row_convolution(self):
-        """Filter across alternating motions, without changing the residual."""
+    def test_temporal_filter_matches_activity_filter(self):
+        """Reuse activity smoothing and omit its low-coverage edge frames."""
         g, seeds, residual, mot_yx, coords, n_pix = self._inputs(seed=1)
         original = residual.copy()
         kernel = activity.decay_kernel_1d(0.1, 10).astype(np.float32)
-        filtered = np.stack(
-            [np.convolve(row, kernel, mode="same") for row in residual]
-        )
+        filtered = activity.smooth_rho(residual.copy(), kernel)
+        filtered_motions = mot_yx.copy()
+        filtered_motions[~np.all(np.isfinite(filtered), axis=0)] = -1
+        self.assertTrue(np.any(filtered_motions < 0))
         self.assertFalse(np.allclose(filtered, residual))
         kwargs = dict(
             h_mots=g["h_mots"],
             unique_motion_to_keep_yx=g["umyx"],
-            mot_inds_yx=mot_yx,
             sel_pix_idxs=g["sel_pix_idxs"],
             pixel_coords=coords,
             n_pixels=n_pix,
@@ -279,10 +279,13 @@ class TestLocalizeSources(unittest.TestCase):
             mult_nmf_max_iters=3,
         )
         torch.manual_seed(3)
-        expected = nmf.fit_sources(seeds.copy(), filtered, **kwargs)
+        expected = nmf.fit_sources(
+            seeds.copy(), filtered, mot_inds_yx=filtered_motions, **kwargs
+        )
         torch.manual_seed(3)
         actual = nmf.fit_sources(
-            seeds.copy(), residual, temporal_kernel=kernel, **kwargs
+            seeds.copy(), residual, mot_inds_yx=mot_yx,
+            temporal_kernel=kernel, **kwargs
         )
         np.testing.assert_array_equal(residual, original)
         self.assertEqual(actual["n_sources"], expected["n_sources"])
@@ -294,6 +297,80 @@ class TestLocalizeSources(unittest.TestCase):
         np.testing.assert_array_equal(
             actual["source_seeds"], expected["source_seeds"]
         )
+
+    def test_temporal_filter_dropped_frames_survive_pruning(self):
+        """Missing samples must not poison otherwise usable source fits."""
+        g, seeds, residual, mot_yx, coords, n_pix = self._inputs()
+        residual = np.tile(residual, (1, 16))
+        mot_yx = np.tile(mot_yx, 16)
+        mot_yx[128] = -1
+        original_motions = mot_yx.copy()
+        kernel = activity.decay_kernel_1d(0.15, 100)
+        for missing_value in (np.nan, 1e6):
+            with self.subTest(missing_value=missing_value):
+                residual[:, 128] = missing_value
+                original = residual.copy()
+                torch.manual_seed(7)
+                out = nmf.fit_sources(
+                    seeds.copy(), residual, g["h_mots"], g["umyx"],
+                    mot_yx, g["sel_pix_idxs"], coords, n_pix,
+                    d_xy=5, sparse_fac=float(np.exp(-3.0)),
+                    outer_loop_iters=3, mult_nmf_max_iters=4,
+                    temporal_kernel=kernel,
+                )
+                self.assertGreater(out["n_sources"], 0)
+                self.assertTrue(np.all(np.isfinite(out["source_snr"])))
+                self.assertTrue(torch.all(torch.isfinite(out["A"])))
+                self.assertTrue(torch.all(torch.isnan(out["phi_low_res"][128])))
+                self.assertTrue(torch.any(torch.isfinite(out["phi_low_res"])))
+                np.testing.assert_array_equal(residual, original)
+                np.testing.assert_array_equal(mot_yx, original_motions)
+
+    def test_temporal_filter_excludes_empty_motion_bins(self):
+        """Low coverage can remove an entire bin without poisoning Adam."""
+        g, seeds, residual, mot_yx, coords, n_pix = self._inputs()
+        # Only the first frame uses bin 0; a uniform kernel rejects both
+        # edges. An isolated row-wise NaN also rejects nearby frames.
+        mot_yx[:] = 1
+        mot_yx[0] = 0
+        residual[0, 8] = np.nan
+        kernel = np.ones(3) / 3
+        filtered = activity.smooth_rho(residual.copy(), kernel)
+        expected_motions = np.full_like(mot_yx, -1)
+        expected_motions[np.all(np.isfinite(filtered), axis=0)] = 0
+        kwargs = dict(
+            sel_pix_idxs=g["sel_pix_idxs"], pixel_coords=coords,
+            n_pixels=n_pix, d_xy=5, sparse_fac=0.05,
+            outer_loop_iters=1, mult_nmf_max_iters=3,
+        )
+        torch.manual_seed(7)
+        expected = nmf.fit_sources(
+            seeds.copy(), filtered, [g["h_mots"][1]], g["umyx"][1:],
+            expected_motions, **kwargs,
+        )
+        torch.manual_seed(7)
+        actual = nmf.fit_sources(
+            seeds.copy(), residual, g["h_mots"], g["umyx"], mot_yx,
+            temporal_kernel=kernel, **kwargs,
+        )
+        self.assertTrue(torch.all(torch.isfinite(actual["A"])))
+        for key in ("A", "phi_low_res", "source_params", "source_snr"):
+            np.testing.assert_allclose(actual[key], expected[key])
+        excluded = expected_motions < 0
+        self.assertTrue(
+            torch.all(torch.isnan(actual["phi_low_res"][excluded]))
+        )
+
+    def test_temporal_filter_no_usable_frames(self):
+        """Report missing data explicitly instead of silently pruning all seeds."""
+        g, seeds, residual, mot_yx, coords, n_pix = self._inputs()
+        residual[:] = np.nan
+        with self.assertRaisesRegex(ValueError, "No usable frames remain"):
+            nmf.fit_sources(
+                seeds, residual, g["h_mots"], g["umyx"], mot_yx,
+                g["sel_pix_idxs"], coords, n_pix, d_xy=5,
+                sparse_fac=0.05, temporal_kernel=np.ones(1),
+            )
 
     def test_adam_early_convergence_break(self):
         """A huge gd_tol triggers the Adam convergence break."""

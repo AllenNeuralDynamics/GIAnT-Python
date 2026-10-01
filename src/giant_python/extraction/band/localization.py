@@ -37,9 +37,9 @@ from typing import List, cast
 
 import numpy as np
 import torch
-from scipy import signal
 
 from ...progress import progress
+from .activity import smooth_rho
 
 
 def sel_pix_gaussian_profile(
@@ -705,11 +705,14 @@ def fit_sources(
         Show a progress bar over the outer NMF/fit iterations when set.
     temporal_kernel : ndarray, optional
         Temporal matched-filter kernel, normally from ``decay_kernel_1d``.
-        Convolved directly along each residual row before motion binning,
-        without compensating for motion differences. Uses zero-padded,
-        same-length convolution and leaves ``residual`` unchanged. NMF,
+        Applied with the activity image's NaN-aware ``smooth_rho`` before
+        motion binning, without compensating for motion differences. Leaves
+        ``residual`` unchanged. Frames with insufficient filter coverage in
+        any row are excluded from NMF and SNR; their temporal weights remain
+        NaN. Motion bins with no remaining frames are also excluded. NMF,
         low-resolution temporal weights and SNR all use the filtered data.
-        If omitted, use the unfiltered residual.
+        Raises ValueError if no usable frames remain. If omitted, use the
+        unfiltered residual.
 
     Returns
     -------
@@ -724,11 +727,30 @@ def fit_sources(
     pixel_coords_tensor = torch.tensor(pixel_coords, dtype=torch.float32)
     nmf_residual = residual.astype(np.float32, copy=False)
     if temporal_kernel is not None:
-        nmf_residual = signal.convolve(
-            nmf_residual,
-            np.asarray(temporal_kernel, dtype=np.float32)[None, :],
-            mode="same",
+        # smooth_rho operates in place. Dropped frames must not contribute
+        # even if the caller supplied finite values for them.
+        nmf_residual = nmf_residual.copy()
+        nmf_residual[:, mot_inds_yx < 0] = np.nan
+        nmf_residual = smooth_rho(
+            nmf_residual, temporal_kernel, verbose=verbose
         )
+        # The shared filter retains NaNs at low-coverage samples. The dense
+        # NMF solves cannot accept these, so omit affected frames rather
+        # than interpreting missing observations as zero residuals.
+        valid_frames = np.all(np.isfinite(nmf_residual), axis=0)
+        retained = (mot_inds_yx >= 0) & valid_frames
+        if not np.any(retained):
+            raise ValueError(
+                "No usable frames remain after NaN-aware temporal filtering"
+            )
+        kept_motions = np.unique(mot_inds_yx[retained])
+        filtered_motion_inds = np.full_like(mot_inds_yx, -1)
+        filtered_motion_inds[retained] = np.searchsorted(
+            kept_motions, mot_inds_yx[retained]
+        )
+        mot_inds_yx = filtered_motion_inds
+        h_mots = [h_mots[i] for i in kept_motions]
+        n_motions = len(h_mots)
     data_for_nmf = torch.from_numpy(nmf_residual)
     num_epochs = n_motions * 5
 
