@@ -13,7 +13,7 @@ import unittest
 import numpy as np
 import torch
 
-from giant_python.extraction.band import geometry
+from giant_python.extraction.band import activity, geometry
 from giant_python.extraction.band import localization as nmf
 from tests.test_bandsilo_background import _small_geometry
 
@@ -256,6 +256,44 @@ class TestLocalizeSources(unittest.TestCase):
         torch.manual_seed(3)
         a2 = nmf.fit_sources(seeds.copy(), residual, **kwargs)["A"]
         np.testing.assert_array_equal(a1.numpy(), a2.numpy())
+
+    def test_temporal_filter_matches_direct_row_convolution(self):
+        """Filter across alternating motions, without changing the residual."""
+        g, seeds, residual, mot_yx, coords, n_pix = self._inputs(seed=1)
+        original = residual.copy()
+        kernel = activity.decay_kernel_1d(0.1, 10).astype(np.float32)
+        filtered = np.stack(
+            [np.convolve(row, kernel, mode="same") for row in residual]
+        )
+        self.assertFalse(np.allclose(filtered, residual))
+        kwargs = dict(
+            h_mots=g["h_mots"],
+            unique_motion_to_keep_yx=g["umyx"],
+            mot_inds_yx=mot_yx,
+            sel_pix_idxs=g["sel_pix_idxs"],
+            pixel_coords=coords,
+            n_pixels=n_pix,
+            d_xy=5,
+            sparse_fac=float(np.exp(-3.0)),
+            outer_loop_iters=3,
+            mult_nmf_max_iters=3,
+        )
+        torch.manual_seed(3)
+        expected = nmf.fit_sources(seeds.copy(), filtered, **kwargs)
+        torch.manual_seed(3)
+        actual = nmf.fit_sources(
+            seeds.copy(), residual, temporal_kernel=kernel, **kwargs
+        )
+        np.testing.assert_array_equal(residual, original)
+        self.assertEqual(actual["n_sources"], expected["n_sources"])
+        for key in ("A", "phi_low_res", "source_params", "source_snr"):
+            np.testing.assert_allclose(
+                actual[key], expected[key], rtol=1e-5, atol=1e-6,
+                err_msg=key,
+            )
+        np.testing.assert_array_equal(
+            actual["source_seeds"], expected["source_seeds"]
+        )
 
     def test_adam_early_convergence_break(self):
         """A huge gd_tol triggers the Adam convergence break."""

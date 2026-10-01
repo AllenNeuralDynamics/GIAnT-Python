@@ -534,9 +534,10 @@ def _localize(
         verbose=execution.verbose,
     )
     nan_ct = activity.mask_high_nan_rho(rho)
+    temporal_kernel = activity.decay_kernel_1d(params.decay_tau_s, align_hz)
     rho = activity.smooth_rho(
         rho,
-        activity.decay_kernel_1d(params.decay_tau_s, align_hz),
+        temporal_kernel,
         verbose=execution.verbose,
     )
     act_im = si.accumulate_activity_image(
@@ -576,6 +577,7 @@ def _localize(
         params.d_xy,
         params.sparse_fac,
         verbose=execution.verbose,
+        temporal_kernel=temporal_kernel,
     )
     return (
         act_im,

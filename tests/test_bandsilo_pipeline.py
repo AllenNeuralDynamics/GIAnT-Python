@@ -144,8 +144,10 @@ class TestLocalizeMedianMotion(unittest.TestCase):
                     wf.activity, "mask_high_nan_rho", return_value=np.zeros(3)
                 )
             )
-            stack.enter_context(patch.object(wf.activity, "decay_kernel_1d"))
-            stack.enter_context(
+            decay_kernel = stack.enter_context(
+                patch.object(wf.activity, "decay_kernel_1d")
+            )
+            smooth = stack.enter_context(
                 patch.object(wf.activity, "smooth_rho", return_value=rho)
             )
             stack.enter_context(
@@ -195,6 +197,11 @@ class TestLocalizeMedianMotion(unittest.TestCase):
         self.assertIs(fit.call_args.args[4], mot_inds)
         self.assertIs(fit.call_args.args[5], selected)
         self.assertIs(fit.call_args.args[6], coords)
+        decay_kernel.assert_called_once_with(BandSiloParams().decay_tau_s, 10)
+        self.assertIs(smooth.call_args.args[1], decay_kernel.return_value)
+        self.assertIs(
+            fit.call_args.kwargs["temporal_kernel"], decay_kernel.return_value
+        )
         self.assertIs(result[2], fitted["A"])
         self.assertIs(result[3], fitted["source_params"])
         self.assertIs(result[4], fitted["source_snr"])

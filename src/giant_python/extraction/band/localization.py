@@ -26,9 +26,9 @@ the fitted ``source_params`` ``[z, y, x, sigma_y, sigma_x, tilt]``, and the
 This block is intentionally stochastic (random motion order via
 ``torch.randperm`` in NMF and Adam); the pipeline does not seed the RNG. The
 ``randperm`` calls are preserved in the same order as the reference so a seeded
-run reproduces it exactly. The reference's loss-only ``phi`` recomputation and
-``print``/warning diagnostics are dropped (they do not affect the outputs and
-consume no RNG).
+run with unfiltered input reproduces it exactly. The reference's loss-only
+``phi`` recomputation and ``print``/warning diagnostics are dropped (they do not
+affect the outputs and consume no RNG).
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from typing import List, cast
 
 import numpy as np
 import torch
+from scipy import signal
 
 from ...progress import progress
 
@@ -665,6 +666,8 @@ def fit_sources(
     learning_rate: float = 0.01,
     gd_tol: float = 1e-4,
     verbose: bool = False,
+    *,
+    temporal_kernel: np.ndarray | None = None,
 ) -> dict:
     """Localize sources by superpixel-space NMF + Gaussian-profile fitting.
 
@@ -700,6 +703,13 @@ def fit_sources(
         Adam convergence tolerance.
     verbose : bool
         Show a progress bar over the outer NMF/fit iterations when set.
+    temporal_kernel : ndarray, optional
+        Temporal matched-filter kernel, normally from ``decay_kernel_1d``.
+        Convolved directly along each residual row before motion binning,
+        without compensating for motion differences. Uses zero-padded,
+        same-length convolution and leaves ``residual`` unchanged. NMF,
+        low-resolution temporal weights and SNR all use the filtered data.
+        If omitted, use the unfiltered residual.
 
     Returns
     -------
@@ -712,7 +722,14 @@ def fit_sources(
     n_motions = unique_motion_to_keep_yx.shape[0]
     n_frames = residual.shape[1]
     pixel_coords_tensor = torch.tensor(pixel_coords, dtype=torch.float32)
-    data_for_nmf = torch.from_numpy(residual.astype(np.float32, copy=False))
+    nmf_residual = residual.astype(np.float32, copy=False)
+    if temporal_kernel is not None:
+        nmf_residual = signal.convolve(
+            nmf_residual,
+            np.asarray(temporal_kernel, dtype=np.float32)[None, :],
+            mode="same",
+        )
+    data_for_nmf = torch.from_numpy(nmf_residual)
     num_epochs = n_motions * 5
 
     source_params = init_source_params(source_seeds)
