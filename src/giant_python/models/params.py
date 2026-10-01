@@ -56,6 +56,10 @@ class BandSiloParams:
     z_tol : float
         Positive z tolerance in microns: maximum absolute motion-bin z
         deviation from the median frame z for low-resolution frame selection.
+    simple_trace_extraction : bool
+        Use normalized spatial-profile weighted averages of superpixels for
+        final dF and background traces instead of least squares. Source
+        localization is unchanged. Defaults to False.
 
     Notes
     -----
@@ -77,6 +81,7 @@ class BandSiloParams:
     peak_buffer: int = 3
     psf_dilation: int = 17
     z_tol: float = 1.5
+    simple_trace_extraction: bool = False
 
     def __post_init__(self) -> None:
         """Validate values supported by the existing numerical path."""
@@ -93,6 +98,8 @@ class BandSiloParams:
             _positive(name, getattr(self, name))
         for name in ("d_xy", "peak_buffer", "psf_dilation"):
             _positive(name, getattr(self, name), integer=True)
+        if not isinstance(self.simple_trace_extraction, bool):
+            raise ValueError("simple_trace_extraction must be a bool")
 
 
 @dataclass

@@ -27,6 +27,11 @@ from .models.params import (
 def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     """Attach the shared source-extraction options to a subparser."""
     parser.add_argument(
+        "--simple-trace-extraction",
+        action="store_true",
+        help="Use profile-weighted averages instead of least squares for final traces.",
+    )
+    parser.add_argument(
         "--z-tol",
         type=float,
         default=BandSiloParams.z_tol,
@@ -114,7 +119,10 @@ def _options_from_args(
 ) -> tuple[BandSiloParams, ExecutionOptions, AnnotationOptions]:
     """Build independent science, execution and annotation configuration."""
     return (
-        BandSiloParams(z_tol=args.z_tol),
+        BandSiloParams(
+            z_tol=args.z_tol,
+            simple_trace_extraction=args.simple_trace_extraction,
+        ),
         ExecutionOptions(
             max_workers=args.max_workers,
             verbose=args.verbose,

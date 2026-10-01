@@ -160,6 +160,7 @@ def _params_dict(
         "vif": params.vif,
         "peakth": params.peakth,
         "peak_buffer": params.peak_buffer,
+        "simple_trace_extraction": params.simple_trace_extraction,
         "draw_user_rois": annotations.enabled,
     }
 
@@ -349,6 +350,7 @@ def _process_dmd(
             num_channels,
             soma_sps,
             z_tol=params.z_tol,
+            simple_trace_extraction=params.simple_trace_extraction,
         )
 
     trace_results = map_trials(

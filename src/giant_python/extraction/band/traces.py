@@ -5,9 +5,10 @@ Ported from ``get_high_res_traces`` in
 the high-res superpixel activity, interpolates the alignment motion/background
 onto the trial's downsample grid, bins the frames by motion (matching the
 low-res motion bins used during NMF), and — per motion bin — projects the fixed
-spatial profiles ``A_final`` into superpixel space and least-squares-solves the
-per-source temporal traces (``phi``, the least-squares dF) and the background
-projection (``F0``). It also computes the global and per-user-ROI fluorescence.
+spatial profiles ``A_final`` into superpixel space and extracts per-source
+temporal traces (``phi``, stored as ``dF_ls``) and background (``F0``) via
+least squares or normalized profile-weighted averages. It also computes the
+global and per-user-ROI fluorescence.
 
 The pure compute (:func:`compute_high_res_traces`) is factored out of the IO
 wrapper (:func:`get_high_res_traces`, which reads the SLAP2 file lazily via
@@ -189,6 +190,22 @@ def _bin_trial_motion(
     return unique_motion, mot_inds, mot_inds_to_keep, frames_to_keep
 
 
+def _weighted_trace_average(
+    x: torch.Tensor, data: torch.Tensor
+) -> torch.Tensor:
+    """Average superpixels using each projected source profile's intensities.
+
+    ``x`` is (superpixels, sources), ``data`` is (superpixels, frames), and
+    the result is (frames, sources). Normalize in superpixel space for each
+    motion bin: projection through H need not preserve the profile's mass.
+    Sources with no observed profile support return NaN, not a zero signal.
+    Unlike least squares, overlapping sources are not de-mixed.
+    """
+    mass = x.sum(dim=0)
+    weights = x / mass.masked_fill(mass <= 0, float("nan"))
+    return (weights.T @ data).T
+
+
 def _solve_trial_phi_f0(
     data: np.ndarray,
     background: np.ndarray,
@@ -201,8 +218,9 @@ def _solve_trial_phi_f0(
     a_final: torch.Tensor,
     num_super_pixels: int,
     dmd_pixels_per_row: int,
+    simple_trace_extraction: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Least-squares-solve per-source traces and background projection.
+    """Extract per-source traces and background projection.
 
     For each kept motion bin, shifts ``H`` by the bin's motion, projects
     ``A_final`` into superpixel space, and solves for the source temporal
@@ -231,12 +249,15 @@ def _solve_trial_phi_f0(
         Superpixel count (``H`` row count).
     dmd_pixels_per_row : int
         Grid geometry (column-shift stride).
+    simple_trace_extraction : bool, optional
+        Use normalized profile-intensity weighted averages instead of least
+        squares for both dF and F0 (default False).
 
     Returns
     -------
     phi, f0 : torch.Tensor of shape (n_frames, n_sources)
-        Per-source least-squares dF and background projection (NaN where no
-        motion bin applies).
+        Per-source dF and background projection (NaN where no motion bin
+        applies, or where weighted averaging has no profile support).
     """
     n_sources = a_final.shape[1]
     n_frames = data.shape[1]
@@ -255,15 +276,18 @@ def _solve_trial_phi_f0(
         dmd_pixels_per_row,
     )
 
+    extract = (
+        _weighted_trace_average if simple_trace_extraction else solve_phi_motion
+    )
     for motion_idx in mot_inds_to_keep:
         motion_frames = np.flatnonzero(mot_inds == motion_idx)
         x = torch.sparse.mm(h_mots[motion_idx], a_final[sel_pix_idxs, :])
         # phi from the background-subtracted residual; F0 from the background,
-        # both via the shared regularized normal-equations solve.
-        phi[motion_frames, :] = solve_phi_motion(
+        # both using the same extraction method and spatial profiles.
+        phi[motion_frames, :] = extract(
             x, torch.from_numpy(residual[:, motion_frames].astype(np.float32))
         )
-        f0[motion_frames, :] = solve_phi_motion(
+        f0[motion_frames, :] = extract(
             x,
             torch.from_numpy(background[:, motion_frames].astype(np.float32)),
         )
@@ -366,6 +390,7 @@ def compute_high_res_traces(
     num_channels: int,
     soma_sps: List[np.ndarray],
     z_tol: float = 1.5,
+    simple_trace_extraction: bool = False,
 ) -> TrialTraceResult:
     """Compute one trial's high-res source traces from loaded arrays.
 
@@ -404,6 +429,9 @@ def compute_high_res_traces(
         Per-ROI superpixel index arrays.
     z_tol : float, optional
         Maximum absolute rounded z offset from the median, in um (default 1.5).
+    simple_trace_extraction : bool, optional
+        Average superpixels weighted by normalized source profiles instead
+        of least-squares fitting final dF and F0 traces (default False).
 
     Returns
     -------
@@ -463,6 +491,7 @@ def compute_high_res_traces(
         a_final,
         num_super_pixels,
         dmd_pixels_per_row,
+        simple_trace_extraction=simple_trace_extraction,
     )
 
     global_f = _compute_global_f(data, data2, frames_to_keep, num_channels)
@@ -542,6 +571,7 @@ def get_high_res_traces(
     num_channels: int,
     soma_sps: List[np.ndarray],
     z_tol: float = 1.5,
+    simple_trace_extraction: bool = False,
 ) -> TrialTraceResult:
     """Read and extract one trial's high-res source traces.
 
@@ -582,6 +612,9 @@ def get_high_res_traces(
         Per-ROI superpixel index arrays.
     z_tol : float, optional
         Maximum absolute rounded z offset from the median, in um (default 1.5).
+    simple_trace_extraction : bool, optional
+        Average superpixels weighted by normalized source profiles instead
+        of least-squares fitting final dF and F0 traces (default False).
 
     Returns
     -------
@@ -629,4 +662,5 @@ def get_high_res_traces(
         num_channels,
         soma_sps,
         z_tol=z_tol,
+        simple_trace_extraction=simple_trace_extraction,
     )

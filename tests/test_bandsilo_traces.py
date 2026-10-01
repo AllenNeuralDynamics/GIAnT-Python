@@ -8,6 +8,7 @@ development notes; here we assert structural behavior on synthetic data.
 """
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -88,7 +89,7 @@ def _trial_inputs(num_channels=1, unique_motion_ds=None, seed=2):
     )
 
 
-def _compute(inp):
+def _compute(inp, **kwargs):
     """Call compute_high_res_traces with the assembled inputs dict."""
     g = inp["g"]
     return tr.compute_high_res_traces(
@@ -111,7 +112,84 @@ def _compute(inp):
         g["npr"],
         inp["num_channels"],
         inp["soma_sps"],
+        **kwargs,
     )
+
+
+class TestWeightedTraceAverage(unittest.TestCase):
+    """Simple traces use profile intensities, not a regression coefficient."""
+
+    def test_normalized_intensities_and_scale_invariance(self):
+        """Overlapping and duplicate profiles are averaged independently."""
+        profiles = torch.tensor([[1., 0., 7.], [3., 2., 21.], [0., 2., 0.]])
+        data = torch.tensor([[2., -2.], [6., 4.], [10., 8.]])
+        expected = np.array([[5., 8., 5.], [2.5, 6., 2.5]])
+        actual = tr._weighted_trace_average(profiles, data)
+        np.testing.assert_allclose(actual, expected)
+        np.testing.assert_allclose(
+            tr._weighted_trace_average(profiles * 0.01, data),
+            expected, rtol=1e-6,
+        )
+
+    def test_uniform_zero_and_empty_profiles(self):
+        """Uniform weights give the mean; no support is NaN, not zero."""
+        data = torch.tensor([[2., 4.], [6., 8.]])
+        profiles = torch.tensor([[3., 0.], [3., 0.]])
+        result = tr._weighted_trace_average(profiles, data)
+        np.testing.assert_allclose(result[:, 0], [4., 6.])
+        self.assertTrue(torch.isnan(result[:, 1]).all())
+        self.assertEqual(
+            tr._weighted_trace_average(torch.empty(2, 0), data).shape,
+            (2, 0),
+        )
+
+    def test_motion_projection_background_and_dropped_frames(self):
+        """Normalize after motion projection and use identical dF/F0 weights."""
+        profiles = torch.tensor([[1., 2.], [3., 0.], [0., 4.]])
+        operators_by_motion = [
+            torch.eye(3).to_sparse(),
+            torch.tensor([[0., 2., 0.], [0., 0., 1.], [0., 0., 0.]]).to_sparse(),
+        ]
+        data = np.array([[2., 4., 8., 1.], [6., 8., 2., 2.],
+                         [10., 12., 4., 3.]], dtype=np.float32)
+        background = np.array([[1., 1., 2., 0.], [2., 2., 1., 0.],
+                               [3., 3., 3., 0.]], dtype=np.float32)
+        bins = np.array([0, 0, 1, -1])
+        args = (
+            data, background, np.array([[0, 0], [1, 0]]), bins,
+            np.array([0, 1]), np.empty((0, 2)), np.empty(0), np.arange(3),
+            profiles, 3, 3,
+        )
+        with patch.object(
+            tr, "build_motion_h_matrices", return_value=operators_by_motion
+        ), patch.object(
+            tr, "solve_phi_motion", side_effect=AssertionError("LS called")
+        ):
+            phi, f0 = tr._solve_trial_phi_f0(
+                *args, simple_trace_extraction=True
+            )
+        for motion, h in enumerate(operators_by_motion):
+            selected = np.flatnonzero(bins == motion)
+            projected = (h.to_dense() @ profiles).numpy()
+            for source in range(profiles.shape[1]):
+                weights = projected[:, source]
+                np.testing.assert_allclose(
+                    phi[selected, source],
+                    np.average((data - background)[:, selected], axis=0,
+                               weights=weights), rtol=1e-6,
+                )
+                np.testing.assert_allclose(
+                    f0[selected, source],
+                    np.average(background[:, selected], axis=0,
+                               weights=weights), rtol=1e-6,
+                )
+                np.testing.assert_allclose(
+                    (phi + f0)[selected, source],
+                    np.average(data[:, selected], axis=0, weights=weights),
+                    rtol=1e-6,
+                )
+        self.assertTrue(torch.isnan(phi[-1]).all())
+        self.assertTrue(torch.isnan(f0[-1]).all())
 
 
 class TestBinTrialMotion(unittest.TestCase):
@@ -139,6 +217,37 @@ class TestBinTrialMotion(unittest.TestCase):
 
 class TestComputeHighResTraces(unittest.TestCase):
     """compute_high_res_traces per-trial numerics."""
+
+    def test_default_remains_least_squares(self):
+        """Omitting the flag retains the existing solver for every bin."""
+        inp = _trial_inputs()
+        with patch.object(tr, "solve_phi_motion", wraps=tr.solve_phi_motion) as ls:
+            default = _compute(inp)
+        self.assertGreater(ls.call_count, 0)
+        explicit = _compute(inp, simple_trace_extraction=False)
+        np.testing.assert_array_equal(default.d_f, explicit.d_f)
+        np.testing.assert_array_equal(default.f0_ls, explicit.f0_ls)
+
+    def test_simple_mode_preserves_mask_and_auxiliary_outputs(self):
+        """Only dF/F0 extraction changes; z rejection and other channels stay."""
+        inp = _trial_inputs(num_channels=2)
+        inp["a_data"]["motionDSz"][20:40] = 5
+        least_squares = _compute(inp)
+        with patch.object(
+            tr, "solve_phi_motion", side_effect=AssertionError("LS called")
+        ):
+            simple = _compute(inp, simple_trace_extraction=True)
+        self.assertTrue(np.isnan(simple.d_f).any())
+        self.assertTrue(np.isfinite(simple.d_f).any())
+        for a, b in ((simple.d_f, least_squares.d_f),
+                     (simple.f0_ls, least_squares.f0_ls)):
+            self.assertEqual(a.shape, b.shape)
+            np.testing.assert_array_equal(np.isnan(a), np.isnan(b))
+        for field in ("global_f", "user_roi_f", "frame_line_idxs",
+                      "selected_pixels", "reference_offsets", "online_shifts"):
+            np.testing.assert_array_equal(
+                getattr(simple, field), getattr(least_squares, field)
+            )
 
     def test_single_channel_shapes_and_fit(self):
         """Returns the 8-tuple; phi/F0 are per-frame per-source with fits."""
@@ -223,6 +332,12 @@ class TestGetHighResTraces(unittest.TestCase):
 
     def test_kept_trial_reads_and_computes(self):
         """A kept trial reads (monkeypatched) then computes the traces."""
+        for simple in (False, True):
+            with self.subTest(simple_trace_extraction=simple):
+                self._check_kept_trial(simple)
+
+    def _check_kept_trial(self, simple):
+        """Verify IO wrapper forwards the selected extraction mode."""
         inp = _trial_inputs(num_channels=1)
         g = inp["g"]
 
@@ -259,12 +374,13 @@ class TestGetHighResTraces(unittest.TestCase):
                 g["npr"],
                 1,
                 inp["soma_sps"],
+                simple_trace_extraction=simple,
             )
         finally:
             tr._load_high_res_trial_data = orig
 
         # matches a direct compute with the same inputs
-        expected = _compute(inp)
+        expected = _compute(inp, simple_trace_extraction=simple)
         np.testing.assert_allclose(
             np.nan_to_num(out[0]), np.nan_to_num(expected[0]), rtol=1e-6
         )

@@ -22,6 +22,7 @@ class TestBandConfiguration(unittest.TestCase):
         self.assertEqual(science.denoise_window_s, 1.0)
         self.assertEqual(science.vif, 1.38)
         self.assertEqual(science.z_tol, 1.5)
+        self.assertFalse(science.simple_trace_extraction)
         self.assertEqual(science.sparse_fac, math.exp(-3.0))
         self.assertEqual(execution, ExecutionOptions(6, False, None))
         self.assertEqual(annotations, AnnotationOptions(False, None))
@@ -63,7 +64,8 @@ class TestBandConfiguration(unittest.TestCase):
 
     def test_dictionary_inputs_and_overrides_are_not_modified(self):
         """Each dictionary affects only its scope and is copied."""
-        params = {"analyze_hz": 80.0, "z_tol": 2.5}
+        params = {"analyze_hz": 80.0, "z_tol": 2.5,
+              "simple_trace_extraction": True}
         execution = {"max_workers": 2, "verbose": True}
         annotations = {
             "enabled": True,
@@ -75,6 +77,7 @@ class TestBandConfiguration(unittest.TestCase):
         )
         self.assertEqual(science.analyze_hz, 80.0)
         self.assertEqual(science.z_tol, 2.5)
+        self.assertTrue(science.simple_trace_extraction)
         self.assertEqual(run, ExecutionOptions(2, True, None))
         self.assertEqual(roi, AnnotationOptions(True, False))
         self.assertEqual((params, execution, annotations), original)
@@ -82,6 +85,13 @@ class TestBandConfiguration(unittest.TestCase):
 
 class TestConfigurationValidation(unittest.TestCase):
     """Reject unsupported settings before they reach numerical kernels."""
+
+    def test_simple_trace_extraction_requires_bool(self):
+        """Strings and integers cannot silently select an extraction mode."""
+        for value in (0, 1, "true", "false", None):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "simple_trace_extraction"):
+                    resolve_band_options({"simple_trace_extraction": value})
 
     def test_positive_scientific_values(self):
         """Rates, windows and positive scale values must be finite."""

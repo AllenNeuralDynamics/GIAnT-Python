@@ -31,7 +31,7 @@ from giant_python.pipeline.extract import extract_band_sources
 class TestBandWorkflow(unittest.TestCase):
     """Exercise the public API through the driver to saved results."""
 
-    def _run_mock_session(self, *, loaded=False, rois=False):
+    def _run_mock_session(self, *, loaded=False, rois=False, simple=False):
         """Check schema, policy and motion values in a two-path session."""
         n_frames, side, n_sp = 120, 15, 49
         positions = [(r, c) for r in range(4, 11) for c in range(4, 11)]
@@ -49,6 +49,7 @@ class TestBandWorkflow(unittest.TestCase):
         science_args = dict(
             analyze_hz=10, denoise_window_s=0.3, baseline_window_s=0.5,
             z_tol=2.5,
+            simple_trace_extraction=simple,
         )
         params = BandSiloParams(**science_args)
         before = (asdict(params), asdict(options), asdict(annotation))
@@ -345,6 +346,8 @@ class TestBandWorkflow(unittest.TestCase):
             assert summary.params is not None
             assert restored.params is not None
             self.assertEqual(summary.params["numChannels"], 2)
+            self.assertEqual(summary.params["simple_trace_extraction"], simple)
+            self.assertEqual(restored.params["simple_trace_extraction"], simple)
             self.assertNotIn("operator", summary.params)
             self.assertNotIn("operator", restored.params)
             self.assertEqual(summary.params["draw_user_rois"], rois)
@@ -385,6 +388,27 @@ class TestBandWorkflow(unittest.TestCase):
                     saved.sources[0].df_ls,
                     equal_nan=True,
                 )
+                if simple:
+                    # Constant activity: averaging must preserve its scale,
+                    # regardless of the projected profile's non-unit mass.
+                    np.testing.assert_allclose(
+                        runtime_result.trace_results[0].d_f,
+                        0.25 * (10 + 5 * dmd_ix), rtol=1e-6,
+                    )
+                    np.testing.assert_allclose(
+                        runtime_result.trace_results[0].f0_ls,
+                        0.75 * (10 + 5 * dmd_ix), rtol=1e-6,
+                    )
+                    np.testing.assert_allclose(
+                        saved.sources[0].df_ls[0],
+                        0, atol=1e-6,
+                    )
+                    # Existing baseline re-estimation removes a constant
+                    # signal but preserves total weighted fluorescence.
+                    np.testing.assert_allclose(
+                        saved.sources[0].df_ls[0] + saved.sources[0].f0[0],
+                        10 + 5 * dmd_ix, rtol=1e-6,
+                    )
                 self.assertEqual(len(path.user_rois), int(rois))
                 self.assertEqual(saved.annotation_enabled, rois)
                 if rois:
@@ -406,6 +430,13 @@ class TestBandWorkflow(unittest.TestCase):
     def test_loaded_table_is_not_reopened(self):
         """Prepare a loaded model directly without a second file read."""
         self._run_mock_session(loaded=True)
+
+    def test_simple_extraction_reaches_saved_traces(self):
+        """Opt-in averaging reaches per-trial extraction and HDF5 output."""
+        with patch.object(
+            traces, "solve_phi_motion", side_effect=AssertionError("LS called")
+        ):
+            self._run_mock_session(loaded=True, simple=True)
 
     def test_split_policy_preserves_rois_and_caller_options(self):
         """Split policy leaves scientific options unchanged."""

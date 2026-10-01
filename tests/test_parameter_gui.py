@@ -21,6 +21,7 @@ class TestParameterGui(unittest.TestCase):
         self.tk = MagicMock()
         self.root = self.tk.Tk.return_value
         self.variables = []
+        self.boolean_variables = []
         self.buttons = {}
         self.tk.StringVar.side_effect = self._string_var
         self.tk.BooleanVar.side_effect = self._boolean_var
@@ -37,9 +38,10 @@ class TestParameterGui(unittest.TestCase):
         return variable
 
     def _boolean_var(self, *, value):
-        """Track the ROI inclusion control separately from text fields."""
+        """Track checkbox controls separately from text fields."""
         self.roi_var = MagicMock()
         self.roi_var.get.return_value = value
+        self.boolean_variables.append(self.roi_var)
         return self.roi_var
 
     def _button(self, parent, *, text, command):
@@ -59,6 +61,7 @@ class TestParameterGui(unittest.TestCase):
             self.variables[8].get.return_value = "3"
             self.variables[9].get.return_value = "2.5"
             self.variables[10].get.return_value = "-2"
+            self.boolean_variables[0].get.return_value = True
             self.roi_var.get.return_value = True
             self.buttons["OK"]()
 
@@ -69,6 +72,8 @@ class TestParameterGui(unittest.TestCase):
         self.assertEqual(science.analyze_hz, 125)
         self.assertEqual(science.peakth, 8)
         self.assertEqual(science.z_tol, 2.5)
+        self.assertTrue(science.simple_trace_extraction)
+        self.assertFalse(params.simple_trace_extraction)
         self.assertEqual(params.z_tol, 1.5)
         self.assertAlmostEqual(science.sparse_fac, math.exp(-2))
         labels = [
@@ -91,6 +96,13 @@ class TestParameterGui(unittest.TestCase):
         self.root.mainloop.side_effect = lambda: self.buttons["Cancel"]()
         self.assertIsNone(run_parameter_gui())
         self.root.destroy.assert_called_once()
+
+    def test_simple_trace_checkbox_preserves_initial_value(self):
+        """An enabled mode survives accepting the form without edits."""
+        self.root.mainloop.side_effect = lambda: self.buttons["OK"]()
+        result = run_parameter_gui(BandSiloParams(simple_trace_extraction=True))
+        self.assertTrue(result[0].simple_trace_extraction)
+        self.assertFalse(result[2].enabled)
 
     def test_invalid_input_shows_error_without_accepting(self):
         """Invalid scientific values leave the form open for correction."""

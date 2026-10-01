@@ -113,6 +113,7 @@ class TestOptionsFromArgs(unittest.TestCase):
         params, execution, annotations = cli._options_from_args(args)
         self.assertEqual(params.peakth, 7.0)
         self.assertEqual(params.z_tol, 1.5)
+        self.assertFalse(params.simple_trace_extraction)
         self.assertFalse(hasattr(params, "scan_mode"))
         self.assertTrue(annotations.enabled)
         self.assertTrue(annotations.interactive)
@@ -209,11 +210,13 @@ class TestCommandServices(unittest.TestCase):
                     "2.5",
                     "--headless",
                     "--draw-user-rois",
+                    "--simple-trace-extraction",
                 ]
             )
         self.assertEqual(code, 0)
         self.assertEqual(extract.call_args.args[0], "curated_v2.h5")
         self.assertEqual(extract.call_args.args[1].z_tol, 2.5)
+        self.assertTrue(extract.call_args.args[1].simple_trace_extraction)
         self.assertEqual(extract.call_args.kwargs["scan_mode"], "band")
         self.assertEqual(extract.call_args.kwargs["execution"].max_trials, 4)
         self.assertTrue(extract.call_args.kwargs["annotations"].enabled)

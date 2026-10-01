@@ -131,6 +131,24 @@ For data not collected on SLAP2, the reference GIAnT-MATLAB pipeline sets Epochs
 
 ## Pipeline Outputs
 
+### Optional weighted-average traces
+
+Set `BandSiloParams(simple_trace_extraction=True)` (or the equivalent parameter
+dictionary) to extract final traces by spatial-profile weighted averaging
+instead of least squares. The CLI option is `--simple-trace-extraction`; the
+parameter GUI also provides a checkbox. The default is `False`.
+
+Source identification and profile fitting are unchanged. For each motion bin,
+the fitted profile is projected into superpixel space and normalized by its
+sum. The normalized intensities average the background-subtracted superpixel
+activity into `dF_ls` and the background into `F0`, preserving their compatible
+scales for subsequent baseline processing. Unlike least squares, this does not
+de-mix overlapping sources. Unobserved frames and profiles with zero observed
+support yield NaN. The output schema retains `dF_ls` in both modes, and summary
+parameters record `simple_trace_extraction`.
+
+### Output schema
+
 The extensive trees and field tables below are **reference schemas**, not a list of everything Python emits. The working BandSILo writer emits a subset of the experiment summary: source `profiles`, `coords`, `dF_ls`, `F0`, `SNR`; visualizations; `Z_depths`; global `F`; frame bookkeeping and shifts; and, when enabled, ROI `labels`, `mask`, and `F`. Disabled annotations omit the ROI group; enabled-but-empty annotations are distinct.
 
 **Future/reference-only output:** `dF_denoised`, `events`, ROI `Fsvd`, and the entire per-trial summary are **not emitted**. Fields retained on model classes do not imply that the band codec reads/writes them. Arbitrary reference files are not guaranteed to round-trip losslessly through `ExperimentSummary`.

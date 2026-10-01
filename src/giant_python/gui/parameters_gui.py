@@ -65,6 +65,12 @@ def run_parameter_gui(
     sparse_var = tk.StringVar(value=str(float(np.log(base.sparse_fac))))
     ttk.Entry(frame, textvariable=sparse_var, width=15).grid(row=row, column=1)
     row += 1
+    ttk.Label(frame, text="Simple Trace Extraction?").grid(
+        row=row, column=0, sticky=tk.W
+    )
+    simple_trace_var = tk.BooleanVar(value=base.simple_trace_extraction)
+    ttk.Checkbutton(frame, variable=simple_trace_var).grid(row=row, column=1)
+    row += 1
     ttk.Label(frame, text="Draw User ROIs?").grid(
         row=row, column=0, sticky=tk.W
     )
@@ -90,6 +96,7 @@ def run_parameter_gui(
                 "peak_buffer": int(entries["peak_buffer"].get()),
                 "z_tol": float(entries["z_tol"].get()),
                 "sparse_fac": float(np.exp(float(sparse_var.get()))),
+                "simple_trace_extraction": bool(simple_trace_var.get()),
             }
             result["options"] = (
                 replace(base, **updates),

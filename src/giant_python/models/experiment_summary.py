@@ -22,8 +22,9 @@ class Source:
     coords : ndarray or None
         0-indexed ``[z, y, x]`` location.
     df_ls, df_denoised, events : ndarray or None
-        Least-squares dF, denoised dF, and deconvolved events,
-        shaped ``(channels, frames)``.
+        Extracted dF (least squares or profile-weighted average, after baseline
+        re-estimation), denoised dF, and deconvolved events, shaped
+        ``(channels, frames)``. The historical ``df_ls`` name is retained.
     f0 : ndarray or None
         Per-channel baseline.
     snr : float or None
