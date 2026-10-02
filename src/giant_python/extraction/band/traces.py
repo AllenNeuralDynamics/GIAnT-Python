@@ -257,7 +257,8 @@ def _solve_trial_phi_f0(
     -------
     phi, f0 : torch.Tensor of shape (n_frames, n_sources)
         Per-source dF and background projection (NaN where no motion bin
-        applies, or where weighted averaging has no profile support).
+        applies, where least-squares input frames contain nonfinite samples,
+        or where weighted averaging has no profile support).
     """
     n_sources = a_final.shape[1]
     n_frames = data.shape[1]

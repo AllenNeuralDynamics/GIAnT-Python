@@ -192,6 +192,39 @@ class TestWeightedTraceAverage(unittest.TestCase):
         self.assertTrue(torch.isnan(f0[-1]).all())
 
 
+class TestLeastSquaresTraceExtraction(unittest.TestCase):
+    """Missing high-resolution observations must not abort a trial."""
+
+    def test_missing_data_and_background_in_motion_bins(self):
+        """dF and F0 retain their own missing-frame masks across motion bins."""
+        profiles = torch.tensor([[1., 2.], [3., 0.], [0., 4.]])
+        h_mots = [
+            torch.eye(3).to_sparse(),
+            torch.diag(torch.tensor([2., 1., 3.])).to_sparse(),
+        ]
+        data = np.arange(24, dtype=np.float32).reshape(3, 8) + 5
+        background = np.ones_like(data)
+        bins = np.array([0, 0, 0, 1, 1, 1, 1, -1])
+        args = (
+            data, background, np.array([[0, 0], [1, 0]]), bins,
+            np.array([0, 1]), np.empty((0, 2)), np.empty(0), np.arange(3),
+            profiles, 3, 3,
+        )
+        with patch.object(tr, "build_motion_h_matrices", return_value=h_mots):
+            expected_phi, expected_f0 = tr._solve_trial_phi_f0(*args)
+            data[0, 1] = np.nan
+            data[:, 2] = np.nan
+            background[1, 3] = np.nan
+            data[2, 4] = np.inf
+            phi, f0 = tr._solve_trial_phi_f0(*args)
+
+        torch.testing.assert_close(phi[[0, 5, 6]], expected_phi[[0, 5, 6]])
+        self.assertTrue(torch.isnan(phi[[1, 2, 3, 4, 7]]).all())
+        valid_f0 = [0, 1, 2, 4, 5, 6]
+        torch.testing.assert_close(f0[valid_f0], expected_f0[valid_f0])
+        self.assertTrue(torch.isnan(f0[[3, 7]]).all())
+
+
 class TestBinTrialMotion(unittest.TestCase):
     """The configured z tolerance controls trial-frame retention."""
 

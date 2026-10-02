@@ -282,7 +282,10 @@ def solve_phi_motion(
     Numerical rank uses the cutoff ``max(X.shape) * eps * abs(R[0, 0])``.
     Pivot ties and borderline rank decisions can differ from MATLAB.
     Inputs must be real float32/float64 CPU tensors without gradients;
-    returns ``phiᵀ`` (frames x sources), preserving the input dtype.
+    ``x`` must be finite. Data frames containing any NaN or infinity return
+    NaN for all sources; only fully finite frames enter the solve. Missing
+    observations are not replaced with zeros or used for partial-frame fits.
+    Returns ``phiᵀ`` (frames x sources), preserving the input dtype.
     Shared by the NMF fits here and the high-res trace solve in
     :mod:`giant_python.extraction.band.traces`.
     """
@@ -292,14 +295,24 @@ def solve_phi_motion(
     if min(x.shape) == 0 or data_motion.shape[1] == 0:
         return torch.from_numpy(phi.T)
 
+    # SciPy rejects the entire RHS batch if even one frame is nonfinite.
+    # Preserve missing frames without contaminating the independent fits,
+    # including coefficients that would otherwise be zero for deficient X.
+    valid_frames = np.all(np.isfinite(data_array), axis=0)
+    phi[:, ~valid_frames] = np.nan
+
     q, r, piv = qr(x_array, mode="economic", pivoting=True)
     diagonal = np.abs(np.diag(r))
     tolerance = max(x.shape) * np.finfo(x_array.dtype).eps * diagonal[0]
     # Use a leading block: stop at the first numerically dependent column.
     rank = int(np.count_nonzero(np.cumprod(diagonal > tolerance)))
-    if rank:
-        phi[piv[:rank], :] = solve_triangular(
-            r[:rank, :rank], q[:, :rank].T @ data_array
+    if rank and np.any(valid_frames):
+        # Avoid copying the observation matrix in the usual all-finite case.
+        finite_data = (
+            data_array if np.all(valid_frames) else data_array[:, valid_frames]
+        )
+        phi[np.ix_(piv[:rank], valid_frames)] = solve_triangular(
+            r[:rank, :rank], q[:, :rank].T @ finite_data
         )
     return torch.from_numpy(phi.T)
 

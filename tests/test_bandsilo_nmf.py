@@ -212,6 +212,52 @@ class TestSolvePhiMotion(unittest.TestCase):
         phi = nmf.solve_phi_motion(x, torch.ones((3, 4)))
         torch.testing.assert_close(phi, torch.zeros((4, 2)))
 
+    def test_nonfinite_frames_do_not_abort_finite_fits(self):
+        """Missing observations invalidate a frame, not the whole batch."""
+        for dtype in (torch.float32, torch.float64):
+            for design in (
+                [[1, 0], [0, 1], [1, 1]],
+                [[1, 2], [2, 4], [3, 6]],
+                [[1, 0, 2], [0, 3, 0]],
+                [[0, 0], [0, 0], [0, 0]],
+            ):
+                with self.subTest(dtype=dtype, design=design):
+                    x = torch.tensor(design, dtype=dtype)
+                    data = torch.arange(
+                        x.shape[0] * 6, dtype=dtype
+                    ).reshape(x.shape[0], 6)
+                    data[0, 1] = float("nan")
+                    data[:, 2] = float("nan")
+                    data[-1, 3] = float("inf")
+                    data[0, 4] = -float("inf")
+                    original = data.clone()
+                    expected = nmf.solve_phi_motion(x, data[:, [0, 5]])
+                    actual = nmf.solve_phi_motion(x, data)
+                    self.assertEqual(actual.shape, (6, x.shape[1]))
+                    self.assertEqual(actual.dtype, dtype)
+                    torch.testing.assert_close(actual[[0, 5]], expected)
+                    self.assertTrue(torch.isnan(actual[1:5]).all())
+                    torch.testing.assert_close(data, original, equal_nan=True)
+
+    def test_all_frames_missing(self):
+        """An entirely missing bin returns NaNs, including dependent sources."""
+        for dtype in (torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                x = torch.tensor([[1, 2], [2, 4], [3, 6]], dtype=dtype)
+                data = torch.full((3, 4), float("nan"), dtype=dtype)
+                actual = nmf.solve_phi_motion(x, data)
+                self.assertEqual(actual.shape, (4, 2))
+                self.assertEqual(actual.dtype, dtype)
+                self.assertTrue(torch.isnan(actual).all())
+
+    def test_nonfinite_profiles_still_raise(self):
+        """Invalid spatial models must not be silently accepted by QR."""
+        for value in (float("nan"), float("inf")):
+            with self.subTest(value=value):
+                x = torch.tensor([[1., 0.], [0., value], [1., 1.]])
+                with self.assertRaisesRegex(ValueError, "infs or NaNs"):
+                    nmf.solve_phi_motion(x, torch.ones((3, 2)))
+
     def test_numerically_dependent_column(self):
         """The dtype-relative cutoff drops a tiny trailing QR diagonal."""
         for dtype in (torch.float32, torch.float64):
