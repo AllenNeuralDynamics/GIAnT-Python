@@ -2,10 +2,9 @@
 
 Covers the profile/init kernels, the least-squares/SNR helpers, and the full
 ``fit_sources`` driver (multiplicative NMF + Adam Gaussian fit + variance
-sort + SNR pruning) on a small synthetic geometry. The driver is additionally
-cross-checked bit-for-bit against a verbatim copy of the reference (under a
-shared torch seed) in the project's development notes; here we assert
-structural behavior and determinism.
+sort + SNR pruning) on a small synthetic geometry. We assert structural
+behavior and determinism rather than bit-for-bit agreement with the
+reference's regularized normal-equation solve.
 """
 
 import unittest
@@ -124,6 +123,117 @@ class TestVarianceSortAndReorder(unittest.TestCase):
         np.testing.assert_array_equal(ss[:, 0], [6.0, 0.0, 3.0])
         np.testing.assert_array_equal(na[0].numpy(), [2.0, 0.0, 1.0])
         np.testing.assert_array_equal(xs[0][0].numpy(), [2, 0, 1])
+
+
+class TestSolvePhiMotion(unittest.TestCase):
+    """Unregularized, rank-revealing QR temporal solve."""
+
+    def test_overdetermined_multiple_frames(self):
+        """QR matches an independent SVD least-squares reference."""
+        for dtype in (torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                x = torch.tensor(
+                    [[1, 2], [3, 1], [2, 4], [0, 1]], dtype=dtype
+                )
+                data = torch.tensor(
+                    [[2, 1], [0, 3], [4, 2], [1, 5]], dtype=dtype
+                )
+                phi = nmf.solve_phi_motion(x, data)
+                expected = np.linalg.lstsq(
+                    x.numpy(), data.numpy(), rcond=None
+                )[0].T
+                self.assertEqual(phi.shape, (2, 2))
+                self.assertEqual(phi.dtype, dtype)
+                self.assertEqual(phi.device, x.device)
+                np.testing.assert_allclose(
+                    phi.numpy(), expected, rtol=1e-5, atol=1e-6
+                )
+
+    def test_small_profiles_are_not_regularized(self):
+        """Tiny profile magnitudes must not shrink the temporal weights."""
+        x = 1e-6 * torch.tensor([[1., 0.], [0., 1.], [1., 1.]])
+        expected = torch.tensor([[2., 3.], [4., 5.]])
+        phi = nmf.solve_phi_motion(x, x @ expected.T)
+        torch.testing.assert_close(phi, expected)
+
+    def test_nearly_collinear_profiles(self):
+        """QR resolves columns whose float32 normal equations lose rank."""
+        x = torch.tensor([[1., 1.], [1., 1.0001], [1., 0.9999]])
+        expected = torch.tensor([[2., -1.], [-3., 4.]])
+        phi = nmf.solve_phi_motion(x, x @ expected.T)
+        torch.testing.assert_close(phi, expected, rtol=5e-3, atol=5e-3)
+
+    def test_rank_deficient_basic_solution(self):
+        """Dependent coefficients are zero, not shared by minimum norm."""
+        for dtype in (torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                x = torch.tensor([[1, 2], [2, 4], [3, 6]], dtype=dtype)
+                # Include an inconsistent RHS to test least squares too.
+                data = torch.tensor([[3, 1], [6, 0], [9, 0]], dtype=dtype)
+                phi = nmf.solve_phi_motion(x, data)
+                expected = torch.tensor(
+                    [[0, 1.5], [0, 1 / 28]], dtype=dtype
+                )
+                torch.testing.assert_close(phi, expected)
+                self.assertTrue(torch.all(phi[:, 0] == 0))
+                # Residual is orthogonal to the column space.
+                torch.testing.assert_close(
+                    x.T @ (x @ phi.T - data),
+                    torch.zeros((2, 2), dtype=dtype),
+                    atol=2e-5, rtol=0,
+                )
+
+    def test_underdetermined_basic_solution(self):
+        """Solve only the independent pivot columns and undo permutation."""
+        for dtype in (torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                # Distinct pivot norms avoid ambiguous tie-breaking.
+                x = torch.tensor([[1, 0, 2], [0, 3, 0]], dtype=dtype)
+                data = torch.tensor([[4, -2], [9, 6]], dtype=dtype)
+                phi = nmf.solve_phi_motion(x, data)
+                expected = torch.tensor([[0, 3, 2], [0, 2, -1]], dtype=dtype)
+                torch.testing.assert_close(phi, expected)
+                self.assertTrue(torch.all(phi[:, 0] == 0))
+                torch.testing.assert_close(x @ phi.T, data)
+
+    def test_rank_deficient_underdetermined(self):
+        """A wide rank-one system uses exactly one pivot coefficient."""
+        x = torch.tensor([[0., 1., 2.], [0., 2., 4.]])
+        data = torch.tensor([[6., -2.], [12., -4.]])
+        phi = nmf.solve_phi_motion(x, data)
+        torch.testing.assert_close(
+            phi, torch.tensor([[0., 0., 3.], [0., 0., -1.]])
+        )
+        self.assertTrue(torch.all(phi[:, :2] == 0))
+
+    def test_zero_rank(self):
+        """A zero design matrix returns the all-zero basic solution."""
+        x = torch.zeros((3, 2))
+        phi = nmf.solve_phi_motion(x, torch.ones((3, 4)))
+        torch.testing.assert_close(phi, torch.zeros((4, 2)))
+
+    def test_numerically_dependent_column(self):
+        """The dtype-relative cutoff drops a tiny trailing QR diagonal."""
+        for dtype in (torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                x = torch.tensor(
+                    [[1, 0], [0, torch.finfo(dtype).eps / 10], [0, 0]],
+                    dtype=dtype,
+                )
+                data = x @ torch.ones((2, 1), dtype=dtype)
+                phi = nmf.solve_phi_motion(x, data)
+                torch.testing.assert_close(
+                    phi, torch.tensor([[1, 0]], dtype=dtype)
+                )
+
+    def test_empty_sources_and_frames(self):
+        """Empty bins and fully pruned sources preserve output dimensions."""
+        for n_sources, n_frames in ((0, 3), (2, 0), (0, 0)):
+            with self.subTest(n_sources=n_sources, n_frames=n_frames):
+                x = torch.eye(4, n_sources)
+                data = torch.zeros((4, n_frames))
+                phi = nmf.solve_phi_motion(x, data)
+                self.assertEqual(phi.shape, (n_frames, n_sources))
 
 
 class TestPhiAndSnr(unittest.TestCase):

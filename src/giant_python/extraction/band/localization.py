@@ -25,10 +25,10 @@ the fitted ``source_params`` ``[z, y, x, sigma_y, sigma_x, tilt]``, and the
 
 This block is intentionally stochastic (random motion order via
 ``torch.randperm`` in NMF and Adam); the pipeline does not seed the RNG. The
-``randperm`` calls are preserved in the same order as the reference so a seeded
-run with unfiltered input reproduces it exactly. The reference's loss-only
-``phi`` recomputation and ``print``/warning diagnostics are dropped (they do not
-affect the outputs and consume no RNG).
+``randperm`` calls are preserved in the same order as the reference, but the
+unregularized QR temporal solve changes numerical results. The reference's
+loss-only ``phi`` recomputation and ``print``/warning diagnostics are dropped
+(they do not affect the outputs and consume no RNG).
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from typing import List, cast
 
 import numpy as np
 import torch
+from scipy.linalg import qr, solve_triangular
 
 from ...progress import progress
 from .activity import smooth_rho
@@ -271,15 +272,36 @@ def solve_phi_motion(
 ) -> torch.Tensor:
     """Least-squares temporal weights for one motion's superpixel profiles.
 
-    Solves the regularized normal equations
-    ``(XᵀX + 1e-10 I) phi = Xᵀ data`` and returns ``phiᵀ`` (frames x sources).
+    Uses column-pivoted QR, ``X[:, piv] = Q R``, to return a basic solution
+    as in MATLAB's rectangular ``mldivide``: solve the leading independent
+    triangular block and set the remaining pivoted coefficients to zero.
+    Rank-deficient and underdetermined systems therefore have at most
+    ``rank(X)`` nonzero coefficients per frame, not a minimum-norm solution.
+    No normal equations or ridge regularization are used.
+
+    Numerical rank uses the cutoff ``max(X.shape) * eps * abs(R[0, 0])``.
+    Pivot ties and borderline rank decisions can differ from MATLAB.
+    Inputs must be real float32/float64 CPU tensors without gradients;
+    returns ``phiᵀ`` (frames x sources), preserving the input dtype.
     Shared by the NMF fits here and the high-res trace solve in
     :mod:`giant_python.extraction.band.traces`.
     """
-    xtx = x.T @ x
-    xtd = x.T @ data_motion
-    regularized = xtx + 1e-10 * torch.eye(xtx.shape[0])
-    return torch.linalg.solve(regularized, xtd).T
+    x_array = x.numpy()
+    data_array = data_motion.numpy()
+    phi = np.zeros((x.shape[1], data_motion.shape[1]), dtype=x_array.dtype)
+    if min(x.shape) == 0 or data_motion.shape[1] == 0:
+        return torch.from_numpy(phi.T)
+
+    q, r, piv = qr(x_array, mode="economic", pivoting=True)
+    diagonal = np.abs(np.diag(r))
+    tolerance = max(x.shape) * np.finfo(x_array.dtype).eps * diagonal[0]
+    # Use a leading block: stop at the first numerically dependent column.
+    rank = int(np.count_nonzero(np.cumprod(diagonal > tolerance)))
+    if rank:
+        phi[piv[:rank], :] = solve_triangular(
+            r[:rank, :rank], q[:, :rank].T @ data_array
+        )
+    return torch.from_numpy(phi.T)
 
 
 def fit_phi_all_motions(
