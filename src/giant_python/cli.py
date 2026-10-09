@@ -26,10 +26,20 @@ from .models.params import (
 
 def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     """Attach the shared source-extraction options to a subparser."""
+    for name, kind, help_text in (
+        ("decay_tau_s", float, "Shared localization and trace decay time in seconds."),
+        ("trace_beta_fraction", float, "Trial-relative nonnegative event penalty."),
+        ("trace_max_iter", int, "Maximum iterations per transient fit stage."),
+        ("trace_tolerance", float, "Transient optimizer tolerance."),
+        ("trace_event_threshold", float, "Absolute event threshold for debias support."),
+    ):
+        parser.add_argument(
+            "--" + name.replace("_", "-"), type=kind,
+            default=getattr(BandSiloParams, name), help=help_text,
+        )
     parser.add_argument(
-        "--simple-trace-extraction",
-        action="store_true",
-        help="Use profile-weighted averages instead of least squares for final traces.",
+        "--trace-debias", action="store_true",
+        help="Refit selected transient events without the L1 penalty.",
     )
     parser.add_argument(
         "--z-tol",
@@ -121,7 +131,12 @@ def _options_from_args(
     return (
         BandSiloParams(
             z_tol=args.z_tol,
-            simple_trace_extraction=args.simple_trace_extraction,
+            decay_tau_s=args.decay_tau_s,
+            trace_beta_fraction=args.trace_beta_fraction,
+            trace_max_iter=args.trace_max_iter,
+            trace_tolerance=args.trace_tolerance,
+            trace_debias=args.trace_debias,
+            trace_event_threshold=args.trace_event_threshold,
         ),
         ExecutionOptions(
             max_workers=args.max_workers,

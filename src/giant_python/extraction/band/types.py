@@ -14,6 +14,9 @@ class TrialTraceResult(NamedTuple):
     Reference offsets and online shifts are (row, column, z) arrays, each
     with one value per frame. Only output assembly negates reference offsets
     into saved MATLAB displacement. Skipped trials have zero frames.
+    ``d_f`` is the LS result in production; ``d_f_denoised`` and ``events``
+    contain separate convolution outputs. Optional defaults permit legacy
+    eight-argument construction, but the record now has ten fields.
     """
 
     d_f: np.ndarray
@@ -24,6 +27,8 @@ class TrialTraceResult(NamedTuple):
     reference_offsets: tuple[np.ndarray, np.ndarray, np.ndarray]
     online_shifts: tuple[np.ndarray, np.ndarray, np.ndarray]
     user_roi_f: np.ndarray
+    d_f_denoised: np.ndarray | None = None
+    events: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

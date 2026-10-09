@@ -27,6 +27,15 @@ def _positive(name: str, value: object, *, integer: bool = False) -> None:
         raise ValueError(f"{name} must be a {label}")
 
 
+def _nonnegative(name: str, value: object) -> None:
+    """Reject nonfinite, negative, boolean, or nonnumeric values."""
+    if (
+        isinstance(value, bool) or not isinstance(value, Real)
+        or not math.isfinite(value) or value < 0
+    ):
+        raise ValueError(f"{name} must be a finite nonnegative number")
+
+
 @dataclass
 class BandSiloParams:
     """Scientific settings for the implemented SLAP2 band algorithm.
@@ -36,7 +45,8 @@ class BandSiloParams:
     analyze_hz : float
         Temporal analysis rate in Hz.
     decay_tau_s : float
-        Calcium-decay time constant in seconds.
+        Decay time constant in seconds, shared by localization filtering and
+        convolution-constrained trace extraction. Saved as decayTau_s.
     baseline_window_s, denoise_window_s : float
         Baseline and temporal denoising windows in seconds.
     vif : float
@@ -56,10 +66,16 @@ class BandSiloParams:
     z_tol : float
         Positive z tolerance in microns: maximum absolute motion-bin z
         deviation from the median frame z for low-resolution frame selection.
-    simple_trace_extraction : bool
-        Use normalized spatial-profile weighted averages of superpixels for
-        final dF and background traces instead of least squares. Source
-        localization is unchanged. Defaults to False.
+    trace_beta_fraction : float
+        Nonnegative event penalty relative to each trial's adjoint scale.
+    trace_max_iter : int
+        Maximum L-BFGS-B iterations per temporal optimization stage.
+    trace_tolerance : float
+        Positive optimizer objective/gradient tolerance.
+    trace_debias : bool
+        Refit selected events without L1 shrinkage (default False).
+    trace_event_threshold : float
+        Absolute event amplitude threshold for optional debias support.
 
     Notes
     -----
@@ -67,7 +83,8 @@ class BandSiloParams:
     separate from science. Numerical defaults preserve the band algorithm.
     Sparse-superpixel background interpolation always uses cubic splines.
     Channel count is inferred from acquisition metadata; source activity
-    extraction always uses channel zero.
+    extraction always uses channel zero. Production extraction always saves
+    least-squares dF_ls alongside convolution dF_denoised and events.
     """
 
     analyze_hz: float = 100.0
@@ -81,7 +98,11 @@ class BandSiloParams:
     peak_buffer: int = 3
     psf_dilation: int = 17
     z_tol: float = 1.5
-    simple_trace_extraction: bool = False
+    trace_beta_fraction: float = 0.01
+    trace_max_iter: int = 500
+    trace_tolerance: float = 1e-7
+    trace_debias: bool = False
+    trace_event_threshold: float = 1e-6
 
     def __post_init__(self) -> None:
         """Validate values supported by the existing numerical path."""
@@ -94,12 +115,15 @@ class BandSiloParams:
             "sparse_fac",
             "peakth",
             "z_tol",
+            "trace_tolerance",
         ):
             _positive(name, getattr(self, name))
-        for name in ("d_xy", "peak_buffer", "psf_dilation"):
+        for name in ("d_xy", "peak_buffer", "psf_dilation", "trace_max_iter"):
             _positive(name, getattr(self, name), integer=True)
-        if not isinstance(self.simple_trace_extraction, bool):
-            raise ValueError("simple_trace_extraction must be a bool")
+        if not isinstance(self.trace_debias, bool):
+            raise ValueError("trace_debias must be a bool")
+        for name in ("trace_beta_fraction", "trace_event_threshold"):
+            _nonnegative(name, getattr(self, name))
 
 
 @dataclass

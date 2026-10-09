@@ -131,27 +131,80 @@ For data not collected on SLAP2, the reference GIAnT-MATLAB pipeline sets Epochs
 
 ## Pipeline Outputs
 
-### Optional weighted-average traces
+### Least-squares and convolution-constrained traces
 
-Set `BandSiloParams(simple_trace_extraction=True)` (or the equivalent parameter
-dictionary) to extract final traces by spatial-profile weighted averaging
-instead of least squares. The CLI option is `--simple-trace-extraction`; the
-parameter GUI also provides a checkbox. The default is `False`.
+Production extraction always computes and saves both standard least-squares
+`sources/temporal/dF_ls` and convolution `sources/temporal/dF_denoised`, plus
+the fitted `sources/temporal/events`. Each has shape
+`(sources, channels, total frames)`. Only activity channel zero is processed;
+other channels and missing observations are NaN. Localization/NMF/profile
+fitting is unchanged.
 
-Source identification and profile fitting are unchanged. For each motion bin,
-the fitted profile is projected into superpixel space and normalized by its
-sum. The normalized intensities average the background-subtracted superpixel
-activity into `dF_ls` and the background into `F0`, preserving their compatible
-scales for subsequent baseline processing. Unlike least squares, this does not
-de-mix overlapping sources. Unobserved frames and profiles with zero observed
-support yield NaN. The output schema retains `dF_ls` in both modes, and summary
-parameters record `simple_trace_extraction`.
+There are no production trace-mode switches: both outputs are mandatory.
+The deprecated mode fields and CLI flags have been removed, and are no longer
+saved in new summary parameters. Low-level loaded-array functions still support
+weighted averages for diagnostics, not production summary extraction.
+
+The trace-only solver ports the standalone benchmark objective:
+`0.5 * ||(data - background) - H_motion A K s||² + beta * sum(s[1:])`,
+with nonnegative event amplitudes, a causal unit-peak exponential, and an
+unpenalized nonnegative initial state. It solves chronologically over each
+complete trial, across motion changes and missing frames; no state crosses
+trial boundaries. Returned dF preserves the QR complete-frame validity mask.
+F0 is still computed by QR, not by the transient model. Profiles are fixed.
+
+The trace kernel uses the existing `decay_tau_s` setting (default `0.15` s),
+saved as `decayTau_s`, just like localization filtering. Change it with the
+existing GUI Decay Tau field or the CLI `--decay-tau-s` flag. There is no
+separate trace decay setting.
+
+Trace-only controls (also available as hyphenated CLI flags):
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `trace_beta_fraction` | `0.01` | Fraction of each trial's positive adjoint scale; zero disables L1 |
+| `trace_max_iter` | `500` | Maximum L-BFGS-B iterations per stage |
+| `trace_tolerance` | `1e-7` | Objective/gradient tolerance |
+| `trace_debias` | `False` | Refit selected events without L1 shrinkage |
+| `trace_event_threshold` | `1e-6` | Absolute event threshold for debias support |
+
+These settings are recorded in summary parameters. A nonconverged fit raises
+an error rather than silently saving an unfinished estimate. Increase the
+iteration limit or inspect the low-level fit if this occurs. The standard LS
+trace and its background retain the existing baseline re-estimation for
+`dF_ls` and `F0`. `dF_denoised` is the fitted convolution trace itself, without
+a second baseline subtraction. `events` stores nonnegative event amplitudes,
+excluding the unpenalized initial state at each trial's first frame; discarded
+frames are NaN. Events are not inferred across trial boundaries.
+
+For loaded-array use, pass `transient_options=TransientOptions(...)` and
+`analyze_hz=...` to `compute_high_res_traces`. `TransientOptions` and
+`fit_transient_traces` live in `giant_python.extraction.band.transient`.
+The latter exposes events, initial state, in-gap model predictions, actual beta,
+and convergence diagnostics, and supports an absolute `beta` or explicit causal
+kernel. `TrialTraceResult` retains the original eight fields in order and adds
+`d_f_denoised` and `events`. Per-trial optimizer diagnostics and latent in-gap
+predictions are not added to the summary.
+
+This is an output-grid estimator: overlapping acquisition-line averaging is
+not modeled exactly. In-gap predictions are not observations, and glutamate
+events are not automatically neuronal spikes. A smoother trace alone does not
+establish improved SNR. Use a fresh output location when comparing modes.
 
 ### Output schema
 
-The extensive trees and field tables below are **reference schemas**, not a list of everything Python emits. The working BandSILo writer emits a subset of the experiment summary: source `profiles`, `coords`, `dF_ls`, `F0`, `SNR`; visualizations; `Z_depths`; global `F`; frame bookkeeping and shifts; and, when enabled, ROI `labels`, `mask`, and `F`. Disabled annotations omit the ROI group; enabled-but-empty annotations are distinct.
+The BandSILo writer emits the full experiment-summary layout below: source
+`profiles`, `coords`, `dF_ls`, `dF_denoised`, `events`, `F0`, `SNR`; visualizations;
+column-vector `Z_depths`; global `F`; frame bookkeeping and shifts; and ROI
+`labels`, `mask`, `Fsvd`, `F`. Disabled or empty annotations produce correctly
+shaped zero-ROI datasets; the `annotation_enabled` group attribute distinguishes
+their policies. ROI `Fsvd` is **not calculated by BandSILo** and is NaN unless
+supplied explicitly through the model. It is never copied from raw `F`.
 
-**Future/reference-only output:** `dF_denoised`, `events`, ROI `Fsvd`, and the entire per-trial summary are **not emitted**. Fields retained on model classes do not imply that the band codec reads/writes them. Arbitrary reference files are not guaranteed to round-trip losslessly through `ExperimentSummary`.
+Older summaries without the new temporal datasets remain readable. Rewriting
+missing optional data emits NaNs, not fabricated fits. The entire per-trial
+summary remains reference-only and is not emitted. Arbitrary reference files
+are not guaranteed to round-trip losslessly through `ExperimentSummary`.
 
 Trial-table writing is unavailable, and `TrialTable.to_h5` and the `AlignmentData` model have been removed. The shared HDF5 decoder and raw acquisition adapters nevertheless read the inputs needed by BandSILo. Existing summary writes replace supplied path groups but retain unrelated path groups and existing root parameters/layout flags; this is not an atomic replacement or resume mechanism. Prefer a fresh output location for a new analysis.
 
@@ -291,8 +344,8 @@ The final step of the pipeline, source extraction (Source Identification by Acti
     ├ 📁 sources
     |  ├ 📁 temporal
     |  |  ├ 📈 dF_ls (sources x channels x total frames)
-      |  |  ├ 📈 dF_denoised (sources x channels x total frames; REFERENCE ONLY, not emitted)
-      |  |  ├ 📈 events (sources x channels x total frames; REFERENCE ONLY, not emitted)
+      |  |  ├ 📈 dF_denoised (sources x channels x total frames)
+      |  |  ├ 📈 events (sources x channels x total frames)
     |  |  ├ 📈 F0 (sources x channels x total frames)
     |  |  └ 📈 SNR (sources x 1)
     |  └ 📁 spatial
@@ -301,7 +354,7 @@ The final step of the pipeline, source extraction (Source Identification by Acti
     ├ 📁 user_rois
     |  ├ 🔤 labels (rois x 1)
     |  ├ 🖼️ mask (rois x fastz x rows x cols)
-      |  ├ 📈 Fsvd (rois x channels x total frames; REFERENCE ONLY, not emitted)
+      |  ├ 📈 Fsvd (rois x channels x total frames; NaN when unavailable)
     |  └ 📈 F (rois x channels x total frames)
     ├ 📁 visualizations
     |  ├ 🖼️ mean_im (channels x fastz x rows x cols)
@@ -494,13 +547,13 @@ Top-level fields written by **all three** motion correction backends: `numChanne
 | `Path{n}/global/F` | channels x total frames | numeric | Fluorescence traces over the whole field (one row per channel) |
 | `Path{n}/user_rois/labels` | rois x 1 | string | User-defined ROI labels |
 | `Path{n}/user_rois/mask` | rois x fastz x rows x cols | uint8 or bool | Stacked binary masks for each user ROI |
-| `Path{n}/user_rois/Fsvd` | rois x channels x total frames | numeric | **Future/reference only; not emitted.** ROI signals after SVD / projection step |
+| `Path{n}/user_rois/Fsvd` | rois x channels x total frames | numeric | ROI SVD / projection signals; NaN when unavailable (not computed by BandSILo) |
 | `Path{n}/user_rois/F` | rois x channels x total frames | numeric | Raw or baseline-corrected ROI fluorescence |
 | `Path{n}/sources/spatial/profiles` | sources x fastz x rows x cols | numeric | Spatial component / pixel weights per source, averaged across trials with footprints |
 | `Path{n}/sources/spatial/coords` | sources x 3 | numeric | Source centers per row: `[z_loc, y_loc, x_loc]`, **0-indexed** |
 | `Path{n}/sources/temporal/dF_ls` | sources x channels x total frames | numeric | Least-squares ΔF (absolute or scaled) |
-| `Path{n}/sources/temporal/dF_denoised` | sources x channels x total frames | numeric | **Future/reference only; not emitted.** Denoised ΔF |
-| `Path{n}/sources/temporal/events` | sources x channels x total frames | numeric | **Future/reference only; not emitted.** Deconvolved source events |
+| `Path{n}/sources/temporal/dF_denoised` | sources x channels x total frames | numeric | Fitted convolution ΔF, saved alongside least squares |
+| `Path{n}/sources/temporal/events` | sources x channels x total frames | numeric | Nonnegative fitted event amplitudes; excludes the trial initial state |
 | `Path{n}/sources/temporal/F0` | sources x channels x total frames | numeric | Baseline estimate used for normalization |
 | `Path{n}/sources/temporal/SNR` | sources x 1 | numeric | (optional) Signal-to-noise ratio metric; only written when extraction emits per-source SNR |
 

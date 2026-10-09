@@ -83,6 +83,11 @@ def _result(index, alignment, roi_state="present"):
             )
             / 10
         )
+        signal[1] = np.nan
+        denoised = signal + 100 * (index + 1) + section.start
+        events = np.zeros_like(signal)
+        events[-1] = np.arange(1, n_sources + 1) + section.start
+        events[1] = np.nan
         traces.append(
             TrialTraceResult(
                 signal,
@@ -95,6 +100,8 @@ def _result(index, alignment, roi_state="present"):
                 np.full(
                     (n_frames, n_rois, channels), index + 7.0, dtype=np.float32
                 ),
+                denoised,
+                events,
             )
         )
     masks = [np.ones((nz, rows, cols), dtype=bool)] if n_rois else []
@@ -185,6 +192,24 @@ class TestPathSummaryRoundTrip(unittest.TestCase):
             self.assertTrue(all(p.annotation_enabled for p in summary.paths))
             for index, path in enumerate(summary.paths):
                 self.assertIsInstance(path.frame_info, FrameInfo)
+                expected_denoised = np.concatenate([
+                    r.d_f_denoised for r in results[index].trace_results
+                ])
+                expected_events = np.concatenate([
+                    r.events for r in results[index].trace_results
+                ])
+                for source_index, source in enumerate(path.sources):
+                    for field, expected_trace in (
+                        ("df_denoised", expected_denoised),
+                        ("events", expected_events),
+                    ):
+                        values = getattr(source, field)
+                        self.assertEqual(values.shape, (results[index].num_channels, 9))
+                        np.testing.assert_array_equal(values[0], expected_trace[:, source_index])
+                        self.assertTrue(np.isnan(values[1:]).all())
+                    self.assertFalse(np.allclose(
+                        source.df_ls, source.df_denoised, equal_nan=True
+                    ))
                 self.assertIs(
                     path.frame_info.to_dict()["offlineXshifts"],
                     path.frame_info.offlineXshifts,
@@ -240,6 +265,11 @@ class TestPathSummaryRoundTrip(unittest.TestCase):
                         np.testing.assert_array_equal(actual[key][0], value)
             for index, path in enumerate(reloaded.paths):
                 self.assertEqual(path.path_index, index)
+                for before, after in zip(paths[index].sources, path.sources):
+                    for field in ("df_ls", "f0", "df_denoised", "events"):
+                        np.testing.assert_array_equal(
+                            getattr(after, field), getattr(before, field)
+                        )
                 np.testing.assert_array_equal(
                     path.visualizations.mean_im, results[index].mean_im
                 )
@@ -252,7 +282,17 @@ class TestPathSummaryRoundTrip(unittest.TestCase):
             with h5py.File(model_file, "r") as f:
                 self.assertEqual(f["Path2/user_rois/mask"].shape, (0, 2, 2, 3))
                 self.assertEqual(f["Path2/user_rois/F"].shape, (0, 1, 9))
+                self.assertEqual(f["Path2/user_rois/Fsvd"].shape, (0, 1, 9))
                 self.assertEqual(f["Path2/user_rois/labels"].shape, (0, 1))
+                self.assertTrue(f["Path2/user_rois"].attrs["annotation_enabled"])
+                self.assertTrue(np.isnan(f["Path1/user_rois/Fsvd"][()]).all())
+                for index, path in enumerate(paths):
+                    for key, field in (("dF_denoised", "df_denoised"),
+                                       ("events", "events")):
+                        np.testing.assert_array_equal(
+                            f[f"Path{index + 1}/sources/temporal/{key}"][()],
+                            np.stack([getattr(s, field) for s in path.sources]),
+                        )
                 for key in FRAME_INFO_KEYS:
                     self.assertEqual(f[f"Path1/frame_info/{key}"].ndim, 2)
 
@@ -290,7 +330,7 @@ class TestPathSummaryRoundTrip(unittest.TestCase):
         self.assertEqual(set(first.frame_info.to_dict()), set(FRAME_INFO_KEYS))
 
     def test_absent_rois_and_overwrite_semantics(self):
-        """Absent differs from empty; rewrites retain old params."""
+        """Disabled differs from enabled-empty by attribute, not group absence."""
         data = {
             "DSframes": [1, 5, 9],
             **{
@@ -319,8 +359,14 @@ class TestPathSummaryRoundTrip(unittest.TestCase):
             self.assertTrue(loaded.paths[1].annotation_enabled)
             self.assertEqual(loaded.params["operator"], "original")
             with h5py.File(path, "r") as f:
-                self.assertNotIn("user_rois", f["Path1"])
-                self.assertIn("user_rois", f["Path2"])
+                rois = f["Path1/user_rois"]
+                self.assertFalse(rois.attrs["annotation_enabled"])
+                self.assertEqual(set(rois), {"mask", "labels", "F", "Fsvd"})
+                self.assertEqual(rois["mask"].shape, (0, 1, 3, 4))
+                self.assertEqual(rois["labels"].shape, (0, 1))
+                self.assertEqual(rois["F"].shape, (0, 2, 9))
+                self.assertEqual(rois["Fsvd"].shape, (0, 2, 9))
+                self.assertTrue(f["Path2/user_rois"].attrs["annotation_enabled"])
 
     def test_empty_sources_retain_shape_and_dtype(self):
         """Numerical assembly and codecs retain empty tensor layout."""

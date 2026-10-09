@@ -30,6 +30,7 @@ from giant_python.models.params import (
     BandSiloParams,
     ExecutionOptions,
 )
+from giant_python.numerics.baseline import assemble_dff
 
 
 def _trial(n_frames, n_sources, n_channels, n_soma):
@@ -288,6 +289,24 @@ class TestStageComposition(unittest.TestCase):
         )
         self.assertEqual(metadata["backgroundInterpolation"], "cubic")
 
+    def test_persisted_trace_settings_exclude_removed_mode_keys(self):
+        """Default metadata retains tuning settings but no trace opt-outs."""
+        params = BandSiloParams()
+        metadata = wf._params_dict(
+            params,
+            ResolvedAcquisition(num_channels=1, align_hz=100.0),
+            AnnotationOptions(),
+        )
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            self.assertNotIn(name, metadata)
+        self.assertEqual(metadata["decayTau_s"], params.decay_tau_s)
+        for name in (
+            "trace_beta_fraction", "trace_max_iter", "trace_tolerance",
+            "trace_debias", "trace_event_threshold",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(metadata[name], getattr(params, name))
+
     def test_default_execution_skips_empty_planes_and_preserves_grid(self):
         """Interpolate selected planes; baseline and assembly share data."""
         data = np.array([[3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
@@ -470,6 +489,9 @@ class TestAssemblePathSummary(unittest.TestCase):
             self.assertEqual(source.coords.shape, (3,))
             self.assertEqual(source.df_ls.shape, (1, 13))
             self.assertEqual(source.f0.shape, (1, 13))
+            for values in (source.df_denoised, source.events):
+                self.assertEqual(values.shape, source.df_ls.shape)
+                self.assertTrue(np.isnan(values).all())
             self.assertEqual(source.df_ls.dtype, np.float64)
             self.assertEqual(source.f0.dtype, np.float64)
         np.testing.assert_array_equal([s.snr for s in path.sources], [1, 2])
@@ -487,8 +509,141 @@ class TestAssemblePathSummary(unittest.TestCase):
         pr = _path_result(n_channels=2)
         path = pl.assemble_path_summary(pr)
         self.assertEqual(path.global_f.shape, (2, 13))
-        self.assertEqual(path.sources[0].df_ls.shape, (2, 13))
-        self.assertTrue(np.isnan(path.sources[0].df_ls[1]).all())
+        for field in ("df_ls", "f0", "df_denoised", "events"):
+            values = getattr(path.sources[0], field)
+            self.assertEqual(values.shape, (2, 13))
+            self.assertTrue(np.isnan(values[1]).all())
+
+    def test_independent_traces_stitch_skips_masks_and_legacy_trials(self):
+        """Only LS gets baseline processing; raw fit outputs keep trial order."""
+        for channels in (1, 2):
+            with self.subTest(channels=channels):
+                pr = _path_result(n_sources=2, n_channels=channels)
+                fitted = []
+                for index, trial in enumerate(pr.trace_results):
+                    signal = trial.d_f.copy() - 0.5
+                    signal[1] = np.nan
+                    denoised = (
+                        np.arange(signal.size, dtype=np.float32)
+                        .reshape(signal.shape) + 100 * (index + 1)
+                    )
+                    events = np.zeros_like(signal)
+                    events[2, index] = 7 + index
+                    denoised[1] = np.nan
+                    events[1] = np.nan
+                    # Missing transient values must not alter the LS mask.
+                    denoised[3, 0] = np.nan
+                    events[4, 1] = np.nan
+                    fitted.append(trial._replace(
+                        d_f=signal, d_f_denoised=denoised, events=events,
+                        frame_line_idxs=trial.frame_line_idxs + 100 * index,
+                    ))
+                skipped = _trial(0, 2, channels, 0)._replace(
+                    d_f_denoised=np.empty((0, 2), dtype=np.float32),
+                    events=np.empty((0, 2), dtype=np.float32),
+                )
+                legacy = _trial(5, 2, channels, 0)
+                pr.trace_results = [fitted[0], skipped, fitted[1], legacy]
+                snapshots = [
+                    tuple(None if value is None else value.copy() for value in (
+                        trial.d_f, trial.f0_ls, trial.d_f_denoised, trial.events
+                    ))
+                    for trial in pr.trace_results
+                ]
+                raw_ls = np.concatenate([r.d_f for r in pr.trace_results])
+                raw_f0 = np.concatenate([r.f0_ls for r in pr.trace_results])
+                full, expected_f0, expected_ls, _ = assemble_dff(
+                    raw_ls, raw_f0, pr.denoise_window, pr.baseline_window
+                )
+                expected_denoised = np.concatenate([
+                    fitted[0].d_f_denoised, fitted[1].d_f_denoised,
+                    np.full_like(legacy.d_f, np.nan),
+                ])
+                expected_events = np.concatenate([
+                    fitted[0].events, fitted[1].events,
+                    np.full_like(legacy.d_f, np.nan),
+                ])
+                with patch.object(pl, "assemble_dff", wraps=assemble_dff) as baseline:
+                    path = pl.assemble_path_summary(pr)
+                baseline.assert_called_once()
+                np.testing.assert_array_equal(baseline.call_args.args[0], raw_ls)
+                np.testing.assert_array_equal(baseline.call_args.args[1], raw_f0)
+                self.assertEqual(baseline.call_args.args[2:], (3, 5))
+                self.assertFalse(np.allclose(raw_ls, expected_ls, equal_nan=True))
+                for index, source in enumerate(path.sources):
+                    for field, expected in (
+                        ("df_ls", expected_ls), ("f0", expected_f0),
+                        ("df_denoised", expected_denoised),
+                        ("events", expected_events),
+                    ):
+                        actual = getattr(source, field)
+                        self.assertEqual(actual.shape, (channels, 18))
+                        np.testing.assert_array_equal(actual[0], expected[:, index])
+                        self.assertTrue(np.isnan(actual[1:]).all())
+                    self.assertEqual(source.df_denoised.dtype, np.float32)
+                    self.assertEqual(source.events.dtype, np.float32)
+                np.testing.assert_array_equal(
+                    path.frame_info.trial_num_frames.ravel(), [6, 0, 7, 5]
+                )
+                np.testing.assert_array_equal(
+                    path.frame_info.discard_frames.ravel(),
+                    np.any(np.isnan(full), axis=1),
+                )
+                self.assertFalse(path.frame_info.discard_frames[[3, 4, 9, 10]].any())
+                np.testing.assert_array_equal(
+                    path.frame_info.frame_line_idxs.ravel(),
+                    np.concatenate([r.frame_line_idxs for r in pr.trace_results]),
+                )
+                np.testing.assert_array_equal(
+                    path.global_f,
+                    np.concatenate([r.global_f for r in pr.trace_results]).T,
+                )
+                for trial, before in zip(pr.trace_results, snapshots):
+                    for actual, expected in zip(
+                        (trial.d_f, trial.f0_ls, trial.d_f_denoised, trial.events),
+                        before,
+                    ):
+                        if expected is None:
+                            self.assertIsNone(actual)
+                        else:
+                            np.testing.assert_array_equal(actual, expected)
+
+                # Changing only the fit cannot change LS, F0 or discard flags.
+                pr.trace_results = [r._replace(
+                    d_f_denoised=(None if r.d_f_denoised is None
+                                  else r.d_f_denoised + 500),
+                    events=(None if r.events is None else r.events * 3),
+                ) for r in pr.trace_results]
+                changed = pl.assemble_path_summary(pr)
+                for before, after in zip(path.sources, changed.sources):
+                    np.testing.assert_array_equal(after.df_ls, before.df_ls)
+                    np.testing.assert_array_equal(after.f0, before.f0)
+                    np.testing.assert_array_equal(
+                        after.df_denoised[0], before.df_denoised[0] + 500
+                    )
+                    np.testing.assert_array_equal(after.events[0], before.events[0] * 3)
+                np.testing.assert_array_equal(
+                    changed.frame_info.discard_frames, path.frame_info.discard_frames
+                )
+
+    def test_missing_optional_fields_are_filled_independently(self):
+        """One absent fit field never erases or substitutes the other field."""
+        pr = _path_result(n_channels=2)
+        first, second = pr.trace_results
+        events = np.full_like(first.d_f, 7)
+        denoised = np.full_like(second.d_f, 50)
+        pr.trace_results = [
+            first._replace(events=events),
+            second._replace(d_f_denoised=denoised),
+        ]
+        path = pl.assemble_path_summary(pr)
+        for index, source in enumerate(path.sources):
+            self.assertTrue(np.isnan(source.df_denoised[0, :6]).all())
+            np.testing.assert_array_equal(source.df_denoised[0, 6:], denoised[:, index])
+            np.testing.assert_array_equal(source.events[0, :6], events[:, index])
+            self.assertTrue(np.isnan(source.events[0, 6:]).all())
+            self.assertTrue(np.isnan(source.df_denoised[1]).all())
+            self.assertTrue(np.isnan(source.events[1]).all())
 
     def test_user_rois_assembled(self):
         """draw_user_rois with masks assembles the user-ROI datasets."""
@@ -533,6 +688,9 @@ class TestAssemblePathSummary(unittest.TestCase):
             path._empty_source_arrays["profiles"].shape, (0, 1, 4, 5)
         )
         self.assertEqual(path._empty_source_arrays["dF_ls"].shape, (0, 2, 13))
+        for key in ("dF_denoised", "events"):
+            self.assertEqual(path._empty_source_arrays[key].shape, (0, 2, 13))
+            self.assertEqual(path._empty_source_arrays[key].dtype, np.float32)
         self.assertEqual(path._empty_source_arrays["SNR"].dtype, np.float32)
         self.assertEqual(path.global_f.shape, (2, 13))
         self.assertFalse(path.frame_info.discard_frames.any())
@@ -571,7 +729,17 @@ class TestWriteExperimentSummary(unittest.TestCase):
                 for key in FRAME_INFO_KEYS:
                     self.assertIn(key, grp["frame_info"])
                 self.assertIn("act_im", grp["visualizations"])
-                self.assertNotIn("user_rois", grp)
+                for key in ("dF_denoised", "events"):
+                    values = grp[f"sources/temporal/{key}"][()]
+                    self.assertEqual(values.shape, (2, 1, 13))
+                    self.assertTrue(np.isnan(values).all())
+                rois = grp["user_rois"]
+                self.assertFalse(rois.attrs["annotation_enabled"])
+                self.assertEqual(set(rois), {"mask", "labels", "F", "Fsvd"})
+                self.assertEqual(rois["mask"].shape, (0, 1, 4, 5))
+                self.assertEqual(rois["labels"].shape, (0, 1))
+                self.assertEqual(rois["F"].shape, (0, 1, 13))
+                self.assertEqual(rois["Fsvd"].shape, (0, 1, 13))
         finally:
             os.remove(path)
 
@@ -591,6 +759,9 @@ class TestWriteExperimentSummary(unittest.TestCase):
                 self.assertEqual(ur["mask"].shape, (1, 1, 4, 5))
                 self.assertEqual(ur["F"].shape, (1, 1, 13))
                 self.assertEqual(ur["labels"].shape, (1, 1))
+                self.assertTrue(ur.attrs["annotation_enabled"])
+                self.assertEqual(ur["Fsvd"].shape, ur["F"].shape)
+                self.assertTrue(np.isnan(ur["Fsvd"][()]).all())
         finally:
             os.remove(path)
 

@@ -97,6 +97,36 @@ class TestBuildParser(unittest.TestCase):
 class TestOptionsFromArgs(unittest.TestCase):
     """CLI separates science, execution and annotation configuration."""
 
+    def test_defaults_have_no_trace_mode_fields(self):
+        """Both commands build options without removed mode fields."""
+        parser = cli.build_parser()
+        for command in ("annotate", "extract"):
+            with self.subTest(command=command):
+                args = parser.parse_args([command, "tt.h5"])
+                original = vars(args).copy()
+                params, _, _ = cli._options_from_args(args)
+                for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+                    self.assertFalse(hasattr(args, name))
+                    self.assertFalse(hasattr(params, name))
+                self.assertEqual(vars(args), original)
+
+    def test_trace_tuning_flags(self):
+        """Trace controls and the shared decay setting reach science options."""
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "extract", "tt.h5",
+            "--decay-tau-s", "0.25", "--trace-beta-fraction", "0.02",
+            "--trace-max-iter", "900", "--trace-tolerance", "1e-9",
+            "--trace-debias", "--trace-event-threshold", "0.001",
+        ])
+        params, _, _ = cli._options_from_args(args)
+        self.assertEqual(params.decay_tau_s, .25)
+        self.assertEqual(params.trace_beta_fraction, .02)
+        self.assertEqual(params.trace_max_iter, 900)
+        self.assertEqual(params.trace_tolerance, 1e-9)
+        self.assertTrue(params.trace_debias)
+        self.assertEqual(params.trace_event_threshold, .001)
+
     def test_maps_fields(self):
         """Run and annotation flags do not change scientific defaults."""
         args = cli.build_parser().parse_args(
@@ -113,7 +143,6 @@ class TestOptionsFromArgs(unittest.TestCase):
         params, execution, annotations = cli._options_from_args(args)
         self.assertEqual(params.peakth, 7.0)
         self.assertEqual(params.z_tol, 1.5)
-        self.assertFalse(params.simple_trace_extraction)
         self.assertFalse(hasattr(params, "scan_mode"))
         self.assertTrue(annotations.enabled)
         self.assertTrue(annotations.interactive)
@@ -210,13 +239,13 @@ class TestCommandServices(unittest.TestCase):
                     "2.5",
                     "--headless",
                     "--draw-user-rois",
-                    "--simple-trace-extraction",
                 ]
             )
         self.assertEqual(code, 0)
         self.assertEqual(extract.call_args.args[0], "curated_v2.h5")
         self.assertEqual(extract.call_args.args[1].z_tol, 2.5)
-        self.assertTrue(extract.call_args.args[1].simple_trace_extraction)
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            self.assertFalse(hasattr(extract.call_args.args[1], name))
         self.assertEqual(extract.call_args.kwargs["scan_mode"], "band")
         self.assertEqual(extract.call_args.kwargs["execution"].max_trials, 4)
         self.assertTrue(extract.call_args.kwargs["annotations"].enabled)
@@ -252,6 +281,32 @@ class TestCommandServices(unittest.TestCase):
                     self.assertEqual(error.exception.code, 2)
                     self.assertIn("invalid choice", stderr.getvalue())
                     self.assertIn(argv[0], stderr.getvalue())
+        annotate.assert_not_called()
+        extract.assert_not_called()
+
+    def test_removed_trace_flags_fail_before_dispatch(self):
+        """Each former flag is unknown, not a compatibility or mode switch."""
+        flags = ("--simple-trace-extraction", "--convolution-trace-extraction")
+        with (
+            mock.patch.object(cli, "_cmd_annotate") as annotate,
+            mock.patch.object(cli, "_cmd_extract") as extract,
+        ):
+            for command in ("annotate", "extract"):
+                for supplied in ([flags[0]], [flags[1]], list(flags)):
+                    with self.subTest(command=command, flags=supplied):
+                        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                            with self.assertRaises(SystemExit) as error:
+                                cli.main([command, "tt.h5", *supplied])
+                        self.assertEqual(error.exception.code, 2)
+                        self.assertIn("unrecognized arguments", stderr.getvalue())
+                        for flag in supplied:
+                            self.assertIn(flag, stderr.getvalue())
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    with self.assertRaises(SystemExit) as error:
+                        cli.main([command, "--help"])
+                self.assertEqual(error.exception.code, 0)
+                for flag in flags:
+                    self.assertNotIn(flag, stdout.getvalue())
         annotate.assert_not_called()
         extract.assert_not_called()
 

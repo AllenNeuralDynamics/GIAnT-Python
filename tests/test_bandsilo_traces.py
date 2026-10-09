@@ -16,6 +16,7 @@ import torch
 from giant_python.extraction.band import operators
 from giant_python.extraction.band import traces as tr
 from giant_python.extraction.band.types import TrialTraceResult
+from giant_python.extraction.band.transient import TransientOptions, TransientResult
 
 
 def _geometry(npc=15, npr=15, num_fast_zs=2):
@@ -116,6 +117,35 @@ def _compute(inp, **kwargs):
     )
 
 
+class TestTrialTraceResult(unittest.TestCase):
+    """The original eight positional fields retain their identity and order."""
+
+    def test_legacy_constructor_defaults_and_extended_fields(self):
+        original = _compute(_trial_inputs())
+        legacy = TrialTraceResult(*original[:8])
+        self.assertEqual(len(legacy), 10)
+        self.assertEqual(legacy._fields, (
+            "d_f", "f0_ls", "frame_line_idxs", "selected_pixels", "global_f",
+            "reference_offsets", "online_shifts", "user_roi_f",
+            "d_f_denoised", "events",
+        ))
+        self.assertIsNone(legacy.d_f_denoised)
+        self.assertIsNone(legacy.events)
+        denoised = np.full_like(legacy.d_f, 13)
+        events = np.full_like(legacy.d_f, 2)
+        partial = TrialTraceResult(*legacy[:8], denoised)
+        self.assertIs(partial.d_f_denoised, denoised)
+        self.assertIsNone(partial.events)
+        extended = TrialTraceResult(*legacy[:8], denoised, events)
+        for index, value in enumerate(original[:8]):
+            self.assertIs(legacy[index], value)
+            self.assertIs(extended[index], value)
+        self.assertIs(extended.d_f_denoised, denoised)
+        self.assertIs(extended.events, events)
+        self.assertIs(extended[8], denoised)
+        self.assertIs(extended[9], events)
+
+
 class TestWeightedTraceAverage(unittest.TestCase):
     """Simple traces use profile intensities, not a regression coefficient."""
 
@@ -195,6 +225,75 @@ class TestWeightedTraceAverage(unittest.TestCase):
 class TestLeastSquaresTraceExtraction(unittest.TestCase):
     """Missing high-resolution observations must not abort a trial."""
 
+    def test_transient_outputs_never_replace_qr_and_default_return_stays_pair(self):
+        """Distinct fit payloads stay separate, including their missing masks."""
+        profiles = torch.eye(2)
+        h_mots = [torch.eye(2).to_sparse(), (2 * torch.eye(2)).to_sparse()]
+        data = np.array([
+            [-4., 2., 10., 4., 5., np.inf, 14., 8.],
+            [3., np.nan, 6., 8., 1., 3., 10., 4.],
+        ], dtype=np.float32)
+        background = np.ones_like(data)
+        background[0, 3] = np.nan
+        bins = np.array([0, 0, 1, 1, -1, 0, 1, 0])
+        valid = np.array([True, False, True, False, False, False, True, True])
+        denoised = np.arange(16, dtype=np.float32).reshape(8, 2) + 100
+        denoised[~valid] = np.nan
+        latent_events = np.arange(16, dtype=np.float32).reshape(8, 2) + 20
+        latent_events[0] = 0  # Initial state is not a new event.
+        expected_events = latent_events.copy()
+        expected_events[~valid] = np.nan
+        args = (
+            data, background, np.array([[0, 0], [1, 0]]), bins,
+            np.array([0, 1]), np.empty((0, 2)), np.empty(0), np.arange(2),
+            profiles, 2, 2,
+        )
+        options = TransientOptions()
+
+        def fitted(*args, **kwargs):
+            """Return fresh arrays so masking cannot affect later calls."""
+            return TransientResult(
+                d_f=denoised.copy(), events=latent_events.copy(),
+                initial_state=np.array([100., 101.]),
+                model_trace=np.full((8, 2), 999., dtype=np.float32),
+                metadata={"converged": True},
+            )
+
+        with patch.object(tr, "build_motion_h_matrices", return_value=h_mots):
+            qr = tr._solve_trial_phi_f0(*args)
+            no_fit = tr._solve_trial_phi_f0(*args, return_transient=True)
+            with patch.object(tr, "fit_transient_traces", side_effect=fitted) as fit:
+                pair = tr._solve_trial_phi_f0(
+                    *args, transient_options=options, analyze_hz=50,
+                )
+                extended = tr._solve_trial_phi_f0(
+                    *args, transient_options=options, analyze_hz=50,
+                    return_transient=True,
+                )
+        self.assertEqual(len(qr), 2)
+        self.assertEqual(len(pair), 2)
+        self.assertEqual(len(extended), 4)
+        self.assertEqual(len(no_fit), 4)
+        self.assertEqual(fit.call_count, 2)
+        for result in (pair, extended, no_fit):
+            for actual, expected in zip(result[:2], qr):
+                torch.testing.assert_close(actual, expected, equal_nan=True)
+        np.testing.assert_array_equal(qr[0][0], [-5., 2.])
+        np.testing.assert_array_equal(qr[0][2], [4.5, 2.5])
+        np.testing.assert_array_equal(qr[1][[1, 5]], np.ones((2, 2)))
+        np.testing.assert_array_equal(extended[2], denoised)
+        np.testing.assert_array_equal(extended[3], expected_events)
+        self.assertTrue(torch.isnan(no_fit[2]).all())
+        self.assertTrue(torch.isnan(no_fit[3]).all())
+        for call in fit.call_args_list:
+            np.testing.assert_array_equal(call.args[0], data - background)
+            np.testing.assert_array_equal(call.args[1][0], np.eye(2))
+            np.testing.assert_array_equal(call.args[1][1], 2 * np.eye(2))
+            np.testing.assert_array_equal(call.args[2], bins)
+            np.testing.assert_array_equal(call.args[3], valid)
+            self.assertEqual(call.args[4], 50)
+            self.assertIs(call.kwargs["options"], options)
+
     def test_missing_data_and_background_in_motion_bins(self):
         """dF and F0 retain their own missing-frame masks across motion bins."""
         profiles = torch.tensor([[1., 2.], [3., 0.], [0., 4.]])
@@ -251,15 +350,101 @@ class TestBinTrialMotion(unittest.TestCase):
 class TestComputeHighResTraces(unittest.TestCase):
     """compute_high_res_traces per-trial numerics."""
 
-    def test_default_remains_least_squares(self):
-        """Omitting the flag retains the existing solver for every bin."""
+    def test_transient_preserves_qr_masks_geometry_and_auxiliary_outputs(self):
+        """A real fit adds denoised/events without replacing any legacy field."""
+        inp = _trial_inputs(num_channels=2)
+        inp["a_data"]["motionDSz"][20:30] = 5
+        inp["data"][0, 4] = np.nan
+        inp["data"][1, 5] = np.inf
+        inp["background_ds"][0, 0:4] = np.nan
+        inp["frames"] = np.ceil(inp["frames"])
+        baseline = _compute(inp)
+        spatial_before = inp["a_final"].clone()
+        options = TransientOptions(max_iter=1500)
+        fitted = []
+        original_fit = tr.fit_transient_traces
+
+        def fit_trial(*args, **kwargs):
+            """Capture the real fit before the wrapper masks exposed events."""
+            result = original_fit(*args, **kwargs)
+            fitted.append(result)
+            return result
+
+        with patch.object(tr, "fit_transient_traces", side_effect=fit_trial) as solve:
+            out = _compute(inp, transient_options=options, analyze_hz=50)
+        solve.assert_called_once()
+        self.assertEqual(solve.call_args.args[4], 50)
+        self.assertIs(solve.call_args.kwargs["options"], options)
+        self.assertEqual(len(out), 10)
+        for actual, expected in zip(out[:8], baseline[:8]):
+            np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(
+            out.d_f_denoised, fitted[0].d_f.astype(np.float32)
+        )
+        expected_events = fitted[0].events.astype(np.float32)
+        expected_events[~solve.call_args.args[3]] = np.nan
+        np.testing.assert_array_equal(out.events, expected_events)
+        missing = np.isnan(baseline.d_f)
+        self.assertTrue(missing.any())
+        self.assertTrue((~missing).any())
+        for values in (out.d_f_denoised, out.events):
+            self.assertEqual(values.shape, baseline.d_f.shape)
+            self.assertEqual(values.dtype, np.float32)
+            np.testing.assert_array_equal(np.isnan(values), missing)
+            self.assertTrue((values[~missing] >= 0).all())
+            self.assertFalse(np.shares_memory(values, out.d_f))
+        self.assertFalse(np.shares_memory(out.d_f_denoised, out.events))
+        self.assertFalse(np.allclose(out.d_f, out.d_f_denoised, equal_nan=True))
+        torch.testing.assert_close(inp["a_final"], spatial_before)
+
+    def test_transient_all_missing_no_sources_and_failed_fit(self):
+        """Empty trials/sources are safe; failed fits never become normal output."""
         inp = _trial_inputs()
-        with patch.object(tr, "solve_phi_motion", wraps=tr.solve_phi_motion) as ls:
+        options = TransientOptions()
+        inp["data"][:] = np.nan
+        with patch.object(tr, "fit_transient_traces") as solve:
+            out = _compute(inp, transient_options=options, analyze_hz=50)
+        solve.assert_not_called()
+        self.assertTrue(np.isnan(out.d_f).all())
+        self.assertTrue(np.isnan(out.d_f_denoised).all())
+        self.assertTrue(np.isnan(out.events).all())
+        inp["a_final"] = inp["a_final"][:, :0]
+        out = _compute(inp, transient_options=options, analyze_hz=50)
+        self.assertEqual(out.d_f.shape, (40, 0))
+        self.assertEqual(out.d_f_denoised.shape, (40, 0))
+        self.assertEqual(out.events.shape, (40, 0))
+        inp = _trial_inputs()
+        with self.assertWarns(RuntimeWarning), self.assertRaisesRegex(RuntimeError, "did not converge"):
+            _compute(inp, transient_options=TransientOptions(max_iter=1), analyze_hz=50)
+
+    def test_transient_requires_explicit_rate_and_ordered_frames(self):
+        """Line positions must not be interpreted as time in seconds."""
+        inp = _trial_inputs()
+        options = TransientOptions()
+        with self.assertRaisesRegex(ValueError, "analyze_hz"):
+            _compute(inp, transient_options=options)
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            _compute(inp, transient_options=options, analyze_hz=50,
+                     simple_trace_extraction=True)
+        inp["frames"] = inp["frames"][::-1]
+        with self.assertRaisesRegex(ValueError, "chronological"):
+            _compute(inp, transient_options=options, analyze_hz=50)
+
+    def test_default_remains_least_squares(self):
+        """Isolated low-level extraction still permits QR without a fit."""
+        inp = _trial_inputs()
+        with (
+            patch.object(tr, "solve_phi_motion", wraps=tr.solve_phi_motion) as ls,
+            patch.object(tr, "fit_transient_traces") as fit,
+        ):
             default = _compute(inp)
+        fit.assert_not_called()
         self.assertGreater(ls.call_count, 0)
         explicit = _compute(inp, simple_trace_extraction=False)
         np.testing.assert_array_equal(default.d_f, explicit.d_f)
         np.testing.assert_array_equal(default.f0_ls, explicit.f0_ls)
+        self.assertTrue(np.isnan(default.d_f_denoised).all())
+        self.assertTrue(np.isnan(default.events).all())
 
     def test_simple_mode_preserves_mask_and_auxiliary_outputs(self):
         """Only dF/F0 extraction changes; z rejection and other channels stay."""
@@ -283,7 +468,7 @@ class TestComputeHighResTraces(unittest.TestCase):
             )
 
     def test_single_channel_shapes_and_fit(self):
-        """Returns the 8-tuple; phi/F0 are per-frame per-source with fits."""
+        """Returns ten fields; the original eight retain their positions."""
         inp = _trial_inputs(num_channels=1)
         out = _compute(inp)
         self.assertIsInstance(out, TrialTraceResult)
@@ -295,10 +480,18 @@ class TestComputeHighResTraces(unittest.TestCase):
         self.assertIs(out.reference_offsets, out[5])
         self.assertIs(out.online_shifts, out[6])
         self.assertIs(out.user_roi_f, out[7])
-        phi, f0, frames, sel, global_f, motion, online, f_soma = out
+        self.assertIs(out.d_f_denoised, out[8])
+        self.assertIs(out.events, out[9])
+        (
+            phi, f0, frames, sel, global_f, motion, online, f_soma,
+            denoised, events,
+        ) = out
         n_sources = inp["a_final"].shape[1]
         self.assertEqual(phi.shape, (inp["n_frames"], n_sources))
         self.assertEqual(f0.shape, (inp["n_frames"], n_sources))
+        for values in (denoised, events):
+            self.assertEqual(values.shape, phi.shape)
+            self.assertTrue(np.isnan(values).all())
         self.assertEqual(frames.shape, (inp["n_frames"],))
         self.assertEqual(global_f.shape, (inp["n_frames"], 1))
         self.assertEqual(
@@ -312,7 +505,7 @@ class TestComputeHighResTraces(unittest.TestCase):
         """A second channel adds columns to global and soma fluorescence."""
         inp = _trial_inputs(num_channels=2)
         out = _compute(inp)
-        _, _, _, _, global_f, _, _, f_soma = out
+        global_f, f_soma = out.global_f, out.user_roi_f
         self.assertEqual(global_f.shape, (inp["n_frames"], 2))
         self.assertEqual(
             f_soma.shape, (inp["n_frames"], len(inp["soma_sps"]), 2)
@@ -333,7 +526,17 @@ class TestGetHighResTraces(unittest.TestCase):
     """get_high_res_traces IO wrapper (skip + monkeypatched read)."""
 
     def test_skipped_trial_returns_empty(self):
-        """keep_trial=False returns the empty 8-tuple without reading."""
+        """keep_trial=False returns all ten empty fields without reading."""
+        loader = patch.object(
+            tr, "_load_high_res_trial_data", side_effect=AssertionError("read skipped trial")
+        )
+        fit = patch.object(
+            tr, "fit_transient_traces", side_effect=AssertionError("fit skipped trial")
+        )
+        loader.start()
+        fit.start()
+        self.addCleanup(loader.stop)
+        self.addCleanup(fit.stop)
         inp = _trial_inputs(num_channels=2)
         g = inp["g"]
         out = tr.get_high_res_traces(
@@ -357,9 +560,13 @@ class TestGetHighResTraces(unittest.TestCase):
             g["npr"],
             2,
             inp["soma_sps"],
+            transient_options=TransientOptions(),
         )
         self.assertIsInstance(out, TrialTraceResult)
+        self.assertEqual(len(out), 10)
         self.assertEqual(out[0].shape, (0, inp["a_final"].shape[1]))
+        self.assertEqual(out.d_f_denoised.shape, out.d_f.shape)
+        self.assertEqual(out.events.shape, out.d_f.shape)
         self.assertEqual(out[4].shape, (0, 2))  # globalF (0, channels)
         self.assertEqual(out[2].shape, (0,))  # frames
 
@@ -368,8 +575,9 @@ class TestGetHighResTraces(unittest.TestCase):
         for simple in (False, True):
             with self.subTest(simple_trace_extraction=simple):
                 self._check_kept_trial(simple)
+        self._check_kept_trial(False, TransientOptions(max_iter=1500))
 
-    def _check_kept_trial(self, simple):
+    def _check_kept_trial(self, simple, transient_options=None):
         """Verify IO wrapper forwards the selected extraction mode."""
         inp = _trial_inputs(num_channels=1)
         g = inp["g"]
@@ -408,15 +616,21 @@ class TestGetHighResTraces(unittest.TestCase):
                 1,
                 inp["soma_sps"],
                 simple_trace_extraction=simple,
+                transient_options=transient_options,
             )
         finally:
             tr._load_high_res_trial_data = orig
 
         # matches a direct compute with the same inputs
-        expected = _compute(inp, simple_trace_extraction=simple)
-        np.testing.assert_allclose(
-            np.nan_to_num(out[0]), np.nan_to_num(expected[0]), rtol=1e-6
+        expected = _compute(
+            inp, simple_trace_extraction=simple,
+            transient_options=transient_options, analyze_hz=100,
         )
+        for field in ("d_f", "f0_ls", "d_f_denoised", "events"):
+            np.testing.assert_allclose(
+                getattr(out, field), getattr(expected, field),
+                rtol=1e-6, equal_nan=True,
+            )
         self.assertEqual(out[0].shape, (inp["n_frames"], 3))
 
 

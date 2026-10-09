@@ -91,6 +91,20 @@ def assemble_path_summary(pr: PathResult, path_index: int = 0) -> PathSummary:
     )
     coords = pr.source_params[:, :3].numpy()
     df_channels = _with_nan_channel(d_f, pr.num_channels)
+    # Keep the fitted convolution trace itself, not a second baseline-subtracted
+    # version: otherwise it would no longer correspond to the fitted events.
+    # Legacy manually constructed records have no transient outputs.
+    denoised = np.concatenate([
+        r.d_f_denoised if r.d_f_denoised is not None
+        else np.full_like(r.d_f, np.nan)
+        for r in results
+    ], axis=0)
+    events = np.concatenate([
+        r.events if r.events is not None else np.full_like(r.d_f, np.nan)
+        for r in results
+    ], axis=0)
+    denoised_channels = _with_nan_channel(denoised, pr.num_channels)
+    event_channels = _with_nan_channel(events, pr.num_channels)
     f0_channels = _with_nan_channel(f0, pr.num_channels)
     snr = pr.source_snr.reshape(-1, 1)
     sources = [
@@ -98,6 +112,8 @@ def assemble_path_summary(pr: PathResult, path_index: int = 0) -> PathSummary:
             profile=profiles[j],
             coords=coords[j],
             df_ls=df_channels[j],
+            df_denoised=denoised_channels[j],
+            events=event_channels[j],
             f0=f0_channels[j],
             snr=snr[j, 0],
         )
@@ -172,6 +188,8 @@ def assemble_path_summary(pr: PathResult, path_index: int = 0) -> PathSummary:
                 "profiles": profiles,
                 "coords": coords,
                 "dF_ls": df_channels,
+                "dF_denoised": denoised_channels,
+                "events": event_channels,
                 "F0": f0_channels,
                 "SNR": snr,
             }

@@ -160,7 +160,11 @@ def _params_dict(
         "vif": params.vif,
         "peakth": params.peakth,
         "peak_buffer": params.peak_buffer,
-        "simple_trace_extraction": params.simple_trace_extraction,
+        "trace_beta_fraction": params.trace_beta_fraction,
+        "trace_max_iter": params.trace_max_iter,
+        "trace_tolerance": params.trace_tolerance,
+        "trace_debias": params.trace_debias,
+        "trace_event_threshold": params.trace_event_threshold,
         "draw_user_rois": annotations.enabled,
     }
 
@@ -322,6 +326,18 @@ def _process_dmd(
         execution=execution,
     )
 
+    # Trace-only options: never passed to localization or its QR solver.
+    from .transient import TransientOptions
+
+    transient_options = TransientOptions(
+        tau_s=params.decay_tau_s,
+        beta_fraction=params.trace_beta_fraction,
+        max_iter=params.trace_max_iter,
+        tolerance=params.trace_tolerance,
+        debias=params.trace_debias,
+        event_threshold=params.trace_event_threshold,
+    )
+
     def _traces(trial_ix):
         """Extract high-res traces using this trial's background slice."""
         return get_high_res_traces(
@@ -350,7 +366,7 @@ def _process_dmd(
             num_channels,
             soma_sps,
             z_tol=params.z_tol,
-            simple_trace_extraction=params.simple_trace_extraction,
+            transient_options=transient_options,
         )
 
     trace_results = map_trials(

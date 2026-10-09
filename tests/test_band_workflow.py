@@ -17,6 +17,7 @@ import torch
 
 from giant_python.extraction.band import traces
 from giant_python.extraction.band import workflow as wf
+from giant_python.extraction.band.transient import TransientOptions
 from giant_python.extraction.band.types import TrialTraceResult
 from giant_python.io.experiment_summary import read_summary
 from giant_python.models.params import (
@@ -25,13 +26,18 @@ from giant_python.models.params import (
     ExecutionOptions,
 )
 from giant_python.models.trial_table import Slap2Info, TrialTable
+from giant_python.numerics.baseline import assemble_dff
 from giant_python.pipeline.extract import extract_band_sources
 
 
 class TestBandWorkflow(unittest.TestCase):
     """Exercise the public API through the driver to saved results."""
 
-    def _run_mock_session(self, *, loaded=False, rois=False, simple=False):
+    def test_default_trace_workflow_and_saved_parameters(self):
+        """Without mode flags, both real solvers feed assembly and HDF5."""
+        self._run_mock_session()
+
+    def _run_mock_session(self, *, loaded=False, rois=False):
         """Check schema, policy and motion values in a two-path session."""
         n_frames, side, n_sp = 120, 15, 49
         positions = [(r, c) for r in range(4, 11) for c in range(4, 11)]
@@ -46,12 +52,12 @@ class TestBandWorkflow(unittest.TestCase):
         psf = np.ones((3, 3), dtype=np.float32)
         options = ExecutionOptions(max_workers=3, max_trials=2)
         annotation = AnnotationOptions(enabled=rois, interactive=False)
-        science_args = dict(
+        params = BandSiloParams(
             analyze_hz=10, denoise_window_s=0.3, baseline_window_s=0.5,
             z_tol=2.5,
-            simple_trace_extraction=simple,
+            decay_tau_s=.2, trace_beta_fraction=.001,
+            trace_max_iter=1500,
         )
-        params = BandSiloParams(**science_args)
         before = (asdict(params), asdict(options), asdict(annotation))
 
         with TemporaryDirectory() as directory, ExitStack() as stack:
@@ -293,6 +299,25 @@ class TestBandWorkflow(unittest.TestCase):
                 )
             )
 
+            fit_results = []
+            original_fit = traces.fit_transient_traces
+
+            def fit_trial(*args, **kwargs):
+                """Retain the real fit payload to verify independent assembly."""
+                result = original_fit(*args, **kwargs)
+                fit_results.append(result)
+                return result
+
+            transient_fit = stack.enter_context(
+                patch.object(traces, "fit_transient_traces", side_effect=fit_trial)
+            )
+            trace_calls = stack.enter_context(
+                patch.object(wf, "get_high_res_traces", wraps=wf.get_high_res_traces)
+            )
+            stack.enter_context(patch.object(
+                traces, "_weighted_trace_average",
+                side_effect=AssertionError("Production must use QR, not simple averages"),
+            ))
             input_value = table if loaded else source
             summary = extract_band_sources(
                 input=input_value,
@@ -320,6 +345,20 @@ class TestBandWorkflow(unittest.TestCase):
             for call in select_bins.call_args_list:
                 self.assertEqual(call.kwargs["z_tol"], params.z_tol)
             self.assertEqual(high_read.call_count, 2)
+            self.assertEqual(transient_fit.call_count, 2)
+            self.assertEqual(trace_calls.call_count, 4)
+            for call in trace_calls.call_args_list:
+                self.assertNotIn("simple_trace_extraction", call.kwargs)
+                self.assertNotIn("convolution_trace_extraction", call.kwargs)
+                self.assertIsInstance(call.kwargs["transient_options"], TransientOptions)
+            for call in transient_fit.call_args_list:
+                self.assertEqual(call.kwargs["options"].tau_s, params.decay_tau_s)
+                self.assertEqual(call.kwargs["options"].beta_fraction, params.trace_beta_fraction)
+                self.assertEqual(call.kwargs["options"].max_iter, params.trace_max_iter)
+                self.assertEqual(call.kwargs["options"].tolerance, params.trace_tolerance)
+                self.assertEqual(call.kwargs["options"].debias, params.trace_debias)
+                self.assertEqual(call.kwargs["options"].event_threshold, params.trace_event_threshold)
+                self.assertEqual(call.args[4], params.analyze_hz)
             self.assertEqual(bin_trial_motion.call_count, 2)
             for call in bin_trial_motion.call_args_list:
                 self.assertEqual(call.kwargs["z_tol"], params.z_tol)
@@ -346,8 +385,14 @@ class TestBandWorkflow(unittest.TestCase):
             assert summary.params is not None
             assert restored.params is not None
             self.assertEqual(summary.params["numChannels"], 2)
-            self.assertEqual(summary.params["simple_trace_extraction"], simple)
-            self.assertEqual(restored.params["simple_trace_extraction"], simple)
+            for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+                self.assertFalse(hasattr(params, name))
+                self.assertNotIn(name, summary.params)
+                self.assertNotIn(name, restored.params)
+            self.assertEqual(restored.params["decayTau_s"], .2)
+            self.assertNotIn("trace_tau_s", restored.params)
+            self.assertEqual(restored.params["trace_beta_fraction"], .001)
+            self.assertEqual(restored.params["trace_max_iter"], 1500)
             self.assertNotIn("operator", summary.params)
             self.assertNotIn("operator", restored.params)
             self.assertEqual(summary.params["draw_user_rois"], rois)
@@ -359,6 +404,27 @@ class TestBandWorkflow(unittest.TestCase):
                 self.assertIsInstance(
                     runtime_result.trace_results[0], TrialTraceResult
                 )
+                trial = runtime_result.trace_results[0]
+                self.assertEqual(len(trial), 10)
+                fit = fit_results[dmd_ix]
+                np.testing.assert_allclose(trial.d_f_denoised, fit.d_f, rtol=1e-6)
+                np.testing.assert_allclose(trial.events, fit.events, rtol=1e-6)
+                np.testing.assert_array_equal(trial.events[0], 0)
+                # Independently check the original QR coefficients, rather
+                # than comparing two aliases of the convolution result.
+                fit_args = transient_fit.call_args_list[dmd_ix].args
+                residual, designs, bins, valid = fit_args[:4]
+                self.assertTrue(valid.all())
+                for motion, design in designs.items():
+                    selected = bins == motion
+                    expected_ls = np.linalg.lstsq(
+                        design, residual[:, selected], rcond=None
+                    )[0].T
+                    expected_f0 = np.linalg.lstsq(
+                        design, 3 * residual[:, selected], rcond=None
+                    )[0].T
+                    np.testing.assert_allclose(trial.d_f[selected], expected_ls, rtol=1e-5)
+                    np.testing.assert_allclose(trial.f0_ls[selected], expected_f0, rtol=1e-5)
                 self.assertEqual(path.path_index, dmd_ix)
                 np.testing.assert_array_equal(path.z_depths, [[10 + dmd_ix]])
                 np.testing.assert_array_equal(
@@ -388,27 +454,23 @@ class TestBandWorkflow(unittest.TestCase):
                     saved.sources[0].df_ls,
                     equal_nan=True,
                 )
-                if simple:
-                    # Constant activity: averaging must preserve its scale,
-                    # regardless of the projected profile's non-unit mass.
-                    np.testing.assert_allclose(
-                        runtime_result.trace_results[0].d_f,
-                        0.25 * (10 + 5 * dmd_ix), rtol=1e-6,
-                    )
-                    np.testing.assert_allclose(
-                        runtime_result.trace_results[0].f0_ls,
-                        0.75 * (10 + 5 * dmd_ix), rtol=1e-6,
-                    )
-                    np.testing.assert_allclose(
-                        saved.sources[0].df_ls[0],
-                        0, atol=1e-6,
-                    )
-                    # Existing baseline re-estimation removes a constant
-                    # signal but preserves total weighted fluorescence.
-                    np.testing.assert_allclose(
-                        saved.sources[0].df_ls[0] + saved.sources[0].f0[0],
-                        10 + 5 * dmd_ix, rtol=1e-6,
-                    )
+                _, expected_f0, expected_ls, _ = assemble_dff(
+                    trial.d_f, trial.f0_ls,
+                    runtime_result.denoise_window, runtime_result.baseline_window,
+                )
+                for source in (path.sources[0], saved.sources[0]):
+                    for field, expected_trace in (
+                        ("df_ls", expected_ls), ("f0", expected_f0),
+                        ("df_denoised", trial.d_f_denoised),
+                        ("events", trial.events),
+                    ):
+                        values = getattr(source, field)
+                        self.assertEqual(values.shape, (2, n_frames))
+                        np.testing.assert_array_equal(values[0], expected_trace[:, 0])
+                        self.assertTrue(np.isnan(values[1]).all())
+                    self.assertFalse(np.allclose(
+                        source.df_ls, source.df_denoised, equal_nan=True
+                    ))
                 self.assertEqual(len(path.user_rois), int(rois))
                 self.assertEqual(saved.annotation_enabled, rois)
                 if rois:
@@ -431,12 +493,13 @@ class TestBandWorkflow(unittest.TestCase):
         """Prepare a loaded model directly without a second file read."""
         self._run_mock_session(loaded=True)
 
-    def test_simple_extraction_reaches_saved_traces(self):
-        """Opt-in averaging reaches per-trial extraction and HDF5 output."""
+    def test_default_production_uses_qr_and_convolution(self):
+        """Production uses QR and fits convolution traces without opt-in."""
         with patch.object(
-            traces, "solve_phi_motion", side_effect=AssertionError("LS called")
-        ):
-            self._run_mock_session(loaded=True, simple=True)
+            traces, "solve_phi_motion", wraps=traces.solve_phi_motion
+        ) as qr:
+            self._run_mock_session(loaded=True)
+        self.assertGreater(qr.call_count, 0)
 
     def test_split_policy_preserves_rois_and_caller_options(self):
         """Split policy leaves scientific options unchanged."""

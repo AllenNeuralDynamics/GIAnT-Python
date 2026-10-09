@@ -3,6 +3,7 @@
 import math
 import unittest
 from copy import deepcopy
+from dataclasses import asdict, fields
 
 from giant_python.models.params import (
     AnnotationOptions,
@@ -22,7 +23,11 @@ class TestBandConfiguration(unittest.TestCase):
         self.assertEqual(science.denoise_window_s, 1.0)
         self.assertEqual(science.vif, 1.38)
         self.assertEqual(science.z_tol, 1.5)
-        self.assertFalse(science.simple_trace_extraction)
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(science, name))
+                self.assertNotIn(name, {field.name for field in fields(BandSiloParams)})
+                self.assertNotIn(name, asdict(science))
         self.assertEqual(science.sparse_fac, math.exp(-3.0))
         self.assertEqual(execution, ExecutionOptions(6, False, None))
         self.assertEqual(annotations, AnnotationOptions(False, None))
@@ -64,8 +69,7 @@ class TestBandConfiguration(unittest.TestCase):
 
     def test_dictionary_inputs_and_overrides_are_not_modified(self):
         """Each dictionary affects only its scope and is copied."""
-        params = {"analyze_hz": 80.0, "z_tol": 2.5,
-              "simple_trace_extraction": True}
+        params = {"analyze_hz": 80.0, "z_tol": 2.5, "trace_debias": True}
         execution = {"max_workers": 2, "verbose": True}
         annotations = {
             "enabled": True,
@@ -77,7 +81,7 @@ class TestBandConfiguration(unittest.TestCase):
         )
         self.assertEqual(science.analyze_hz, 80.0)
         self.assertEqual(science.z_tol, 2.5)
-        self.assertTrue(science.simple_trace_extraction)
+        self.assertTrue(science.trace_debias)
         self.assertEqual(run, ExecutionOptions(2, True, None))
         self.assertEqual(roi, AnnotationOptions(True, False))
         self.assertEqual((params, execution, annotations), original)
@@ -86,12 +90,58 @@ class TestBandConfiguration(unittest.TestCase):
 class TestConfigurationValidation(unittest.TestCase):
     """Reject unsupported settings before they reach numerical kernels."""
 
-    def test_simple_trace_extraction_requires_bool(self):
-        """Strings and integers cannot silently select an extraction mode."""
-        for value in (0, 1, "true", "false", None):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "simple_trace_extraction"):
-                    resolve_band_options({"simple_trace_extraction": value})
+    def test_trace_tuning_options_use_shared_decay(self):
+        """Trace fitting uses the existing shared decay configuration."""
+        params, _, _ = resolve_band_options({
+            "decay_tau_s": .3,
+            "trace_beta_fraction": 0, "trace_max_iter": 1500,
+            "trace_debias": True,
+        })
+        self.assertEqual(params.decay_tau_s, .3)
+        self.assertFalse(hasattr(params, "trace_tau_s"))
+        self.assertEqual(params.trace_beta_fraction, 0)
+        self.assertTrue(params.trace_debias)
+        self.assertEqual(params.trace_max_iter, 1500)
+        for key, values in {
+            "trace_debias": [1, "true"],
+            "decay_tau_s": [0, -1, math.nan, True],
+            "trace_tolerance": [0, math.inf],
+            "trace_max_iter": [0, 1.5, True],
+            "trace_beta_fraction": [-1, math.nan, True],
+            "trace_event_threshold": [-1, math.inf],
+        }.items():
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, key):
+                    BandSiloParams(**{key: value})
+
+    def test_removed_trace_flags_reject_all_boolean_combinations(self):
+        """Supplying both removed keys fails instead of normalizing them."""
+        for simple in (False, True):
+            for convolution in (False, True):
+                with self.subTest(simple=simple, convolution=convolution):
+                    supplied: dict[str, bool] = {
+                        "simple_trace_extraction": simple,
+                        "convolution_trace_extraction": convolution,
+                    }
+                    original = supplied.copy()
+                    with self.assertRaisesRegex(TypeError, "trace_extraction"):
+                        BandSiloParams(**supplied)
+                    with self.assertRaisesRegex(TypeError, "trace_extraction"):
+                        resolve_band_options(supplied)
+                    self.assertEqual(supplied, original)
+
+    def test_removed_trace_flags_reject_model_and_dictionary_inputs(self):
+        """Each removed key is unknown regardless of its supplied value."""
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            for value in (False, True, 0, 1, "true", "false", None, [], 0.0):
+                with self.subTest(name=name, value=value):
+                    supplied = {"peakth": 8.0, name: value}
+                    original = deepcopy(supplied)
+                    with self.assertRaisesRegex(TypeError, name):
+                        BandSiloParams(**supplied)
+                    with self.assertRaisesRegex(TypeError, name):
+                        resolve_band_options(supplied)
+                    self.assertEqual(supplied, original)
 
     def test_positive_scientific_values(self):
         """Rates, windows and positive scale values must be finite."""

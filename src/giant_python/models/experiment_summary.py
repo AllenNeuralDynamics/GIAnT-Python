@@ -22,9 +22,10 @@ class Source:
     coords : ndarray or None
         0-indexed ``[z, y, x]`` location.
     df_ls, df_denoised, events : ndarray or None
-        Extracted dF (least squares or profile-weighted average, after baseline
-        re-estimation), denoised dF, and deconvolved events, shaped
-        ``(channels, frames)``. The historical ``df_ls`` name is retained.
+        Least-squares dF after baseline re-estimation, the fitted convolution
+        trace (without another baseline subtraction), and nonnegative event
+        amplitudes, shaped ``(channels, frames)``. Missing observations and
+        unprocessed channels are NaN. Events exclude each trial's initial state.
     f0 : ndarray or None
         Per-channel baseline.
     snr : float or None
@@ -70,7 +71,8 @@ class UserRoi:
         Rotation angle (ellipse ROIs).
     fsvd : ndarray or None
         ROI signal after SVD / projection, shaped ``(channels, total frames)``
-        (``experiment_summary.h5`` ``user_rois/Fsvd``).
+        (``experiment_summary.h5`` ``user_rois/Fsvd``). Band extraction does
+        not compute this signal; the writer uses NaN when unavailable.
     f : ndarray or None
         Raw or baseline-corrected ROI fluorescence, shaped
         ``(channels, total frames)``
@@ -142,8 +144,8 @@ class PathSummary:
     """All eager output for one imaging path, identified by a 0-based index.
 
     Arrays remain NumPy-backed in memory; Source/UserRoi entries may be views
-    of assembled arrays. ``annotation_enabled`` distinguishes an absent ROI
-    group from an enabled-but-empty group. Private empty-array templates
+    of assembled arrays. ``annotation_enabled`` distinguishes disabled from
+    enabled-but-empty annotations (saved as an ROI group attribute). Private empty-array templates
     retain dimensions and dtypes that cannot be inferred from empty lists;
     they never duplicate populated source or ROI tensors.
     """

@@ -7,14 +7,17 @@ onto the trial's downsample grid, bins the frames by motion (matching the
 low-res motion bins used during NMF), and — per motion bin — projects the fixed
 spatial profiles ``A_final`` into superpixel space and extracts per-source
 temporal traces (``phi``, stored as ``dF_ls``) and background (``F0``) via
-least squares or normalized profile-weighted averages. It also computes the
+least squares or normalized profile-weighted averages. Transient fitting
+adds separate denoised traces and events, jointly across the trial with fixed
+spatial profiles and QR F0. The production workflow always calculates both
+least-squares and transient traces. It also computes the
 global and per-user-ROI fluorescence.
 
 The pure compute (:func:`compute_high_res_traces`) is factored out of the IO
 wrapper (:func:`get_high_res_traces`, which reads the SLAP2 file lazily via
 :mod:`giant_python.extraction.band.trial_data`) so the numerics are testable
 without ``slap2_utils``. The workflow owns per-trial scheduling. Results use
-``TrialTraceResult``, preserving the historical eight-tuple ordering.
+``TrialTraceResult``, with denoised traces and events after the original fields.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from ...numerics.interpolation import nearest_interp
 from .geometry import build_selected_pixel_mask, ref_pixs_to_drc
 from .localization import solve_phi_motion
 from .operators import build_motion_h_matrices
+from .transient import TransientOptions, fit_transient_traces
 from .trial_data import read_band_trial_data
 from .types import TrialTraceResult
 
@@ -49,7 +53,7 @@ def _empty_trace_result(
     Returns
     -------
     tuple
-        Same 8-element shape as :func:`compute_high_res_traces`, with zero
+        Same record as :func:`compute_high_res_traces`, with zero
         frames.
     """
     return TrialTraceResult(
@@ -65,6 +69,8 @@ def _empty_trace_result(
             np.full((0,), 0, dtype=np.int16),
         ),
         np.full((0, n_soma, num_channels), np.nan, dtype=np.float32),
+        np.full((0, n_sources), np.nan, dtype=np.float32),
+        np.full((0, n_sources), np.nan, dtype=np.float32),
     )
 
 
@@ -219,7 +225,11 @@ def _solve_trial_phi_f0(
     num_super_pixels: int,
     dmd_pixels_per_row: int,
     simple_trace_extraction: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    *,
+    transient_options: Optional[TransientOptions] = None,
+    analyze_hz: Optional[float] = None,
+    return_transient: bool = False,
+) -> tuple:
     """Extract per-source traces and background projection.
 
     For each kept motion bin, shifts ``H`` by the bin's motion, projects
@@ -252,6 +262,15 @@ def _solve_trial_phi_f0(
     simple_trace_extraction : bool, optional
         Use normalized profile-intensity weighted averages instead of least
         squares for both dF and F0 (default False).
+    transient_options : TransientOptions or None
+        Add benchmark-style constrained dF, keeping separate QR dF and F0. Mutually
+        exclusive with simple extraction. A failed fit raises RuntimeError.
+    analyze_hz : float or None
+        Nominal grid rate, required for transient fitting; line indices are
+        not seconds. Missing frames must retain their positions in the grid.
+    return_transient : bool
+        Also return denoised dF and events after phi and f0. Missing-frame
+        events are NaN; the initial state is not counted as a new event.
 
     Returns
     -------
@@ -260,10 +279,20 @@ def _solve_trial_phi_f0(
         applies, where least-squares input frames contain nonfinite samples,
         or where weighted averaging has no profile support).
     """
+    if transient_options is not None:
+        if simple_trace_extraction:
+            raise ValueError("Simple and convolution trace extraction are mutually exclusive")
+        if not isinstance(transient_options, TransientOptions):
+            raise TypeError("transient_options must be TransientOptions or None")
+        from ...models.params import _positive
+
+        _positive("analyze_hz", analyze_hz)
     n_sources = a_final.shape[1]
     n_frames = data.shape[1]
     phi = torch.full((n_frames, n_sources), float("nan"), dtype=torch.float32)
     f0 = torch.full((n_frames, n_sources), float("nan"), dtype=torch.float32)
+    denoised = torch.full_like(phi, float("nan"))
+    events = torch.full_like(phi, float("nan"))
     residual = data - background
 
     # One shifted superpixel<-pixel H per trial motion bin (same builder the
@@ -280,19 +309,43 @@ def _solve_trial_phi_f0(
     extract = (
         _weighted_trace_average if simple_trace_extraction else solve_phi_motion
     )
+    designs = {}
     for motion_idx in mot_inds_to_keep:
         motion_frames = np.flatnonzero(mot_inds == motion_idx)
         x = torch.sparse.mm(h_mots[motion_idx], a_final[sel_pix_idxs, :])
-        # phi from the background-subtracted residual; F0 from the background,
-        # both using the same extraction method and spatial profiles.
+        # F0 remains QR for transient fitting (never impose events on F0).
         phi[motion_frames, :] = extract(
             x, torch.from_numpy(residual[:, motion_frames].astype(np.float32))
         )
+        if transient_options is not None:
+            designs[int(motion_idx)] = x.detach().cpu().numpy()
         f0[motion_frames, :] = extract(
             x,
             torch.from_numpy(background[:, motion_frames].astype(np.float32)),
         )
 
+    if transient_options is not None and n_sources:
+        residual32 = residual.astype(np.float32)
+        valid = np.isin(mot_inds, mot_inds_to_keep)
+        valid &= np.all(np.isfinite(residual32), axis=0)
+        # Preserve the empty/all-invalid behavior of the existing extractor.
+        if np.any(valid):
+            result = fit_transient_traces(
+                residual32, designs, mot_inds, valid, analyze_hz,
+                options=transient_options,
+            )
+            if not result.metadata["converged"]:
+                raise RuntimeError(
+                    "Convolution trace extraction did not converge: "
+                    f"{result.metadata['message']}. Increase trace_max_iter "
+                    "or inspect the fit with fit_transient_traces()."
+                )
+            denoised = torch.from_numpy(result.d_f.astype(np.float32))
+            events = torch.from_numpy(result.events.astype(np.float32))
+            events[~valid] = float("nan")
+
+    if return_transient:
+        return phi, f0, denoised, events
     return phi, f0
 
 
@@ -392,6 +445,9 @@ def compute_high_res_traces(
     soma_sps: List[np.ndarray],
     z_tol: float = 1.5,
     simple_trace_extraction: bool = False,
+    *,
+    transient_options: Optional[TransientOptions] = None,
+    analyze_hz: Optional[float] = None,
 ) -> TrialTraceResult:
     """Compute one trial's high-res source traces from loaded arrays.
 
@@ -433,14 +489,29 @@ def compute_high_res_traces(
     simple_trace_extraction : bool, optional
         Average superpixels weighted by normalized source profiles instead
         of least-squares fitting final dF and F0 traces (default False).
+    transient_options : TransientOptions or None
+        Add constrained dF and events, retaining QR dF/F0 and auxiliary data.
+        Fits nonnegative sparse events plus an unpenalized initial state.
+        Public dF retains missing-frame NaNs; nonconvergence raises RuntimeError.
+    analyze_hz : float or None
+        Required nominal rate for transient fitting on the uniform full grid.
+        Acquisition averaging is approximated, not explicitly modeled.
 
     Returns
     -------
-    tuple
-        ``(phi, F0, frames, sel_pix_idxs, global_f, (motion_r, motion_c,
-        motion_z), (online_y, online_x, online_z), F_soma)``. ``phi`` and
-        ``F0`` are ``(n_frames, n_sources)`` ndarrays.
+    TrialTraceResult
+        Named source traces and auxiliary data. Source trace arrays are
+        ``(n_frames, n_sources)``; denoised traces/events are separate from d_f.
     """
+    if transient_options is not None:
+        frame_grid = np.asarray(frames)
+        if frame_grid.ndim != 1 or not np.all(np.isfinite(frame_grid)):
+            raise ValueError("frames must be a finite chronological vector")
+        # Reader ceil-rounds line positions, so nominally uniform samples
+        # can have alternating line spacings. Use the explicit nominal rate.
+        steps = np.diff(frame_grid)
+        if np.any(steps <= 0):
+            raise ValueError("Convolution traces require chronological frames; retain gaps")
     (
         motion_r,
         motion_c,
@@ -480,7 +551,7 @@ def compute_high_res_traces(
         psf2d,
     )
 
-    phi, f0 = _solve_trial_phi_f0(
+    phi, f0, denoised, events = _solve_trial_phi_f0(
         data,
         background,
         unique_motion,
@@ -493,6 +564,9 @@ def compute_high_res_traces(
         num_super_pixels,
         dmd_pixels_per_row,
         simple_trace_extraction=simple_trace_extraction,
+        transient_options=transient_options,
+        analyze_hz=analyze_hz,
+        return_transient=True,
     )
 
     global_f = _compute_global_f(data, data2, frames_to_keep, num_channels)
@@ -509,6 +583,8 @@ def compute_high_res_traces(
         (motion_r, motion_c, motion_z),
         (online_y, online_x, online_z),
         f_soma,
+        denoised.numpy(),
+        events.numpy(),
     )
 
 
@@ -573,6 +649,8 @@ def get_high_res_traces(
     soma_sps: List[np.ndarray],
     z_tol: float = 1.5,
     simple_trace_extraction: bool = False,
+    *,
+    transient_options: Optional[TransientOptions] = None,
 ) -> TrialTraceResult:
     """Read and extract one trial's high-res source traces.
 
@@ -616,11 +694,14 @@ def get_high_res_traces(
     simple_trace_extraction : bool, optional
         Average superpixels weighted by normalized source profiles instead
         of least-squares fitting final dF and F0 traces (default False).
+    transient_options : TransientOptions or None
+        Add constrained dF/events alongside QR dF/F0 and unchanged profiles.
+        The reader's samp_freq supplies the nominal convolution rate.
 
     Returns
     -------
     tuple
-        The 8-element result of :func:`compute_high_res_traces` (empty for
+        The named result of :func:`compute_high_res_traces` (empty for
         skipped trials).
     """
     trial_ix, keep_trial, background_ds = trial_info
@@ -664,4 +745,6 @@ def get_high_res_traces(
         soma_sps,
         z_tol=z_tol,
         simple_trace_extraction=simple_trace_extraction,
+        transient_options=transient_options,
+        analyze_hz=samp_freq,
     )

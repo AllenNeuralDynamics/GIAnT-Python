@@ -72,8 +72,11 @@ class TestParameterGui(unittest.TestCase):
         self.assertEqual(science.analyze_hz, 125)
         self.assertEqual(science.peakth, 8)
         self.assertEqual(science.z_tol, 2.5)
-        self.assertTrue(science.simple_trace_extraction)
-        self.assertFalse(params.simple_trace_extraction)
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            self.assertFalse(hasattr(science, name))
+            self.assertFalse(hasattr(params, name))
+        self.assertTrue(science.trace_debias)
+        self.assertFalse(params.trace_debias)
         self.assertEqual(params.z_tol, 1.5)
         self.assertAlmostEqual(science.sparse_fac, math.exp(-2))
         labels = [
@@ -97,12 +100,51 @@ class TestParameterGui(unittest.TestCase):
         self.assertIsNone(run_parameter_gui())
         self.root.destroy.assert_called_once()
 
-    def test_simple_trace_checkbox_preserves_initial_value(self):
-        """An enabled mode survives accepting the form without edits."""
+    def test_removed_trace_flags_are_rejected_before_opening_form(self):
+        """Removed dictionary keys cannot enter the GUI's base configuration."""
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            for value in (False, True):
+                with self.subTest(name=name, value=value):
+                    supplied = {name: value}
+                    with self.assertRaisesRegex(TypeError, name):
+                        run_parameter_gui(supplied)
+                    self.assertEqual(supplied, {name: value})
+        self.tk.Tk.assert_not_called()
+        self.root.mainloop.assert_not_called()
+
+    def test_convolution_controls_preserve_trace_settings(self):
+        """Accepting the GUI retains the independent trace-only options."""
+        params = BandSiloParams(
+            decay_tau_s=.3,
+            trace_beta_fraction=.02, trace_max_iter=900,
+            trace_tolerance=1e-9, trace_debias=True, trace_event_threshold=.001,
+        )
         self.root.mainloop.side_effect = lambda: self.buttons["OK"]()
-        result = run_parameter_gui(BandSiloParams(simple_trace_extraction=True))
-        self.assertTrue(result[0].simple_trace_extraction)
+        result = run_parameter_gui(params)
+        self.assertEqual(result[0], params)
+        self.assertIsNot(result[0], params)
+        self.assertEqual(result[0].decay_tau_s, .3)
+
+    def test_trace_mode_toggles_are_replaced_by_always_saved_label(self):
+        """Only debias and ROI checkboxes remain; extraction is not optional."""
+        self.root.mainloop.side_effect = lambda: self.buttons["OK"]()
+        result = run_parameter_gui()
+        labels = [call.kwargs["text"] for call in self.tk.ttk.Label.call_args_list]
+        self.assertIn("LS and convolution traces are always saved.", labels)
+        self.assertEqual(len(self.boolean_variables), 2)
+        self.assertEqual(self.tk.ttk.Checkbutton.call_count, 2)
+        self.assertEqual(
+            [label for label in labels if label.endswith("?")],
+            ["Debias Convolution Traces?", "Draw User ROIs?"],
+        )
+        for call, variable in zip(
+            self.tk.ttk.Checkbutton.call_args_list, self.boolean_variables
+        ):
+            self.assertIs(call.kwargs["variable"], variable)
+        for name in ("simple_trace_extraction", "convolution_trace_extraction"):
+            self.assertFalse(hasattr(result[0], name))
         self.assertFalse(result[2].enabled)
+        self.tk.messagebox.showerror.assert_not_called()
 
     def test_invalid_input_shows_error_without_accepting(self):
         """Invalid scientific values leave the form open for correction."""

@@ -65,11 +65,26 @@ def run_parameter_gui(
     sparse_var = tk.StringVar(value=str(float(np.log(base.sparse_fac))))
     ttk.Entry(frame, textvariable=sparse_var, width=15).grid(row=row, column=1)
     row += 1
-    ttk.Label(frame, text="Simple Trace Extraction?").grid(
+    ttk.Label(frame, text="LS and convolution traces are always saved.").grid(
+        row=row, column=0, columnspan=2, sticky=tk.W
+    )
+    row += 1
+    for attr, label in (
+        ("trace_beta_fraction", "Trace Event Penalty Fraction:"),
+        ("trace_max_iter", "Trace Maximum Iterations:"),
+        ("trace_tolerance", "Trace Optimizer Tolerance:"),
+        ("trace_event_threshold", "Trace Debias Event Threshold:"),
+    ):
+        ttk.Label(frame, text=label).grid(row=row, column=0, sticky=tk.W)
+        var = tk.StringVar(value=str(values[attr]))
+        ttk.Entry(frame, textvariable=var, width=15).grid(row=row, column=1)
+        entries[attr] = var
+        row += 1
+    ttk.Label(frame, text="Debias Convolution Traces?").grid(
         row=row, column=0, sticky=tk.W
     )
-    simple_trace_var = tk.BooleanVar(value=base.simple_trace_extraction)
-    ttk.Checkbutton(frame, variable=simple_trace_var).grid(row=row, column=1)
+    debias_var = tk.BooleanVar(value=base.trace_debias)
+    ttk.Checkbutton(frame, variable=debias_var).grid(row=row, column=1)
     row += 1
     ttk.Label(frame, text="Draw User ROIs?").grid(
         row=row, column=0, sticky=tk.W
@@ -96,7 +111,11 @@ def run_parameter_gui(
                 "peak_buffer": int(entries["peak_buffer"].get()),
                 "z_tol": float(entries["z_tol"].get()),
                 "sparse_fac": float(np.exp(float(sparse_var.get()))),
-                "simple_trace_extraction": bool(simple_trace_var.get()),
+                "trace_beta_fraction": float(entries["trace_beta_fraction"].get()),
+                "trace_max_iter": int(entries["trace_max_iter"].get()),
+                "trace_tolerance": float(entries["trace_tolerance"].get()),
+                "trace_event_threshold": float(entries["trace_event_threshold"].get()),
+                "trace_debias": bool(debias_var.get()),
             }
             result["options"] = (
                 replace(base, **updates),
