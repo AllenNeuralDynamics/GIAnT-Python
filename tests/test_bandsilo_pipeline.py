@@ -104,6 +104,8 @@ class TestLocalizeMedianMotion(unittest.TestCase):
         mot_inds = np.zeros(4, dtype=int)
         residual = np.ones((2, 4))
         rho = np.ones((3, 4))
+        exclusion_mask = np.zeros((1, 3, 4), dtype=bool)
+        exclusion_mask[0, 0, 0] = True
         seeds = np.array([[0, 1, 2], [0, 2, 2]])
         fitted = {
             "A": torch.ones((12, 2)),
@@ -155,7 +157,7 @@ class TestLocalizeMedianMotion(unittest.TestCase):
                 patch.object(wf.si, "accumulate_activity_image")
             )
             stack.enter_context(patch.object(wf.si, "finalize_activity_image"))
-            stack.enter_context(
+            detect = stack.enter_context(
                 patch.object(wf, "get_act_im_peaks", return_value=seeds)
             )
             fit = stack.enter_context(
@@ -181,7 +183,9 @@ class TestLocalizeMedianMotion(unittest.TestCase):
                 10,
                 BandSiloParams(),
                 execution=ExecutionOptions(verbose=False),
+                exclusion_mask=exclusion_mask,
             )
+        self.assertIs(detect.call_args.kwargs["exclusion_mask"], exclusion_mask)
         self.assertEqual(kernels.call_args_list, [call(0.9), call(4.5)])
         self.assertEqual(
             convolution.call_args_list[0].args[1:], ("center", (0, 0))

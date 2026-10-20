@@ -324,6 +324,10 @@ def _process_dmd(
         align_hz,
         params,
         execution=execution,
+        exclusion_mask=(
+            np.logical_or.reduce(soma_masks)
+            if soma_masks is not None and len(soma_masks) > 0 else None
+        ),
     )
 
     # Trace-only options: never passed to localization or its QR solver.
@@ -493,6 +497,7 @@ def _localize(
     params,
     *,
     execution=None,
+    exclusion_mask=None,
 ):
     """Compose rho, activity and localization; preserve DoG and RNG order."""
     execution = ExecutionOptions() if execution is None else execution
@@ -579,7 +584,8 @@ def _localize(
         ref_d=ref_d,
     )
     source_seeds = get_act_im_peaks(
-        act_im, peak_th=params.peakth, buffer_size=params.peak_buffer
+        act_im, peak_th=params.peakth, buffer_size=params.peak_buffer,
+        exclusion_mask=exclusion_mask,
     )
     act_im_peaks = source_seeds.copy()
     print(f"Number of detected sources: {act_im_peaks.shape[0]}")

@@ -259,7 +259,7 @@ class TestBandWorkflow(unittest.TestCase):
                     side_effect=lambda data, *args: (np.ones_like(data), 1, 0),
                 )
             )
-            stack.enter_context(
+            localize = stack.enter_context(
                 patch.object(
                     wf,
                     "_localize",
@@ -341,6 +341,14 @@ class TestBandWorkflow(unittest.TestCase):
                 str(table.savedr / "motion_correction" / "p0-selected.h5"),
             )
             self.assertEqual(low_read.call_count, 4)
+            for dmd_ix, call in enumerate(localize.call_args_list):
+                mask = call.kwargs["exclusion_mask"]
+                if rois:
+                    np.testing.assert_array_equal(
+                        mask, roi_selection["user_roi_masks"][f"DMD{dmd_ix + 1}"][0]
+                    )
+                else:
+                    self.assertIsNone(mask)
             self.assertEqual(select_bins.call_count, 2)
             for call in select_bins.call_args_list:
                 self.assertEqual(call.kwargs["z_tol"], params.z_tol)
