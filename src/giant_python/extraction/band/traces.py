@@ -6,18 +6,22 @@ the high-res superpixel activity, interpolates the alignment motion/background
 onto the trial's downsample grid, bins the frames by motion (matching the
 low-res motion bins used during NMF), and — per motion bin — projects the fixed
 spatial profiles ``A_final`` into superpixel space and extracts per-source
-temporal traces (``phi``, stored as ``dF_ls``) and background (``F0``) via
-least squares or normalized profile-weighted averages. Transient fitting
+temporal traces (``phi``, stored as ``dF_ls``) via least squares or
+normalized profile-weighted averages. Background (``F0``) is the
+backprojection of each projected profile onto the background, and a
+backprojection of the fit residual (``data - background - x @ phi``) is kept
+for the final F0 estimate. Transient fitting
 adds separate denoised traces and events, jointly across the trial with fixed
-spatial profiles and QR F0. The production workflow always calculates both
-least-squares and transient traces. It also computes the
+spatial profiles; F0 is never fitted with events. The production workflow
+always calculates both least-squares and transient traces. It also computes the
 global and per-user-ROI fluorescence.
 
 The pure compute (:func:`compute_high_res_traces`) is factored out of the IO
 wrapper (:func:`get_high_res_traces`, which reads the SLAP2 file lazily via
 :mod:`giant_python.extraction.band.trial_data`) so the numerics are testable
 without ``slap2_utils``. The workflow owns per-trial scheduling. Results use
-``TrialTraceResult``, with denoised traces and events after the original fields.
+``TrialTraceResult``, with denoised traces, events and the residual
+backprojection after the original fields.
 """
 
 from __future__ import annotations
@@ -69,6 +73,7 @@ def _empty_trace_result(
             np.full((0,), 0, dtype=np.int16),
         ),
         np.full((0, n_soma, num_channels), np.nan, dtype=np.float32),
+        np.full((0, n_sources), np.nan, dtype=np.float32),
         np.full((0, n_sources), np.nan, dtype=np.float32),
         np.full((0, n_sources), np.nan, dtype=np.float32),
     )
@@ -212,6 +217,18 @@ def _weighted_trace_average(
     return (weights.T @ data).T
 
 
+def _backproject(x: torch.Tensor, data: torch.Tensor) -> torch.Tensor:
+    """Backproject each projected source profile onto a superpixel movie.
+
+    Returns ``x_j^T data / x_j^T x_j`` as (frames, sources): the per-source
+    coefficient in the same units as the least-squares/denoised ``phi``, but
+    without de-mixing overlapping sources. Zero profiles return zero, like
+    the basic least-squares solution; nonfinite samples propagate as NaN.
+    """
+    norm = (x * x).sum(dim=0)
+    return (data.T @ x) / norm.masked_fill(norm <= 0, 1.0)
+
+
 def _solve_trial_phi_f0(
     data: np.ndarray,
     background: np.ndarray,
@@ -230,12 +247,13 @@ def _solve_trial_phi_f0(
     analyze_hz: Optional[float] = None,
     return_transient: bool = False,
 ) -> tuple:
-    """Extract per-source traces and background projection.
+    """Extract per-source traces, background and residual backprojections.
 
     For each kept motion bin, shifts ``H`` by the bin's motion, projects
-    ``A_final`` into superpixel space, and solves for the source temporal
-    weights (from the background-subtracted residual) and the background
-    projection ``F0``.
+    ``A_final`` into superpixel space, solves for the source temporal
+    weights (from the background-subtracted residual), and backprojects the
+    profiles onto the background (``F0``) and onto the fit residual
+    ``data - background - x @ phi``.
 
     Parameters
     ----------
@@ -260,24 +278,30 @@ def _solve_trial_phi_f0(
     dmd_pixels_per_row : int
         Grid geometry (column-shift stride).
     simple_trace_extraction : bool, optional
-        Use normalized profile-intensity weighted averages instead of least
-        squares for both dF and F0 (default False).
+        Use normalized profile-intensity weighted averages for both dF and F0
+        instead of least-squares dF and backprojected F0, with a zero
+        residual term (default False).
     transient_options : TransientOptions or None
-        Add benchmark-style constrained dF, keeping separate QR dF and F0. Mutually
+        Add benchmark-style constrained dF, keeping separate QR dF and
+        backprojected F0. Mutually
         exclusive with simple extraction. A failed fit raises RuntimeError.
     analyze_hz : float or None
         Nominal grid rate, required for transient fitting; line indices are
         not seconds. Missing frames must retain their positions in the grid.
     return_transient : bool
-        Also return denoised dF and events after phi and f0. Missing-frame
-        events are NaN; the initial state is not counted as a new event.
+        Also return denoised dF, events and the residual backprojection after
+        phi and f0. Missing-frame events are NaN; the initial state is not
+        counted as a new event.
 
     Returns
     -------
     phi, f0 : torch.Tensor of shape (n_frames, n_sources)
-        Per-source dF and background projection (NaN where no motion bin
-        applies, where least-squares input frames contain nonfinite samples,
-        or where weighted averaging has no profile support).
+        Per-source dF and background backprojection (NaN where no motion bin
+        applies, where input frames contain nonfinite samples, or where
+        weighted averaging has no profile support). Outside simple
+        extraction, F0 is :func:`_backproject` of the background, not a
+        least-squares fit. The optional residual term is the backprojection
+        of ``data - background - x @ phi`` (zero for simple extraction).
     """
     if transient_options is not None:
         if simple_trace_extraction:
@@ -293,6 +317,9 @@ def _solve_trial_phi_f0(
     f0 = torch.full((n_frames, n_sources), float("nan"), dtype=torch.float32)
     denoised = torch.full_like(phi, float("nan"))
     events = torch.full_like(phi, float("nan"))
+    f_residual = torch.full_like(
+        phi, 0.0 if simple_trace_extraction else float("nan")
+    )
     residual = data - background
 
     # One shifted superpixel<-pixel H per trial motion bin (same builder the
@@ -313,16 +340,23 @@ def _solve_trial_phi_f0(
     for motion_idx in mot_inds_to_keep:
         motion_frames = np.flatnonzero(mot_inds == motion_idx)
         x = torch.sparse.mm(h_mots[motion_idx], a_final[sel_pix_idxs, :])
-        # F0 remains QR for transient fitting (never impose events on F0).
-        phi[motion_frames, :] = extract(
-            x, torch.from_numpy(residual[:, motion_frames].astype(np.float32))
+        # F0 is never fitted with transient events.
+        residual_frames = torch.from_numpy(
+            residual[:, motion_frames].astype(np.float32)
         )
+        phi[motion_frames, :] = extract(x, residual_frames)
         if transient_options is not None:
             designs[int(motion_idx)] = x.detach().cpu().numpy()
-        f0[motion_frames, :] = extract(
-            x,
-            torch.from_numpy(background[:, motion_frames].astype(np.float32)),
+        background_frames = torch.from_numpy(
+            background[:, motion_frames].astype(np.float32)
         )
+        if simple_trace_extraction:
+            f0[motion_frames, :] = extract(x, background_frames)
+        else:
+            f0[motion_frames, :] = _backproject(x, background_frames)
+            f_residual[motion_frames, :] = _backproject(
+                x, residual_frames - x @ phi[motion_frames, :].T
+            )
 
     if transient_options is not None and n_sources:
         residual32 = residual.astype(np.float32)
@@ -345,7 +379,7 @@ def _solve_trial_phi_f0(
             events[~valid] = float("nan")
 
     if return_transient:
-        return phi, f0, denoised, events
+        return phi, f0, denoised, events, f_residual
     return phi, f0
 
 
@@ -488,9 +522,11 @@ def compute_high_res_traces(
         Maximum absolute rounded z offset from the median, in um (default 1.5).
     simple_trace_extraction : bool, optional
         Average superpixels weighted by normalized source profiles instead
-        of least-squares fitting final dF and F0 traces (default False).
+        of least-squares fitting dF and backprojecting F0; the residual term
+        is zero (default False).
     transient_options : TransientOptions or None
-        Add constrained dF and events, retaining QR dF/F0 and auxiliary data.
+        Add constrained dF and events, retaining QR dF, backprojected F0 and
+        auxiliary data.
         Fits nonnegative sparse events plus an unpenalized initial state.
         Public dF retains missing-frame NaNs; nonconvergence raises RuntimeError.
     analyze_hz : float or None
@@ -501,7 +537,8 @@ def compute_high_res_traces(
     -------
     TrialTraceResult
         Named source traces and auxiliary data. Source trace arrays are
-        ``(n_frames, n_sources)``; denoised traces/events are separate from d_f.
+        ``(n_frames, n_sources)``; denoised traces/events are separate from
+        d_f, and ``f_residual`` is the backprojected fit residual.
     """
     if transient_options is not None:
         frame_grid = np.asarray(frames)
@@ -551,7 +588,7 @@ def compute_high_res_traces(
         psf2d,
     )
 
-    phi, f0, denoised, events = _solve_trial_phi_f0(
+    phi, f0, denoised, events, f_residual = _solve_trial_phi_f0(
         data,
         background,
         unique_motion,
@@ -585,6 +622,7 @@ def compute_high_res_traces(
         f_soma,
         denoised.numpy(),
         events.numpy(),
+        f_residual.numpy(),
     )
 
 
@@ -693,9 +731,11 @@ def get_high_res_traces(
         Maximum absolute rounded z offset from the median, in um (default 1.5).
     simple_trace_extraction : bool, optional
         Average superpixels weighted by normalized source profiles instead
-        of least-squares fitting final dF and F0 traces (default False).
+        of least-squares fitting dF and backprojecting F0; the residual term
+        is zero (default False).
     transient_options : TransientOptions or None
-        Add constrained dF/events alongside QR dF/F0 and unchanged profiles.
+        Add constrained dF/events alongside QR dF, backprojected F0 and
+        unchanged profiles.
         The reader's samp_freq supplies the nominal convolution rate.
 
     Returns

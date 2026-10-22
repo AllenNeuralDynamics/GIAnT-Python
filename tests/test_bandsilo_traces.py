@@ -123,11 +123,11 @@ class TestTrialTraceResult(unittest.TestCase):
     def test_legacy_constructor_defaults_and_extended_fields(self):
         original = _compute(_trial_inputs())
         legacy = TrialTraceResult(*original[:8])
-        self.assertEqual(len(legacy), 10)
+        self.assertEqual(len(legacy), 11)
         self.assertEqual(legacy._fields, (
             "d_f", "f0_ls", "frame_line_idxs", "selected_pixels", "global_f",
             "reference_offsets", "online_shifts", "user_roi_f",
-            "d_f_denoised", "events",
+            "d_f_denoised", "events", "f_residual",
         ))
         self.assertIsNone(legacy.d_f_denoised)
         self.assertIsNone(legacy.events)
@@ -272,8 +272,8 @@ class TestLeastSquaresTraceExtraction(unittest.TestCase):
                 )
         self.assertEqual(len(qr), 2)
         self.assertEqual(len(pair), 2)
-        self.assertEqual(len(extended), 4)
-        self.assertEqual(len(no_fit), 4)
+        self.assertEqual(len(extended), 5)
+        self.assertEqual(len(no_fit), 5)
         self.assertEqual(fit.call_count, 2)
         for result in (pair, extended, no_fit):
             for actual, expected in zip(result[:2], qr):
@@ -322,6 +322,30 @@ class TestLeastSquaresTraceExtraction(unittest.TestCase):
         valid_f0 = [0, 1, 2, 4, 5, 6]
         torch.testing.assert_close(f0[valid_f0], expected_f0[valid_f0])
         self.assertTrue(torch.isnan(f0[[3, 7]]).all())
+
+    def test_f0_and_residual_are_profile_backprojections(self):
+        """F0 is not de-mixed; the residual backprojects data - bg - x phi."""
+        profiles = torch.tensor([[1., 2.], [3., 0.], [1., 4.]])
+        h_mots = [torch.eye(3).to_sparse()]
+        rng = np.random.default_rng(0)
+        data = rng.uniform(5, 10, (3, 6)).astype(np.float32)
+        background = rng.uniform(1, 3, (3, 6)).astype(np.float32)
+        args = (
+            data, background, np.array([[0, 0]]), np.zeros(6, dtype=int),
+            np.array([0]), np.empty((0, 2)), np.empty(0), np.arange(3),
+            profiles, 3, 3,
+        )
+        with patch.object(tr, "build_motion_h_matrices", return_value=h_mots):
+            phi, f0, _, _, f_res = tr._solve_trial_phi_f0(
+                *args, return_transient=True
+            )
+        x = profiles.numpy()
+        norm = np.sum(x ** 2, axis=0)
+        np.testing.assert_allclose(f0, background.T @ x / norm, rtol=1e-5)
+        expected_res = (data - background - x @ phi.numpy().T).T @ x / norm
+        np.testing.assert_allclose(f_res, expected_res, atol=1e-5)
+        lstsq_f0 = np.linalg.lstsq(x, background, rcond=None)[0].T
+        self.assertFalse(np.allclose(f0, lstsq_f0, rtol=1e-3))
 
 
 class TestBinTrialMotion(unittest.TestCase):
@@ -375,7 +399,7 @@ class TestComputeHighResTraces(unittest.TestCase):
         solve.assert_called_once()
         self.assertEqual(solve.call_args.args[4], 50)
         self.assertIs(solve.call_args.kwargs["options"], options)
-        self.assertEqual(len(out), 10)
+        self.assertEqual(len(out), 11)
         for actual, expected in zip(out[:8], baseline[:8]):
             np.testing.assert_array_equal(actual, expected)
         np.testing.assert_array_equal(
@@ -482,13 +506,15 @@ class TestComputeHighResTraces(unittest.TestCase):
         self.assertIs(out.user_roi_f, out[7])
         self.assertIs(out.d_f_denoised, out[8])
         self.assertIs(out.events, out[9])
+        self.assertIs(out.f_residual, out[10])
         (
             phi, f0, frames, sel, global_f, motion, online, f_soma,
-            denoised, events,
+            denoised, events, f_residual,
         ) = out
         n_sources = inp["a_final"].shape[1]
         self.assertEqual(phi.shape, (inp["n_frames"], n_sources))
         self.assertEqual(f0.shape, (inp["n_frames"], n_sources))
+        self.assertEqual(f_residual.shape, phi.shape)
         for values in (denoised, events):
             self.assertEqual(values.shape, phi.shape)
             self.assertTrue(np.isnan(values).all())
@@ -526,7 +552,7 @@ class TestGetHighResTraces(unittest.TestCase):
     """get_high_res_traces IO wrapper (skip + monkeypatched read)."""
 
     def test_skipped_trial_returns_empty(self):
-        """keep_trial=False returns all ten empty fields without reading."""
+        """keep_trial=False returns all eleven empty fields without reading."""
         loader = patch.object(
             tr, "_load_high_res_trial_data", side_effect=AssertionError("read skipped trial")
         )
@@ -563,10 +589,11 @@ class TestGetHighResTraces(unittest.TestCase):
             transient_options=TransientOptions(),
         )
         self.assertIsInstance(out, TrialTraceResult)
-        self.assertEqual(len(out), 10)
+        self.assertEqual(len(out), 11)
         self.assertEqual(out[0].shape, (0, inp["a_final"].shape[1]))
         self.assertEqual(out.d_f_denoised.shape, out.d_f.shape)
         self.assertEqual(out.events.shape, out.d_f.shape)
+        self.assertEqual(out.f_residual.shape, out.d_f.shape)
         self.assertEqual(out[4].shape, (0, 2))  # globalF (0, channels)
         self.assertEqual(out[2].shape, (0,))  # frames
 

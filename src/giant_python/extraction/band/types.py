@@ -15,8 +15,10 @@ class TrialTraceResult(NamedTuple):
     with one value per frame. Only output assembly negates reference offsets
     into saved MATLAB displacement. Skipped trials have zero frames.
     ``d_f`` is the LS result in production; ``d_f_denoised`` and ``events``
-    contain separate convolution outputs. Optional defaults permit legacy
-    eight-argument construction, but the record now has ten fields.
+    contain separate convolution outputs. ``f_residual`` is the source
+    backprojection of ``data - background - x @ d_f``, added with ``f0_ls`` to
+    ``d_f`` before the final F0 estimate. Optional defaults permit legacy
+    eight-argument construction, but the record now has eleven fields.
     """
 
     d_f: np.ndarray
@@ -29,6 +31,7 @@ class TrialTraceResult(NamedTuple):
     user_roi_f: np.ndarray
     d_f_denoised: np.ndarray | None = None
     events: np.ndarray | None = None
+    f_residual: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

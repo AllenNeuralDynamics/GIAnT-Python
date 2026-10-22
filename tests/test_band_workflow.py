@@ -413,7 +413,7 @@ class TestBandWorkflow(unittest.TestCase):
                     runtime_result.trace_results[0], TrialTraceResult
                 )
                 trial = runtime_result.trace_results[0]
-                self.assertEqual(len(trial), 10)
+                self.assertEqual(len(trial), 11)
                 fit = fit_results[dmd_ix]
                 np.testing.assert_allclose(trial.d_f_denoised, fit.d_f, rtol=1e-6)
                 np.testing.assert_allclose(trial.events, fit.events, rtol=1e-6)
@@ -428,11 +428,16 @@ class TestBandWorkflow(unittest.TestCase):
                     expected_ls = np.linalg.lstsq(
                         design, residual[:, selected], rcond=None
                     )[0].T
-                    expected_f0 = np.linalg.lstsq(
-                        design, 3 * residual[:, selected], rcond=None
-                    )[0].T
+                    norm = np.sum(design ** 2, axis=0)
+                    expected_f0 = (3 * residual[:, selected]).T @ design / norm
+                    expected_res = (
+                        residual[:, selected] - design @ expected_ls.T
+                    ).T @ design / norm
                     np.testing.assert_allclose(trial.d_f[selected], expected_ls, rtol=1e-5)
                     np.testing.assert_allclose(trial.f0_ls[selected], expected_f0, rtol=1e-5)
+                    np.testing.assert_allclose(
+                        trial.f_residual[selected], expected_res, atol=1e-4
+                    )
                 self.assertEqual(path.path_index, dmd_ix)
                 np.testing.assert_array_equal(path.z_depths, [[10 + dmd_ix]])
                 np.testing.assert_array_equal(
@@ -463,7 +468,7 @@ class TestBandWorkflow(unittest.TestCase):
                     equal_nan=True,
                 )
                 _, expected_f0, expected_ls, _ = assemble_dff(
-                    trial.d_f, trial.f0_ls,
+                    trial.d_f, trial.f0_ls + trial.f_residual,
                     runtime_result.denoise_window, runtime_result.baseline_window,
                 )
                 for source in (path.sources[0], saved.sources[0]):

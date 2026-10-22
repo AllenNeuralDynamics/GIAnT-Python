@@ -166,8 +166,9 @@ def assemble_dff(
     """Assemble ``F``, re-estimate ``F0``, and form ``dF``/``dFF``.
 
     Reconstructs total fluorescence ``F = dF_ls + F0_ls`` from the per-motion
-    source and background traces (least squares or weighted averages),
-    re-estimates the baseline with
+    source traces (least squares or weighted averages) and background terms
+    (for band extraction, the backprojected background plus the backprojected
+    fit residual), re-estimates the baseline with
     :func:`compute_f0`, and computes ``dF = F - F0`` and ``dFF = dF /
     clip(F0, 1e-4, inf)``.
 
@@ -176,7 +177,7 @@ def assemble_dff(
     d_f_ls : ndarray of shape (T, n_sources)
         Concatenated per-source dF traces (``phi``).
     f0_ls : ndarray of shape (T, n_sources)
-        Concatenated per-source background traces in the same extraction scale.
+        Concatenated per-source background terms in the same extraction scale.
     denoise_window, hull_window : int
         Windows passed to :func:`compute_f0`.
 

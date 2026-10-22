@@ -82,7 +82,11 @@ def assemble_path_summary(pr: PathResult, path_index: int = 0) -> PathSummary:
     """
     results = pr.trace_results
     d_f = np.concatenate([r.d_f for r in results], axis=0)
-    f0_ls = np.concatenate([r.f0_ls for r in results], axis=0)
+    # F = dF_ls + intermediate F0 + backprojected fit residual.
+    f0_ls = np.concatenate([
+        r.f0_ls if r.f_residual is None else r.f0_ls + r.f_residual
+        for r in results
+    ], axis=0)
     f_full, f0, d_f, _ = assemble_dff(
         d_f, f0_ls, pr.denoise_window, pr.baseline_window
     )

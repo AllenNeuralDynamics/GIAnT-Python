@@ -518,6 +518,23 @@ class TestAssemblePathSummary(unittest.TestCase):
             self.assertEqual(values.shape, (2, 13))
             self.assertTrue(np.isnan(values[1]).all())
 
+    def test_residual_backprojection_enters_final_f0(self):
+        """F = dF_ls + F0_ls + residual before the final baseline estimate."""
+        pr = _path_result()
+        raw_ls = np.concatenate([r.d_f for r in pr.trace_results])
+        raw_f0 = np.concatenate([r.f0_ls for r in pr.trace_results])
+        pr.trace_results = [
+            r._replace(f_residual=np.full_like(r.d_f, 0.25 * (i + 1)))
+            for i, r in enumerate(pr.trace_results)
+        ]
+        residual = np.concatenate([r.f_residual for r in pr.trace_results])
+        _, expected_f0, expected_df, _ = assemble_dff(
+            raw_ls, raw_f0 + residual, pr.denoise_window, pr.baseline_window
+        )
+        path = pl.assemble_path_summary(pr)
+        np.testing.assert_array_equal(path.sources[0].f0[0], expected_f0[:, 0])
+        np.testing.assert_array_equal(path.sources[0].df_ls[0], expected_df[:, 0])
+
     def test_independent_traces_stitch_skips_masks_and_legacy_trials(self):
         """Only LS gets baseline processing; raw fit outputs keep trial order."""
         for channels in (1, 2):
