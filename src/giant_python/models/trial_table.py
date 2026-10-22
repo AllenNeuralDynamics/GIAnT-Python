@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
+import numpy as np
+
 
 @dataclass
 class Slap2Info:
@@ -19,17 +21,21 @@ class Slap2Info:
     ref_stack : dict
         Reference stack(s), keyed by DMD path, each with image, channels,
         Zs, and the DMD-pixel-to-sample transform.
-    first_line, last_line : list of int
+    first_line, last_line : ndarray or list
         First/last scanned line index for each trial.
-    trial_start_time_inferred, trial_end_time_from_pc : list of float
+    trial_start_time_inferred, trial_end_time_from_pc : ndarray or list
         Inferred and PC-reported trial timing.
     """
 
     ref_stack: dict = field(default_factory=dict)
-    first_line: list = field(default_factory=list)
-    last_line: list = field(default_factory=list)
-    trial_start_time_inferred: list = field(default_factory=list)
-    trial_end_time_from_pc: list = field(default_factory=list)
+    first_line: Union[np.ndarray, list] = field(default_factory=list)
+    last_line: Union[np.ndarray, list] = field(default_factory=list)
+    trial_start_time_inferred: Union[np.ndarray, list] = field(
+        default_factory=list
+    )
+    trial_end_time_from_pc: Union[np.ndarray, list] = field(
+        default_factory=list
+    )
 
 
 @dataclass
@@ -48,33 +54,45 @@ pipeline.pipeline.Pipeline`.
         Directory containing the raw data files.
     savedr : Path or None
         Directory in which results are written.
-    filename : list
+    filename : ndarray or list
         File names, shaped ``(n_dmds, n_trials)``.
-    true_trial_ix : list
+    true_trial_ix : ndarray or list
         Trial indices, shaped ``(n_dmds, n_trials)``.
-    epoch : list
+    epoch : ndarray or list
         Epoch numbers, shaped ``(n_dmds, n_trials)``.
     slap2_info : Slap2Info or None
         SLAP2-only metadata (``None`` for Bergamo).
     motion_correction : dict or None
         Populated by the registration stage (registered filenames, alignment
-        data filenames, per-trial failure flags, and the ``AlignParams`` used).
+        data filenames, per-trial failure flags, and registration parameters).
     source_extraction : dict or None
         Populated by the extraction stage (analysis params, raw input files).
     """
 
     datadr: Optional[Path] = None
     savedr: Optional[Path] = None
-    filename: list = field(default_factory=list)
-    true_trial_ix: list = field(default_factory=list)
-    epoch: list = field(default_factory=list)
+    filename: Union[np.ndarray, list] = field(default_factory=list)
+    true_trial_ix: Union[np.ndarray, list] = field(default_factory=list)
+    epoch: Union[np.ndarray, list] = field(default_factory=list)
     slap2_info: Optional[Slap2Info] = None
     motion_correction: Optional[dict] = None
     source_extraction: Optional[dict] = None
+    # Provenance only; never a trial-table HDF5 field.
+    source_path: Optional[Path] = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def from_h5(cls, path: Union[str, Path]) -> "TrialTable":
         """Load a trial table from a MATLAB-compatible trial_table.h5 file.
+
+        Faithful deserialization: the on-disk group hierarchy (README
+        ``trial_table.h5`` schema) is mirrored into the model with no path
+        resolution or file probing. ``slap2_info`` becomes a
+        :class:`Slap2Info`; ``motion_correction`` / ``source_extraction`` stay
+        as nested dicts (present only once those stages have run). Callers that
+        need a runtime view (absolute ``fn_adata`` paths, kept-trial mask, per-
+        DMD ``alignHz``) resolve it separately.
 
         Parameters
         ----------
@@ -86,14 +104,6 @@ pipeline.pipeline.Pipeline`.
         TrialTable
             The deserialized trial table.
         """
-        raise NotImplementedError
+        from ..io.trial_table import read_trial_table
 
-    def to_h5(self, path: Union[str, Path]) -> None:
-        """Write this trial table to a MATLAB-compatible trial_table.h5 file.
-
-        Parameters
-        ----------
-        path : str or Path
-            Destination path for the trial_table.h5 file.
-        """
-        raise NotImplementedError
+        return read_trial_table(path)

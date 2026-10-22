@@ -1,14 +1,18 @@
 # Contributing
 
-### Linters and testing
+### Development setup
 
-There are several libraries used to run linters, check documentation, and run tests.
-
-- Please test your changes using the **coverage** library, which will run the tests and log a coverage report:
+From the repository root, install the package and development tools with pip 25.1 or later:
 
 ```bash
-coverage run -m unittest discover && coverage report
+pip install -e . --group dev
 ```
+
+Alternatively, use `uv sync`. Interactive ROI work also requires tkinter in the Python installation.
+
+### Code quality
+
+Use the following tools to check documentation and maintain code style.
 
 - Use **interrogate** to check that modules, methods, etc. have been documented thoroughly:
 
@@ -47,7 +51,6 @@ where scope (optional) describes the packages affected by the code changes and t
 - **fix**: A bugfix
 - **perf**: A code change that improves performance
 - **refactor**: A code change that neither fixes a bug nor adds a feature
-- **test**: Adding missing tests or correcting existing tests
 
 ### Semantic Release
 
@@ -60,15 +63,17 @@ The table below, from [semantic release](https://github.com/semantic-release/sem
 | `perf(pencil): remove graphiteWidth option`<br><br>`BREAKING CHANGE: The graphiteWidth option has been removed.`<br>`The default graphite width of 10mm is always used for performance reasons.` | ~~Major~~ Breaking Release <br /> (Note that the `BREAKING CHANGE: ` token must be in the footer of the commit and need to be all caps as shown) |
 
 ### Documentation
-To generate the rst files source files for documentation, run
+
+The maintained Sphinx pages include a curated public API reference; do not regenerate them with `sphinx-apidoc`.
+Build the documentation and treat warnings as errors:
+
 ```bash
-sphinx-apidoc -o docs/source/ src
+sphinx-build -b html -n -W --keep-going docs/source/ docs/build/html
 ```
-Then to create the documentation HTML files, run
-```bash
-sphinx-build -b html docs/source/ docs/build/html
-```
-More info on sphinx installation can be found [here](https://www.sphinx-doc.org/en/master/usage/installation.html).
+
+External API links use Python, NumPy, and h5py inventories downloaded by Sphinx; a clean build requires network access to those documentation sites.
+
+Keep the README focused on running BandSILo. Put option and staging details in [API and data conventions](docs/source/migration.rst), scientific details in [trace estimation](docs/source/traces.rst), schemas in [file formats](docs/source/file_formats.rst), and ownership decisions in [architecture](docs/source/architecture.rst).
 
 ### Read the Docs Deployment
 Note: Private repositories require **Read the Docs for Business** account. The following instructions are for a public repo.

@@ -16,6 +16,9 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 
+# NOTE: The SLAP2 band-scan (BandSILo) source-extraction backend requires
+# ``slap2_utils`` (raw SLAP2 data-file reader). It is not published on PyPI, so
+# it is installed directly from source via the git URL below.
 dependencies = [
     "numpy",
     "scipy",
@@ -23,10 +26,13 @@ dependencies = [
     "h5py",
     "tifffile",
     "joblib",
+    "tqdm",
+    "torch",
+    "opencv-python",
+    "pandas",
+    "bottleneck",
+    "slap2_utils @ git+https://github.com/m-xie/SLAP2_Utils.git@multidatafiles",
 ]
-
-[project.optional-dependencies]
-gui = ["napari"]
 
 [project.scripts]
 giant = "giant_python.cli:main"
@@ -34,7 +40,6 @@ giant = "giant_python.cli:main"
 [dependency-groups]
 dev = [
     'black',
-    'coverage',
     'flake8',
     'interrogate',
     'isort',
@@ -44,6 +49,11 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Bundle the default point-spread-function template used by the BandSILo
+# (band-scan) source-extraction backend.
+giant_python = ["assets/psfs/*.tif"]
 
 [tool.setuptools.dynamic]
 version = {attr = "giant_python.__version__"}
@@ -59,7 +69,6 @@ exclude = '''
     | \.git          # root of the project
     | \.hg
     | \.mypy_cache
-    | \.tox
     | \.venv
     | _build
     | build
@@ -69,19 +78,6 @@ exclude = '''
   | .gitignore
 )
 '''
-
-[tool.coverage.run]
-omit = ["*__init__*"]
-source = ["giant_python", "tests"]
-
-[tool.coverage.report]
-exclude_lines = [
-    "if __name__ == .__main__.:",
-    "^from .* import .*",
-    "^import .*",
-    "pragma: no cover"
-]
-fail_under = 100
 
 [tool.isort]
 line_length = 79
