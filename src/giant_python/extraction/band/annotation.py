@@ -49,7 +49,7 @@ def motion_median_from_adata(a_data: dict) -> tuple:
     )
 
 
-def _stdin_is_tty() -> bool:  # pragma: no cover - runtime stdin
+def _stdin_is_tty() -> bool:
     """Check for interactive stdin without importing a GUI toolkit."""
     return bool(getattr(sys.stdin, "isatty", lambda: False)())
 
@@ -131,7 +131,7 @@ def _draw_and_save_user_rois(
     n_dmds: int,
     user_roi_geo: dict,
     ref_files: Optional[dict],
-) -> dict:  # pragma: no cover - GUI
+) -> dict:
     """Launch the lazy ROI editor and save its records and masks."""
     from ...gui.roi_editor import run_user_roi_selection
 
@@ -179,7 +179,7 @@ def annotate_band_rois(
     *,
     execution: ExecutionInput = None,
     annotations: AnnotationInput = None,
-) -> str:  # pragma: no cover - full reference IO and optional GUI
+) -> str:
     """Annotate a path or in-memory TrialTable; return annotations.h5's path.
 
     Existing usable annotations are loaded headlessly. No extraction or

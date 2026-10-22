@@ -13,7 +13,7 @@ def _ask_roi_label(
     roi_num: int,
     path_num: int,
     plane_num: int,
-) -> str:  # pragma: no cover - interactive tkinter dialog
+) -> str:
     """Prompt for one ROI label, defaulting to ROI{n} on cancel or failure."""
     import tkinter as tk
     from tkinter import simpledialog
@@ -39,7 +39,7 @@ def _ask_roi_label(
 
 def run_user_roi_selection(
     user_roi_geo: dict, n_dmds: int
-) -> dict:  # pragma: no cover - GUI
+) -> dict:
     """Select ROIs on reference images and return per-DMD selections."""
     import cv2
 
@@ -68,7 +68,7 @@ def run_user_roi_selection(
 
 def _normalize_plane(
     plane: np.ndarray,
-) -> np.ndarray:  # pragma: no cover - display
+) -> np.ndarray:
     """Percentile-normalize a reference plane to an 8-bit image."""
     im = np.nan_to_num(plane, nan=0.0)
     vmin = np.percentile(im, 1)
@@ -83,7 +83,7 @@ def _normalize_plane(
     return (im8 * 255).astype(np.uint8)
 
 
-def _select_rois_for_dmd(cv2, dmd_ix: int, g: dict):  # pragma: no cover - GUI
+def _select_rois_for_dmd(cv2, dmd_ix: int, g: dict):
     """Run the per-DMD interactive loop, returning masks and records."""
     ref = g["ref"]
     num_ref_z = g["num_ref_z"]
@@ -143,7 +143,7 @@ def _select_rois_for_dmd(cv2, dmd_ix: int, g: dict):  # pragma: no cover - GUI
 
 def _compose_display(
     cv2, im8, sp_plane, roi_plane
-):  # pragma: no cover - display
+):
     """Overlay the superpixel mask in green and ROI union in red."""
     disp = cv2.cvtColor(im8, cv2.COLOR_GRAY2BGR)
     if np.any(sp_plane):
@@ -168,7 +168,7 @@ def _edit_rois(
     roi_masks,
     roi_union,
     roi_records,
-):  # pragma: no cover - GUI
+):
     """Append selected rectangles as polygon records and overlapping masks."""
     edit_name = f"Edit ROIs z={curr_fz + 1}"
     edit_disp = _compose_display(

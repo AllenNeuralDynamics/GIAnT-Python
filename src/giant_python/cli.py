@@ -215,5 +215,5 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error(str(exc))
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

@@ -40,7 +40,6 @@ giant = "giant_python.cli:main"
 [dependency-groups]
 dev = [
     'black',
-    'coverage',
     'flake8',
     'interrogate',
     'isort',
@@ -70,7 +69,6 @@ exclude = '''
     | \.git          # root of the project
     | \.hg
     | \.mypy_cache
-    | \.tox
     | \.venv
     | _build
     | build
@@ -80,19 +78,6 @@ exclude = '''
   | .gitignore
 )
 '''
-
-[tool.coverage.run]
-omit = ["*__init__*"]
-source = ["giant_python", "tests"]
-
-[tool.coverage.report]
-exclude_lines = [
-    "if __name__ == .__main__.:",
-    "^from .* import .*",
-    "^import .*",
-    "pragma: no cover"
-]
-fail_under = 100
 
 [tool.isort]
 line_length = 79

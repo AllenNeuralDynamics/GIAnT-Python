@@ -18,7 +18,7 @@ ROIs) suppresses detection in masked regions.
 
 The reference's nested helpers (``_make_bounds``/``_peak_mask``/
 ``_buffer_mask`` and the per-component new-peak step) are lifted to
-module-level functions here so each is independently testable.
+module-level functions for independent reuse.
 """
 
 from __future__ import annotations

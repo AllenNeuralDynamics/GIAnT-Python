@@ -34,7 +34,7 @@ def run_parameter_gui(
     *,
     execution: ExecutionInput = None,
     annotations: AnnotationInput = None,
-) -> Optional[  # pragma: no cover - interactive tkinter dialog
+) -> Optional[
     tuple[BandSiloParams, ExecutionOptions, AnnotationOptions]
 ]:
     """Return split option objects, or None on cancellation, without mutation.

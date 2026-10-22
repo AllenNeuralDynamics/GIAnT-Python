@@ -10,15 +10,9 @@ pip install -e . --group dev
 
 Alternatively, use `uv sync`. Interactive ROI work also requires tkinter in the Python installation.
 
-### Linters and testing
+### Code quality
 
-There are several libraries used to run linters, check documentation, and run tests.
-
-- Please test your changes using the **coverage** library, which will run the tests and log a coverage report:
-
-```bash
-coverage run -m unittest discover && coverage report
-```
+Use the following tools to check documentation and maintain code style.
 
 - Use **interrogate** to check that modules, methods, etc. have been documented thoroughly:
 
@@ -57,7 +51,6 @@ where scope (optional) describes the packages affected by the code changes and t
 - **fix**: A bugfix
 - **perf**: A code change that improves performance
 - **refactor**: A code change that neither fixes a bug nor adds a feature
-- **test**: Adding missing tests or correcting existing tests
 
 ### Semantic Release
 

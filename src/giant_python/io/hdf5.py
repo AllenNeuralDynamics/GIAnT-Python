@@ -1,8 +1,7 @@
 """MATLAB-style HDF5 decoding and experiment-parameter group writing.
 
 This module is the foundation of MATLAB interoperability: the model
-``from_h5`` / ``to_h5`` methods build on these helpers. Round-trip tests
-against real MATLAB-produced ``.h5`` files are the acceptance criterion.
+``from_h5`` / ``to_h5`` methods build on these helpers.
 
 Serialization conventions
 -------------------------

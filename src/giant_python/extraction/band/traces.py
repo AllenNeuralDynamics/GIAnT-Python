@@ -18,7 +18,7 @@ global and per-user-ROI fluorescence.
 
 The pure compute (:func:`compute_high_res_traces`) is factored out of the IO
 wrapper (:func:`get_high_res_traces`, which reads the SLAP2 file lazily via
-:mod:`giant_python.extraction.band.trial_data`) so the numerics are testable
+:mod:`giant_python.extraction.band.trial_data`) so the numerics can be used
 without ``slap2_utils``. The workflow owns per-trial scheduling. Results use
 ``TrialTraceResult``, with denoised traces, events and the residual
 backprojection after the original fields.
@@ -634,7 +634,7 @@ def _load_high_res_trial_data(
     datadr: str,
     trial_table: dict,
     num_channels: int,
-):  # pragma: no cover - requires slap2_utils
+):
     """Read one trial's high-res activity via the SLAP2 reader.
 
     Returns

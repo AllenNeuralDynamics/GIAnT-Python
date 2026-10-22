@@ -180,7 +180,7 @@ def compute_rho(
                 # Unreachable defensive guard (mirrors the reference): a plane
                 # with selected pixels (new_ncols > 0) always has H columns in
                 # it, since both derive from the same in-plane PSF footprint.
-                continue  # pragma: no cover
+                continue
 
             remap = z_remaps[z]
             new_rows = h_idxs[0, keep_mask]

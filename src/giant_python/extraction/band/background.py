@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline
 
-try:  # pragma: no cover - exercised via the installed extra
+try:
     import bottleneck as bn
-except ImportError:  # pragma: no cover
+except ImportError:
     bn = None
 
 
@@ -107,7 +107,7 @@ def _interp_columns(  # noqa: C901
             # Unreachable defensive guard (mirrors the reference): sorted
             # distinct rows make searchsorted never straddle equal rows, so
             # denom is always non-zero here.
-            continue  # pragma: no cover
+            continue
 
         interp_rows = interp_rows[nonzero]
         lo_v = lo_v[nonzero]
