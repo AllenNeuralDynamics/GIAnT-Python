@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         extract_sources,
     )
 
-__version__ = "0.1.10"
+__version__ = "0.1.11"
 
 _MODEL_EXPORTS = {
     "AnnotationOptions",
