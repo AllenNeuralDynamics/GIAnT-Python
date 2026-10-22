@@ -295,8 +295,6 @@ def _process_dmd(
         num_fast_zs,
         dmd_pixels_per_column,
         dmd_pixels_per_row,
-        psf2d,
-        num_super_pixels,
         align_hz,
         params,
         execution=execution,
@@ -418,8 +416,6 @@ def _estimate_background(
     num_fast_zs,
     dmd_pixels_per_column,
     dmd_pixels_per_row,
-    psf2d,
-    num_super_pixels,
     align_hz,
     params,
     *,
@@ -428,9 +424,6 @@ def _estimate_background(
     """Compose interpolation and rolling baseline on the original grid."""
     execution = ExecutionOptions() if execution is None else execution
     log("Estimating background", execution.verbose)
-    # Preserve the original preparation order, even though these kernels are
-    # not consumed by the interpolation-based background reconstruction.
-    operators.expand_psf(psf2d)
     interp_data = np.full(
         (sel_pix_idxs.shape[0], low_res_data_norm.shape[1]),
         np.nan,

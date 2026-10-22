@@ -312,7 +312,7 @@ class TestStageComposition(unittest.TestCase):
                 self.assertEqual(metadata[name], getattr(params, name))
 
     def test_default_execution_skips_empty_planes_and_preserves_grid(self):
-        """Interpolate selected planes; baseline and assembly share data."""
+        """Interpolate without PSF expansion; preserve the background grid."""
         data = np.array([[3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
         selected = np.array([4, 5])
         ref_d, ref_r, ref_c = (
@@ -356,7 +356,6 @@ class TestStageComposition(unittest.TestCase):
                     wf.bg, "assemble_background", return_value=assembled
                 )
             )
-            psf = np.ones((3, 3))
             result = wf._estimate_background(
                 data,
                 umyx,
@@ -368,12 +367,10 @@ class TestStageComposition(unittest.TestCase):
                 2,
                 2,
                 2,
-                psf,
-                2,
                 10,
                 params,
             )
-        expand.assert_called_once_with(psf)
+        expand.assert_not_called()
         self.assertEqual(planes.call_count, 2)
         interpolate.assert_called_once()
         np.testing.assert_array_equal(interpolate.call_args.args[0], data)
