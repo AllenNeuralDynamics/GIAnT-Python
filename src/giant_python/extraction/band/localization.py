@@ -690,7 +690,7 @@ def compute_source_snr(
             var_residual[j] += torch.sum(
                 torch.sum(residual_recon[contributing][:, frames], dim=0) ** 2
             )
-    # TODO: maybe consider making this a peak SNR ratio
+    # Ratio of accumulated squared signals, not a peak-amplitude SNR.
     return var_exp / var_residual
 
 

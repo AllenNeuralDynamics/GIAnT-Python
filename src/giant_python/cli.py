@@ -1,15 +1,8 @@
-"""Command-line interface: ``giant annotate|extract``.
+"""CLI for annotation and extraction from registered SLAP2 band inputs.
 
-Thin wrapper over the pipeline stages for batch / cluster use. Wired as the
-``giant`` console script in pyproject.toml. The ``annotate`` subcommand is the
-standalone ROI-annotation step (the BandSILo analog of the GIAnT-MATLAB
-annotation capsule): it writes ``annotations.h5``, which a later ``extract``
-run consumes without opening a GUI.
-
-CLI, standalone functions and Pipeline share the same workflow services.
-Scientific defaults are unchanged; execution and annotation flags build
-separate options. Heavy acquisition and GUI modules are imported only by
-the selected backend when needed.
+``giant annotate`` loads or draws ROIs; ``giant extract`` runs BandSILo.
+Both delegate to the public workflow services with separate scientific,
+execution and annotation options. GUI imports occur only when needed.
 """
 
 from __future__ import annotations

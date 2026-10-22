@@ -17,8 +17,8 @@ def expand_psf(
     """Normalize a PSF and build a center-aligned higher-resolution copy.
 
     The expanded PSF is an ``ex_fac``x up-sampled cubic-spline interpolation
-    that keeps the center aligned, used to form the ``HD - HD_expanded``
-    matched filter in :func:`compute_rho`.
+    that keeps the center aligned. Localization constructs its center/surround
+    filter separately with :func:`gaussian_kernel_2d`.
 
     Parameters
     ----------
