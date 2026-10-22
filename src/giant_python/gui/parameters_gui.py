@@ -34,9 +34,7 @@ def run_parameter_gui(
     *,
     execution: ExecutionInput = None,
     annotations: AnnotationInput = None,
-) -> Optional[
-    tuple[BandSiloParams, ExecutionOptions, AnnotationOptions]
-]:
+) -> Optional[tuple[BandSiloParams, ExecutionOptions, AnnotationOptions]]:
     """Return split option objects, or None on cancellation, without mutation.
 
     Retains the original form and natural-log sparse-factor control. Toolkit
@@ -111,10 +109,14 @@ def run_parameter_gui(
                 "peak_buffer": int(entries["peak_buffer"].get()),
                 "z_tol": float(entries["z_tol"].get()),
                 "sparse_fac": float(np.exp(float(sparse_var.get()))),
-                "trace_beta_fraction": float(entries["trace_beta_fraction"].get()),
+                "trace_beta_fraction": float(
+                    entries["trace_beta_fraction"].get()
+                ),
                 "trace_max_iter": int(entries["trace_max_iter"].get()),
                 "trace_tolerance": float(entries["trace_tolerance"].get()),
-                "trace_event_threshold": float(entries["trace_event_threshold"].get()),
+                "trace_event_threshold": float(
+                    entries["trace_event_threshold"].get()
+                ),
                 "trace_debias": bool(debias_var.get()),
             }
             result["options"] = (

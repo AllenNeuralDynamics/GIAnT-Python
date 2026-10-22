@@ -25,7 +25,8 @@ class Source:
         Least-squares dF after baseline re-estimation, the fitted convolution
         trace (without another baseline subtraction), and nonnegative event
         amplitudes, shaped ``(channels, frames)``. Missing observations and
-        unprocessed channels are NaN. Events exclude each trial's initial state.
+        unprocessed channels are NaN. Events exclude each trial's initial
+        state.
     f0 : ndarray or None
         Per-channel baseline.
     snr : float or None
@@ -145,9 +146,9 @@ class PathSummary:
 
     Arrays remain NumPy-backed in memory; Source/UserRoi entries may be views
     of assembled arrays. ``annotation_enabled`` distinguishes disabled from
-    enabled-but-empty annotations (saved as an ROI group attribute). Private empty-array templates
-    retain dimensions and dtypes that cannot be inferred from empty lists;
-    they never duplicate populated source or ROI tensors.
+    enabled-but-empty annotations (saved as an ROI group attribute). Private
+    empty-array templates retain dimensions and dtypes that cannot be inferred
+    from empty lists; they never duplicate populated source or ROI tensors.
     """
 
     path_index: int = 0

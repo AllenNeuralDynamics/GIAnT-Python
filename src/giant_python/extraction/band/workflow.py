@@ -325,7 +325,8 @@ def _process_dmd(
         execution=execution,
         exclusion_mask=(
             np.logical_or.reduce(soma_masks)
-            if soma_masks is not None and len(soma_masks) > 0 else None
+            if soma_masks is not None and len(soma_masks) > 0
+            else None
         ),
     )
 
@@ -578,7 +579,9 @@ def _localize(
         ref_d=ref_d,
     )
     source_seeds = get_act_im_peaks(
-        act_im, peak_th=params.peakth, buffer_size=params.peak_buffer,
+        act_im,
+        peak_th=params.peakth,
+        buffer_size=params.peak_buffer,
         exclusion_mask=exclusion_mask,
     )
     act_im_peaks = source_seeds.copy()

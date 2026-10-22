@@ -20,19 +20,38 @@ from .models.params import (
 def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     """Attach the shared source-extraction options to a subparser."""
     for name, kind, help_text in (
-        ("decay_tau_s", float, "Shared localization and trace decay time in seconds."),
-        ("trace_beta_fraction", float, "Trial-relative nonnegative event penalty."),
+        (
+            "decay_tau_s",
+            float,
+            "Shared localization and trace decay time in seconds.",
+        ),
+        (
+            "trace_beta_fraction",
+            float,
+            "Trial-relative nonnegative event penalty.",
+        ),
         ("trace_max_iter", int, "Maximum iterations per transient fit stage."),
         ("trace_tolerance", float, "Transient optimizer tolerance."),
-        ("trace_event_threshold", float, "Absolute event threshold for debias support."),
-        ("random_seed", int, "Nonnegative seed for the localization motion order."),
+        (
+            "trace_event_threshold",
+            float,
+            "Absolute event threshold for debias support.",
+        ),
+        (
+            "random_seed",
+            int,
+            "Nonnegative seed for the localization motion order.",
+        ),
     ):
         parser.add_argument(
-            "--" + name.replace("_", "-"), type=kind,
-            default=getattr(BandSiloParams, name), help=help_text,
+            "--" + name.replace("_", "-"),
+            type=kind,
+            default=getattr(BandSiloParams, name),
+            help=help_text,
         )
     parser.add_argument(
-        "--trace-debias", action="store_true",
+        "--trace-debias",
+        action="store_true",
         help="Refit selected transient events without the L1 penalty.",
     )
     parser.add_argument(

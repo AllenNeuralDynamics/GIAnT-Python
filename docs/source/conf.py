@@ -53,7 +53,9 @@ napoleon_type_aliases = {
     "BandSiloParams": "giant_python.models.params.BandSiloParams",
     "ExecutionOptions": "giant_python.models.params.ExecutionOptions",
     "AnnotationOptions": "giant_python.models.params.AnnotationOptions",
-    "ExperimentSummary": "giant_python.models.experiment_summary.ExperimentSummary",
+    "ExperimentSummary": (
+        "giant_python.models.experiment_summary.ExperimentSummary"
+    ),
 }
 
 

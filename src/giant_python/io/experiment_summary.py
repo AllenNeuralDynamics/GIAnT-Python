@@ -43,7 +43,8 @@ def _decode_path(assembled: dict, path_index: int) -> PathSummary:
             df_ls=assembled["dF_ls"][j],
             df_denoised=(
                 assembled["dF_denoised"][j]
-                if "dF_denoised" in assembled else None
+                if "dF_denoised" in assembled
+                else None
             ),
             events=assembled["events"][j] if "events" in assembled else None,
             f0=assembled["F0"][j],
@@ -86,7 +87,9 @@ def _decode_path(assembled: dict, path_index: int) -> PathSummary:
             "annotation_enabled", rois is not None
         ),
         _empty_source_arrays=(
-            {} if sources else {
+            {}
+            if sources
+            else {
                 key: assembled[key] for key in _SOURCE_KEYS if key in assembled
             }
         ),
@@ -131,10 +134,12 @@ def _stack_optional_arrays(
     arrays: Iterable[np.ndarray | None], reference: np.ndarray, field: str
 ) -> np.ndarray:
     """Check each optional entry against its corresponding required trace."""
-    return np.stack([
-        _optional_array(array, reference[index], f"{field}[{index}]")
-        for index, array in enumerate(arrays)
-    ])
+    return np.stack(
+        [
+            _optional_array(array, reference[index], f"{field}[{index}]")
+            for index, array in enumerate(arrays)
+        ]
+    )
 
 
 def _empty_geometry(
@@ -182,12 +187,15 @@ def _encode_path(path: PathSummary) -> dict:
                 "F0": _stack_required_arrays(
                     (s.f0 for s in path.sources), "Source.f0"
                 ),
-                "SNR": np.asarray([
-                    np.nan if s.snr is None else s.snr for s in path.sources
-                ]).reshape(-1, 1),
+                "SNR": np.asarray(
+                    [np.nan if s.snr is None else s.snr for s in path.sources]
+                ).reshape(-1, 1),
             }
         )
-        for key, field in (("dF_denoised", "df_denoised"), ("events", "events")):
+        for key, field in (
+            ("dF_denoised", "df_denoised"),
+            ("events", "events"),
+        ):
             out[key] = _stack_optional_arrays(
                 (getattr(s, field) for s in path.sources),
                 out["dF_ls"],
@@ -197,20 +205,20 @@ def _encode_path(path: PathSummary) -> dict:
         out.update(path._empty_source_arrays)
     else:
         spatial_shape, global_f = _empty_geometry(path, "sources")
-        out.update({
-            "profiles": np.empty((0, *spatial_shape), dtype=np.float32),
-            "coords": np.empty((0, 3), dtype=np.int32),
-            "dF_ls": np.empty((0, *global_f.shape), dtype=global_f.dtype),
-            "F0": np.empty((0, *global_f.shape), dtype=global_f.dtype),
-            "SNR": np.empty((0, 1), dtype=np.float32),
-        })
+        out.update(
+            {
+                "profiles": np.empty((0, *spatial_shape), dtype=np.float32),
+                "coords": np.empty((0, 3), dtype=np.int32),
+                "dF_ls": np.empty((0, *global_f.shape), dtype=global_f.dtype),
+                "F0": np.empty((0, *global_f.shape), dtype=global_f.dtype),
+                "SNR": np.empty((0, 1), dtype=np.float32),
+            }
+        )
     if not path.sources:
         for key in ("dF_denoised", "events"):
             out[key] = _optional_array(out.get(key), out["dF_ls"], key)
     if not path.annotation_enabled and path.user_rois:
-        raise ValueError(
-            "Set annotation_enabled=True to serialize user ROIs"
-        )
+        raise ValueError("Set annotation_enabled=True to serialize user ROIs")
     if path.user_rois:
         out["user_rois"] = {
             "mask": _stack_required_arrays(
@@ -326,10 +334,11 @@ def read_summary(path: Union[str, Path]) -> ExperimentSummary:
     with h5py.File(path, "r") as f:
         annotation_enabled = {
             name: (
-                bool(f[name]["user_rois"].attrs.get(
-                    "annotation_enabled", True
-                ))
-                if "user_rois" in f[name] else False
+                bool(
+                    f[name]["user_rois"].attrs.get("annotation_enabled", True)
+                )
+                if "user_rois" in f[name]
+                else False
             )
             for name in names
         }

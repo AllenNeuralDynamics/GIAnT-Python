@@ -229,6 +229,25 @@ def _backproject(x: torch.Tensor, data: torch.Tensor) -> torch.Tensor:
     return (data.T @ x) / norm.masked_fill(norm <= 0, 1.0)
 
 
+def _validate_transient_settings(
+    transient_options, simple_trace_extraction, analyze_hz
+):
+    """Validate mutually exclusive trace modes and the transient grid rate."""
+    if transient_options is not None:
+        if simple_trace_extraction:
+            raise ValueError(
+                "Simple and convolution trace extraction are mutually "
+                "exclusive"
+            )
+        if not isinstance(transient_options, TransientOptions):
+            raise TypeError(
+                "transient_options must be TransientOptions or None"
+            )
+        from ...models.params import _positive
+
+        _positive("analyze_hz", analyze_hz)
+
+
 def _solve_trial_phi_f0(
     data: np.ndarray,
     background: np.ndarray,
@@ -303,14 +322,9 @@ def _solve_trial_phi_f0(
         least-squares fit. The optional residual term is the backprojection
         of ``data - background - x @ phi`` (zero for simple extraction).
     """
-    if transient_options is not None:
-        if simple_trace_extraction:
-            raise ValueError("Simple and convolution trace extraction are mutually exclusive")
-        if not isinstance(transient_options, TransientOptions):
-            raise TypeError("transient_options must be TransientOptions or None")
-        from ...models.params import _positive
-
-        _positive("analyze_hz", analyze_hz)
+    _validate_transient_settings(
+        transient_options, simple_trace_extraction, analyze_hz
+    )
     n_sources = a_final.shape[1]
     n_frames = data.shape[1]
     phi = torch.full((n_frames, n_sources), float("nan"), dtype=torch.float32)
@@ -334,7 +348,9 @@ def _solve_trial_phi_f0(
     )
 
     extract = (
-        _weighted_trace_average if simple_trace_extraction else solve_phi_motion
+        _weighted_trace_average
+        if simple_trace_extraction
+        else solve_phi_motion
     )
     designs = {}
     for motion_idx in mot_inds_to_keep:
@@ -365,7 +381,11 @@ def _solve_trial_phi_f0(
         # Preserve the empty/all-invalid behavior of the existing extractor.
         if np.any(valid):
             result = fit_transient_traces(
-                residual32, designs, mot_inds, valid, analyze_hz,
+                residual32,
+                designs,
+                mot_inds,
+                valid,
+                analyze_hz,
                 options=transient_options,
             )
             if not result.metadata["converged"]:
@@ -528,7 +548,8 @@ def compute_high_res_traces(
         Add constrained dF and events, retaining QR dF, backprojected F0 and
         auxiliary data.
         Fits nonnegative sparse events plus an unpenalized initial state.
-        Public dF retains missing-frame NaNs; nonconvergence raises RuntimeError.
+        Public dF retains missing-frame NaNs; nonconvergence raises
+        RuntimeError.
     analyze_hz : float or None
         Required nominal rate for transient fitting on the uniform full grid.
         Acquisition averaging is approximated, not explicitly modeled.
@@ -548,7 +569,9 @@ def compute_high_res_traces(
         # can have alternating line spacings. Use the explicit nominal rate.
         steps = np.diff(frame_grid)
         if np.any(steps <= 0):
-            raise ValueError("Convolution traces require chronological frames; retain gaps")
+            raise ValueError(
+                "Convolution traces require chronological frames; retain gaps"
+            )
     (
         motion_r,
         motion_c,

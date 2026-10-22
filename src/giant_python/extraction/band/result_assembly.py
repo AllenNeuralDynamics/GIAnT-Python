@@ -83,10 +83,13 @@ def assemble_path_summary(pr: PathResult, path_index: int = 0) -> PathSummary:
     results = pr.trace_results
     d_f = np.concatenate([r.d_f for r in results], axis=0)
     # F = dF_ls + intermediate F0 + backprojected fit residual.
-    f0_ls = np.concatenate([
-        r.f0_ls if r.f_residual is None else r.f0_ls + r.f_residual
-        for r in results
-    ], axis=0)
+    f0_ls = np.concatenate(
+        [
+            r.f0_ls if r.f_residual is None else r.f0_ls + r.f_residual
+            for r in results
+        ],
+        axis=0,
+    )
     f_full, f0, d_f, _ = assemble_dff(
         d_f, f0_ls, pr.denoise_window, pr.baseline_window
     )
@@ -95,18 +98,28 @@ def assemble_path_summary(pr: PathResult, path_index: int = 0) -> PathSummary:
     )
     coords = pr.source_params[:, :3].numpy()
     df_channels = _with_nan_channel(d_f, pr.num_channels)
-    # Keep the fitted convolution trace itself, not a second baseline-subtracted
-    # version: otherwise it would no longer correspond to the fitted events.
+    # Keep the fitted convolution trace itself, not a second
+    # baseline-subtracted version: otherwise it would no longer correspond
+    # to the fitted events.
     # Legacy manually constructed records have no transient outputs.
-    denoised = np.concatenate([
-        r.d_f_denoised if r.d_f_denoised is not None
-        else np.full_like(r.d_f, np.nan)
-        for r in results
-    ], axis=0)
-    events = np.concatenate([
-        r.events if r.events is not None else np.full_like(r.d_f, np.nan)
-        for r in results
-    ], axis=0)
+    denoised = np.concatenate(
+        [
+            (
+                r.d_f_denoised
+                if r.d_f_denoised is not None
+                else np.full_like(r.d_f, np.nan)
+            )
+            for r in results
+        ],
+        axis=0,
+    )
+    events = np.concatenate(
+        [
+            r.events if r.events is not None else np.full_like(r.d_f, np.nan)
+            for r in results
+        ],
+        axis=0,
+    )
     denoised_channels = _with_nan_channel(denoised, pr.num_channels)
     event_channels = _with_nan_channel(events, pr.num_channels)
     f0_channels = _with_nan_channel(f0, pr.num_channels)

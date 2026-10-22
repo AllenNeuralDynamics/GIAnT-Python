@@ -37,9 +37,7 @@ def _ask_roi_label(
     return text.strip()
 
 
-def run_user_roi_selection(
-    user_roi_geo: dict, n_dmds: int
-) -> dict:
+def run_user_roi_selection(user_roi_geo: dict, n_dmds: int) -> dict:
     """Select ROIs on reference images and return per-DMD selections."""
     import cv2
 
@@ -141,9 +139,7 @@ def _select_rois_for_dmd(cv2, dmd_ix: int, g: dict):
     return roi_masks, roi_records
 
 
-def _compose_display(
-    cv2, im8, sp_plane, roi_plane
-):
+def _compose_display(cv2, im8, sp_plane, roi_plane):
     """Overlay the superpixel mask in green and ROI union in red."""
     disp = cv2.cvtColor(im8, cv2.COLOR_GRAY2BGR)
     if np.any(sp_plane):

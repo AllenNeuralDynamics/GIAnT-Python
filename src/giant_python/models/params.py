@@ -30,8 +30,10 @@ def _positive(name: str, value: object, *, integer: bool = False) -> None:
 def _nonnegative(name: str, value: object) -> None:
     """Reject nonfinite, negative, boolean, or nonnumeric values."""
     if (
-        isinstance(value, bool) or not isinstance(value, Real)
-        or not math.isfinite(value) or value < 0
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not math.isfinite(value)
+        or value < 0
     ):
         raise ValueError(f"{name} must be a finite nonnegative number")
 
