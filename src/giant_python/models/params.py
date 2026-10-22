@@ -76,6 +76,10 @@ class BandSiloParams:
         Refit selected events without L1 shrinkage (default False).
     trace_event_threshold : float
         Absolute event amplitude threshold for optional debias support.
+    random_seed : int
+        Nonnegative seed for the random motion-bin order used by source
+        localization (NMF and Adam). Each DMD path and outer iteration
+        draws from its own generator derived from this seed.
 
     Notes
     -----
@@ -103,6 +107,7 @@ class BandSiloParams:
     trace_tolerance: float = 1e-7
     trace_debias: bool = False
     trace_event_threshold: float = 1e-6
+    random_seed: int = 0
 
     def __post_init__(self) -> None:
         """Validate values supported by the existing numerical path."""
@@ -124,6 +129,12 @@ class BandSiloParams:
             raise ValueError("trace_debias must be a bool")
         for name in ("trace_beta_fraction", "trace_event_threshold"):
             _nonnegative(name, getattr(self, name))
+        if (
+            isinstance(self.random_seed, bool)
+            or not isinstance(self.random_seed, Integral)
+            or self.random_seed < 0
+        ):
+            raise ValueError("random_seed must be a nonnegative integer")
 
 
 @dataclass

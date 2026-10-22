@@ -306,7 +306,7 @@ class TestStageComposition(unittest.TestCase):
         self.assertEqual(metadata["decayTau_s"], params.decay_tau_s)
         for name in (
             "trace_beta_fraction", "trace_max_iter", "trace_tolerance",
-            "trace_debias", "trace_event_threshold",
+            "trace_debias", "trace_event_threshold", "random_seed",
         ):
             with self.subTest(name=name):
                 self.assertEqual(metadata[name], getattr(params, name))

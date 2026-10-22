@@ -165,6 +165,7 @@ def _params_dict(
         "trace_tolerance": params.trace_tolerance,
         "trace_debias": params.trace_debias,
         "trace_event_threshold": params.trace_event_threshold,
+        "random_seed": params.random_seed,
         "draw_user_rois": annotations.enabled,
     }
 
@@ -602,6 +603,7 @@ def _localize(
         params.sparse_fac,
         verbose=execution.verbose,
         temporal_kernel=temporal_kernel,
+        seed=params.random_seed,
     )
     return (
         act_im,

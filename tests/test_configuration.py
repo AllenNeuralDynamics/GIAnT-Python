@@ -109,6 +109,7 @@ class TestConfigurationValidation(unittest.TestCase):
             "trace_max_iter": [0, 1.5, True],
             "trace_beta_fraction": [-1, math.nan, True],
             "trace_event_threshold": [-1, math.inf],
+            "random_seed": [-1, 1.5, True, None],
         }.items():
             for value in values:
                 with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, key):

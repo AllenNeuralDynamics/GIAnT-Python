@@ -413,6 +413,36 @@ class TestLocalizeSources(unittest.TestCase):
         a2 = nmf.fit_sources(seeds.copy(), residual, **kwargs)["A"]
         np.testing.assert_array_equal(a1.numpy(), a2.numpy())
 
+    def test_explicit_seed_ignores_global_rng(self):
+        """An explicit seed is reproducible whatever the global torch state."""
+        g, seeds, residual, mot_yx, coords, n_pix = self._inputs(seed=1)
+        kwargs = dict(
+            h_mots=g["h_mots"],
+            unique_motion_to_keep_yx=g["umyx"],
+            mot_inds_yx=mot_yx,
+            sel_pix_idxs=g["sel_pix_idxs"],
+            pixel_coords=coords,
+            n_pixels=n_pix,
+            d_xy=5,
+            sparse_fac=float(np.exp(-3.0)),
+            outer_loop_iters=2,
+            mult_nmf_max_iters=3,
+            seed=11,
+        )
+        torch.manual_seed(3)
+        first = nmf.fit_sources(seeds.copy(), residual, **kwargs)
+        global_state = torch.get_rng_state()
+        torch.manual_seed(99)
+        second = nmf.fit_sources(seeds.copy(), residual, **kwargs)
+        for key in ("A", "phi_low_res", "source_params", "source_snr"):
+            np.testing.assert_array_equal(
+                np.asarray(first[key]), np.asarray(second[key]), err_msg=key
+            )
+        # The seeded path leaves the global RNG untouched.
+        torch.manual_seed(3)
+        nmf.fit_sources(seeds.copy(), residual, **kwargs)
+        self.assertTrue(torch.equal(torch.get_rng_state(), global_state))
+
     def test_temporal_filter_matches_activity_filter(self):
         """Reuse activity smoothing and omit its low-coverage edge frames."""
         g, seeds, residual, mot_yx, coords, n_pix = self._inputs(seed=1)

@@ -24,7 +24,10 @@ the fitted ``source_params`` ``[z, y, x, sigma_y, sigma_x, tilt]``, and the
 (sorted/pruned) ``source_seeds``.
 
 This block is intentionally stochastic (random motion order via
-``torch.randperm`` in NMF and Adam); the pipeline does not seed the RNG. The
+``torch.randperm`` in NMF and Adam). When :func:`fit_sources` receives a
+``seed``, each outer iteration draws from its own ``torch.Generator`` derived
+from ``(seed, iteration)``, so a run is reproducible and independent of the
+global torch RNG state; with ``seed=None`` the global RNG is used. The
 ``randperm`` calls are preserved in the same order as the reference, but the
 unregularized QR temporal solve changes numerical results. The reference's
 loss-only ``phi`` recomputation and ``print``/warning diagnostics are dropped
@@ -367,6 +370,7 @@ def multiplicative_nmf(
     n_motions: int,
     sparse_fac: float,
     max_iters: int,
+    generator: torch.Generator | None = None,
 ) -> List[torch.Tensor]:
     """Motion-binned multiplicative NMF, producing per-motion spatial targets.
 
@@ -396,6 +400,8 @@ def multiplicative_nmf(
         Sparsification floor subtracted from the max-normalized ``X``.
     max_iters : int
         Multiplicative-update iterations per motion bin.
+    generator : torch.Generator or None
+        RNG for the motion order; ``None`` uses the global torch RNG.
 
     Returns
     -------
@@ -403,7 +409,7 @@ def multiplicative_nmf(
         Per-motion fitted superpixel spatial targets ``X_mots``.
     """
     x_mots: List[torch.Tensor | None] = [None] * n_motions
-    shuffled_indices = torch.randperm(n_motions)
+    shuffled_indices = torch.randperm(n_motions, generator=generator)
     for idx in shuffled_indices:
         # randperm uses an integer dtype, so item() returns a Python int.
         i = cast(int, idx.item())
@@ -455,6 +461,7 @@ def fit_gaussian_profiles(
     n_motions: int,
     learning_rate: float,
     gd_tol: float,
+    generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Adam-fit the Gaussian source parameters to the per-motion NMF targets.
 
@@ -489,6 +496,8 @@ def fit_gaussian_profiles(
         Base Adam learning rate (scaled per parameter group).
     gd_tol : float
         Convergence tolerance on consecutive round losses.
+    generator : torch.Generator or None
+        RNG for the motion order; ``None`` uses the global torch RNG.
 
     Returns
     -------
@@ -525,7 +534,7 @@ def fit_gaussian_profiles(
         a_step = a_step / mass
 
         if epoch % n_motions == 0:
-            shuffled_indices = torch.randperm(n_motions)
+            shuffled_indices = torch.randperm(n_motions, generator=generator)
         # Epoch zero initializes the permutation before any index is read.
         i = cast(
             int,
@@ -703,6 +712,7 @@ def fit_sources(
     verbose: bool = False,
     *,
     temporal_kernel: np.ndarray | None = None,
+    seed: int | None = None,
 ) -> dict:
     """Localize sources by superpixel-space NMF + Gaussian-profile fitting.
 
@@ -748,6 +758,11 @@ def fit_sources(
         low-resolution temporal weights and SNR all use the filtered data.
         Raises ValueError if no usable frames remain. If omitted, use the
         unfiltered residual.
+    seed : int or None
+        Nonnegative seed for the random motion order. Each outer iteration
+        uses a generator seeded from ``(seed, iteration)``, so a change in
+        the number of Adam epochs in one iteration does not shift the draws
+        of later iterations. ``None`` uses the global torch RNG.
 
     Returns
     -------
@@ -808,6 +823,12 @@ def fit_sources(
         desc="Localizing sources (NMF)",
         verbose=verbose,
     ):
+        generator = None
+        if seed is not None:
+            iter_seed = np.random.SeedSequence(
+                [seed, outer_loop_iter]
+            ).generate_state(1)[0]
+            generator = torch.Generator().manual_seed(int(iter_seed))
         x_mots = multiplicative_nmf(
             a,
             h_mots,
@@ -818,6 +839,7 @@ def fit_sources(
             n_motions,
             sparse_fac,
             mult_nmf_max_iters,
+            generator,
         )
         source_params = fit_gaussian_profiles(
             source_params,
@@ -832,6 +854,7 @@ def fit_sources(
             n_motions,
             learning_rate,
             gd_tol,
+            generator,
         )
         a = project_spatial_profiles(
             source_params,

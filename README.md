@@ -106,6 +106,13 @@ frame z and still satisfy the existing minimum frame count. The value must be
 positive and finite; the default preserves previous behavior. The CLI and staging
 example accept `--z-tol`, and the parameter GUI labels it **Z Tolerance (µm)**.
 
+`BandSiloParams(random_seed=0)` seeds the random motion-bin order used by
+source localization (NMF and Adam). Each path and outer iteration uses its own
+generator derived from the seed, independent of the global torch RNG. The seed
+is saved in summary parameters and is available as `--random-seed`. It fixes
+the random draws only; floating-point results can still differ across
+hardware, thread counts and package versions.
+
 The Python API preceding this cleanup was unreleased and unused. Compatibility-only Python imports and adapters have been removed, not deprecated. MATLAB file-format compatibility is retained separately; there is no production Python API migration requirement.
 
 - `extract_band_sources(input, params=None, *, execution=None, annotations=None)` accepts an exact filename or loaded `TrialTable`. Use `Pipeline(..., params=...)` or `Pipeline.from_trial_table(..., params=...).extract()` for a session.

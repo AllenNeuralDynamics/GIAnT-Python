@@ -32,6 +32,7 @@ def _add_silo_options(parser: argparse.ArgumentParser) -> None:
         ("trace_max_iter", int, "Maximum iterations per transient fit stage."),
         ("trace_tolerance", float, "Transient optimizer tolerance."),
         ("trace_event_threshold", float, "Absolute event threshold for debias support."),
+        ("random_seed", int, "Nonnegative seed for the localization motion order."),
     ):
         parser.add_argument(
             "--" + name.replace("_", "-"), type=kind,
@@ -137,6 +138,7 @@ def _options_from_args(
             trace_tolerance=args.trace_tolerance,
             trace_debias=args.trace_debias,
             trace_event_threshold=args.trace_event_threshold,
+            random_seed=args.random_seed,
         ),
         ExecutionOptions(
             max_workers=args.max_workers,
