@@ -1,7 +1,8 @@
-"""CLI for annotation and extraction from registered SLAP2 band inputs.
+"""CLI for SLAP2 registration, annotation and band extraction.
 
+``giant register`` registers raster recordings (MultiRoiRegistration);
 ``giant annotate`` loads or draws ROIs; ``giant extract`` runs BandSILo.
-Both delegate to the public workflow services with separate scientific,
+All delegate to the public workflow services with separate scientific,
 execution and annotation options. GUI imports occur only when needed.
 """
 
@@ -14,6 +15,7 @@ from .models.params import (
     AnnotationOptions,
     BandSiloParams,
     ExecutionOptions,
+    MultiRoiRegistrationParams,
 )
 
 
@@ -111,18 +113,66 @@ def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_register_options(parser: argparse.ArgumentParser) -> None:
+    """Attach the registration options to a subparser."""
+    defaults = MultiRoiRegistrationParams
+    for name, kind, help_text in (
+        ("align_hz", float, "Rate of the registered frames (default: 80)."),
+        ("maxshift", int, "Largest motion in pixels (default: 40)."),
+        ("clip_shift", int, "Smallest search radius per frame (default: 5)."),
+    ):
+        parser.add_argument(
+            "--" + name.replace("_", "-"),
+            type=kind,
+            default=getattr(defaults, name),
+            help=help_text,
+        )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-register trials whose outputs exist.",
+    )
+    parser.add_argument(
+        "--h5",
+        action="store_true",
+        help="Save registered movies as HDF5 instead of TIFF.",
+    )
+    parser.add_argument(
+        "--device",
+        default=ExecutionOptions.device,
+        help="'auto' (default), 'cpu', 'cuda' or 'cuda:N'.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=ExecutionOptions.max_workers,
+        help="Parallel trials on the CPU (default: 6).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print progress messages.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the ``giant`` argument parser.
 
     Returns
     -------
     argparse.ArgumentParser
-        Parser with ``annotate`` and ``extract``
+        Parser with ``register``, ``annotate`` and ``extract``
         subcommands. Each subcommand stores its ``command`` name in the
         parsed namespace.
     """
     parser = argparse.ArgumentParser(prog="giant")
     subparsers = parser.add_subparsers(dest="command")
+
+    register = subparsers.add_parser(
+        "register", help="Register SLAP2 raster recordings."
+    )
+    register.add_argument("trial_table", help="Path to trial_table.h5.")
+    _add_register_options(register)
 
     annotate = subparsers.add_parser(
         "annotate", help="Draw / save user ROIs (standalone step)."
@@ -182,6 +232,32 @@ def _cmd_annotate(
     return 0
 
 
+def _cmd_register(args: argparse.Namespace) -> int:
+    """Handle ``giant register`` (MultiRoiRegistration)."""
+    import logging
+
+    from .pipeline.register import register_multiroi
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
+    register_multiroi(
+        args.trial_table,
+        MultiRoiRegistrationParams(
+            align_hz=args.align_hz,
+            maxshift=args.maxshift,
+            clip_shift=args.clip_shift,
+            overwrite_existing=args.overwrite,
+            save_tif=not args.h5,
+        ),
+        execution=ExecutionOptions(
+            max_workers=args.max_workers,
+            verbose=args.verbose,
+            device=args.device,
+        ),
+    )
+    return 0
+
+
 def _cmd_extract(args: argparse.Namespace) -> int:
     """Handle ``giant extract`` (source extraction)."""
     from .pipeline.extract import extract_sources
@@ -201,7 +277,8 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point for the ``giant`` console script.
 
-    Dispatches ``annotate`` and ``extract`` to their workflow services.
+    Dispatches ``register``, ``annotate`` and ``extract`` to their workflow
+    services.
 
     Parameters
     ----------
@@ -222,6 +299,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
+        "register": _cmd_register,
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
     }

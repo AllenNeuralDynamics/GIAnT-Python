@@ -16,7 +16,9 @@ from .params import (
     AnnotationOptions,
     BandSiloParams,
     ExecutionOptions,
+    MultiRoiRegistrationParams,
     resolve_band_options,
+    resolve_registration_options,
 )
 from .trial_table import Slap2Info, TrialTable
 
@@ -26,8 +28,10 @@ __all__ = [
     "ExecutionOptions",
     "ExperimentSummary",
     "FrameInfo",
+    "MultiRoiRegistrationParams",
     "PathSummary",
     "resolve_band_options",
+    "resolve_registration_options",
     "Slap2Info",
     "Source",
     "TrialTable",

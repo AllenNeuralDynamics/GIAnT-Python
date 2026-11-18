@@ -26,9 +26,10 @@ the optional temporal datasets remain readable; rewriting missing optional
 data emits NaNs, not fabricated fits.
 
 ``per_trial_summary.h5`` is an **unsupported, external-reference format**;
-Python BandSILo does not emit it. Registration products and the band lookup
-table are **external inputs**, not Python-generated outputs. Python loads
-existing trial tables but does not write them.
+Python BandSILo does not emit it. Band registration products and the band
+lookup table are **external inputs**, not Python-generated outputs. Python
+loads existing trial tables; raster registration rewrites only their
+``motion_correction`` group, in MATLAB layout.
 
 .. warning::
 
@@ -151,10 +152,12 @@ it does not create/save the model or append reference stage groups.
 Alignment data: external registration input
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-External motion correction saves one alignment HDF5 file per trial. Python
-reads the band fields through
-``giant_python.io.slap2.load_alignment_data_h5``; Python registration is not
-implemented. The tree includes external fields not consumed by BandSILo::
+Motion correction saves one alignment HDF5 file per trial. Python reads the
+band fields through ``giant_python.io.slap2.load_alignment_data_h5``. Raster
+recordings can be registered in Python (``giant_python.registration``,
+``giant register``), which writes the MultiRoiRegistration fields below in
+MATLAB layout (``row_major = 0``); band registration is external. The tree
+includes fields not consumed by BandSILo::
 
    <trial_stem>_ALIGNMENTDATA.h5
    ├── row_major

@@ -6,8 +6,9 @@ Scope
 
 GIAnT-Python is a package for processing glutamate imaging data, with
 advanced capabilities for SLAP2 recordings. The current implementation
-supports only SLAP2 Band Scan processing: BandSILo source extraction and
-Band Scan ROI annotation from pre-registered inputs. Additional functionality
+supports SLAP2 raster registration (MultiRoiRegistration) and SLAP2 Band
+Scan processing: BandSILo source extraction and Band Scan ROI annotation from
+pre-registered inputs. Additional functionality
 is available in
 `GIAnT-MATLAB <https://github.com/AllenNeuralDynamics/GIAnT-MATLAB>`_,
 with porting efforts underway.
@@ -28,6 +29,25 @@ All module names below are relative to ``giant_python``.
 
    * - Owner
      - Responsibility
+   * - ``pipeline.register``
+     - Raster registration of every trial of a trial table; rewrites the
+       table's ``motion_correction`` group in MATLAB layout.
+   * - ``registration.multiroi``
+     - Per-trial driver (MATLAB ``alignAsync``): frame times, window,
+       initial template, the sequential frame loop and the alignment struct.
+   * - ``registration.frames`` / ``registration.matching`` /
+       ``registration.interpolation`` / ``registration.template``
+     - Exponential-kernel frames from raw samples (``slap2Frames``), weighted
+       normalized cross-correlation as matrix products
+       (``xcorr2_nans_weighted``), freshness-weighted resampling
+       (``interpFrame``) and the consensus and running templates. PyTorch,
+       CPU or CUDA.
+   * - ``registration.outputs``
+     - Registered movie (TIFF/HDF5) and ``_ALIGNMENTDATA.h5`` writers,
+       ``recNegErr``.
+   * - ``io.slap2_raster``
+     - Raster sample layout from the vendor reader, bulk raw sample reads and
+       line-header online offsets.
    * - ``pipeline.extract`` / ``pipeline.annotate`` / ``pipeline.pipeline``
      - Lazy public services, explicit capability routing and the chainable
        ``Pipeline``. The CLI and standalone calls use the same services.

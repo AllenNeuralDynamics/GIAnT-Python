@@ -140,6 +140,108 @@ class BandSiloParams:
 
 
 @dataclass
+class MultiRoiRegistrationParams:
+    """Scientific settings for SLAP2 raster registration.
+
+    Field meanings and defaults follow GIAnT-MATLAB
+    ``setParams('MultiRoiRegistration')``; they are saved under their MATLAB
+    names in the trial table's ``motion_correction/align_params``.
+
+    Attributes
+    ----------
+    align_hz : float
+        Rate of the registered frames (alignHz).
+    maxshift : int
+        Largest motion in pixels; the output grid is padded by it.
+    clip_shift : int
+        Smallest search radius per frame around the previous frame's motion
+        (clipShift).
+    alpha : float
+        Unused template decay (kept for parity with MATLAB's parameters).
+    overwrite_existing : bool
+        Re-register trials whose outputs exist.
+    save_tif : bool
+        Save the registered movie as TIFF (else HDF5 ``/data``).
+    ref_stack_template, is_revolt, include_integration_rois : bool
+        MATLAB options not yet ported; must be False.
+    compensate_online : bool
+        Undo the online motion correction line by line; not yet ported,
+        must be False.
+    init_frames : int
+        Frames matched pairwise for the initial template (MATLAB: 40).
+    init_search : int
+        Largest shift of the pairwise matching (MATLAB: 3).
+    min_samples : int
+        Contributions a template pixel needs (MATLAB minSamps: 15).
+    """
+
+    align_hz: float = 80.0
+    maxshift: int = 40
+    clip_shift: int = 5
+    alpha: float = 0.005
+    overwrite_existing: bool = False
+    save_tif: bool = True
+    ref_stack_template: bool = False
+    is_revolt: bool = False
+    include_integration_rois: bool = False
+    compensate_online: bool = False
+    init_frames: int = 40
+    init_search: int = 3
+    min_samples: int = 15
+
+    def __post_init__(self) -> None:
+        """Validate values and reject options that are not ported."""
+        _positive("align_hz", self.align_hz)
+        for name in (
+            "maxshift",
+            "clip_shift",
+            "init_frames",
+            "init_search",
+            "min_samples",
+        ):
+            _positive(name, getattr(self, name), integer=True)
+        _nonnegative("alpha", self.alpha)
+        for name in (
+            "overwrite_existing",
+            "save_tif",
+            "ref_stack_template",
+            "is_revolt",
+            "include_integration_rois",
+            "compensate_online",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a bool")
+        for name in (
+            "ref_stack_template",
+            "is_revolt",
+            "include_integration_rois",
+            "compensate_online",
+        ):
+            if getattr(self, name):
+                raise NotImplementedError(
+                    f"{name}=True is not supported yet in GIAnT-Python"
+                )
+
+    def to_matlab(self) -> dict:
+        """The parameters under GIAnT-MATLAB's ``align_params`` names."""
+        return {
+            "alignHz": float(self.align_hz),
+            "maxshift": float(self.maxshift),
+            "clipShift": float(self.clip_shift),
+            "alpha": float(self.alpha),
+            "overwriteExisting": self.overwrite_existing,
+            "saveTif": self.save_tif,
+            "refStackTemplate": self.ref_stack_template,
+            "isReVolt": self.is_revolt,
+            "includeIntegrationROIs": self.include_integration_rois,
+            "compensateOnline": self.compensate_online,
+            "initFrames": float(self.init_frames),
+            "initSearch": float(self.init_search),
+            "minSamps": float(self.min_samples),
+        }
+
+
+@dataclass
 class ExecutionOptions:
     """Run policy, separate from scientific configuration.
 
@@ -151,11 +253,15 @@ class ExecutionOptions:
         Enable stage messages and progress bars.
     max_trials : int or None
         Positive debug limit per DMD. ``None`` processes all trials.
+    device : str
+        Torch device for registration: ``'auto'`` (CUDA when available),
+        ``'cpu'``, ``'cuda'`` or ``'cuda:N'``. Band extraction ignores it.
     """
 
     max_workers: int = 6
     verbose: bool = False
     max_trials: Optional[int] = None
+    device: str = "auto"
 
     def __post_init__(self) -> None:
         """Validate scheduling and debug limits."""
@@ -164,6 +270,10 @@ class ExecutionOptions:
             _positive("max_trials", self.max_trials, integer=True)
         if not isinstance(self.verbose, bool):
             raise ValueError("verbose must be a bool")
+        if not isinstance(self.device, str) or not (
+            self.device in ("auto", "cpu") or self.device.startswith("cuda")
+        ):
+            raise ValueError("device must be 'auto', 'cpu' or 'cuda[:N]'")
 
 
 @dataclass
@@ -194,11 +304,19 @@ class AnnotationOptions:
 BandParamsInput = Optional[Union[BandSiloParams, dict]]
 ExecutionInput = Optional[Union[ExecutionOptions, dict]]
 AnnotationInput = Optional[Union[AnnotationOptions, dict]]
+RegistrationParamsInput = Optional[Union[MultiRoiRegistrationParams, dict]]
 
 
 def _option_values(
     option: object,
-    model: type[Union[BandSiloParams, ExecutionOptions, AnnotationOptions]],
+    model: type[
+        Union[
+            BandSiloParams,
+            ExecutionOptions,
+            AnnotationOptions,
+            MultiRoiRegistrationParams,
+        ]
+    ],
 ) -> dict:
     """Copy a typed option or validate a strictly scoped dictionary."""
     if option is None:
@@ -241,4 +359,30 @@ def resolve_band_options(
         BandSiloParams(**_option_values(params, BandSiloParams)),
         ExecutionOptions(**_option_values(execution, ExecutionOptions)),
         AnnotationOptions(**_option_values(annotations, AnnotationOptions)),
+    )
+
+
+def resolve_registration_options(
+    params: RegistrationParamsInput = None,
+    execution: ExecutionInput = None,
+) -> tuple[MultiRoiRegistrationParams, ExecutionOptions]:
+    """Resolve registration science and execution options.
+
+    Parameters
+    ----------
+    params : MultiRoiRegistrationParams, dict or None
+        Scientific settings only; unknown fields raise ``TypeError``.
+    execution : ExecutionOptions, dict or None
+        Run options.
+
+    Returns
+    -------
+    tuple of MultiRoiRegistrationParams, ExecutionOptions
+        Fresh validated objects.
+    """
+    return (
+        MultiRoiRegistrationParams(
+            **_option_values(params, MultiRoiRegistrationParams)
+        ),
+        ExecutionOptions(**_option_values(execution, ExecutionOptions)),
     )
