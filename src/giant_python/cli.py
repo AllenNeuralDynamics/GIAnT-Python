@@ -143,6 +143,19 @@ def _add_register_options(parser: argparse.ArgumentParser) -> None:
         help="Undo the online motion correction line by line.",
     )
     parser.add_argument(
+        "--schedule",
+        choices=("sequential", "grow"),
+        default=MultiRoiRegistrationParams.schedule,
+        help="'sequential' (MATLAB's frame loop, default) or 'grow' "
+        "(batched growth from seed frames, experimental).",
+    )
+    parser.add_argument(
+        "--polish",
+        action="store_true",
+        help="With --schedule grow: rematch every frame to the final "
+        "template.",
+    )
+    parser.add_argument(
         "--device",
         default=ExecutionOptions.device,
         help="'auto' (default), 'cpu', 'cuda' or 'cuda:N'.",
@@ -254,6 +267,8 @@ def _cmd_register(args: argparse.Namespace) -> int:
             overwrite_existing=args.overwrite,
             save_tif=not args.h5,
             compensate_online=args.compensate_online,
+            schedule=args.schedule,
+            polish=args.polish,
         ),
         execution=ExecutionOptions(
             max_workers=args.max_workers,

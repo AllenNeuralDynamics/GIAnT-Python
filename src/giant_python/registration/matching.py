@@ -145,12 +145,7 @@ def peak_motion(
     b = corr.shape[0]
     n = 2 * search + 1
     c = corr.to(torch.float64)
-    flat = c.transpose(1, 2).reshape(b, -1)
-    filled = torch.nan_to_num(flat, nan=-torch.inf)
-    idx = torch.argmax(filled, dim=1)
-    peak = flat.gather(1, idx[:, None])[:, 0]
-    rr = idx % n
-    cc = idx // n
+    rr, cc, peak = peak_index(c)
     shifts = torch.arange(
         -search, search + 1, device=c.device, dtype=torch.float64
     )
@@ -171,6 +166,141 @@ def peak_motion(
     sub = torch.stack([mot[:, 0] - d_r, mot[:, 1] - d_c], 1)
     mot = torch.where(inner[:, None], sub, mot)
     return -mot, peak
+
+
+def peak_index(corr: torch.Tensor):
+    """Integer position and value of each map's maximum.
+
+    Ties go to the first maximum in MATLAB's column-major order; NaNs are
+    ignored.
+
+    Returns
+    -------
+    rr, cc : torch.Tensor of int
+        Row- and column-shift indices of the maximum.
+    peak : torch.Tensor
+        The maximum (NaN if the whole map is undefined).
+    """
+    b, n_r, n_c = corr.shape
+    flat = corr.transpose(1, 2).reshape(b, -1)
+    idx = torch.argmax(torch.nan_to_num(flat, nan=-torch.inf), dim=1)
+    return idx % n_r, idx // n_r, flat.gather(1, idx[:, None])[:, 0]
+
+
+def peak_margin(corr: torch.Tensor, exclude: int = 2) -> torch.Tensor:
+    """Maximum minus the largest value farther than ``exclude`` shifts.
+
+    Parameters
+    ----------
+    corr : torch.Tensor
+        ``(B, n, n)`` correlation maps.
+    exclude : int
+        Chebyshev radius around the maximum left out of the comparison.
+
+    Returns
+    -------
+    torch.Tensor
+        ``(B,)`` margins (NaN when nothing lies outside the radius).
+    """
+    b, n_r, n_c = corr.shape
+    rr, cc, peak = peak_index(corr)
+    ir = torch.arange(n_r, device=corr.device)
+    ic = torch.arange(n_c, device=corr.device)
+    near = ((ir[None, :, None] - rr[:, None, None]).abs() <= exclude) & (
+        (ic[None, None, :] - cc[:, None, None]).abs() <= exclude
+    )
+    rest = torch.nan_to_num(corr, nan=-torch.inf).masked_fill(near, -torch.inf)
+    second = rest.reshape(b, -1).max(1).values
+    margin = peak - second
+    return margin.masked_fill(torch.isinf(second), float("nan"))
+
+
+def match_maps(
+    frames: torch.Tensor,
+    weights: torch.Tensor,
+    template: torch.Tensor,
+    rows: torch.Tensor,
+    cols: torch.Tensor,
+    search: int,
+    dtype=torch.float32,
+):
+    """Like :func:`match`, also returning the correlation maps.
+
+    Returns
+    -------
+    motion : torch.Tensor of float64
+        ``(B, 2)`` [row, col] motion (NaN where undefined; not raised).
+    peak : torch.Tensor of float64
+        ``(B,)`` correlation at the maximum.
+    corr : torch.Tensor
+        ``(B, 2S + 1, 2S + 1)`` maps indexed ``[b, dr, dc]``.
+    """
+    search = int(round(search))
+    tables = shift_tables(template, rows, cols, search, dtype)
+    corr = correlation_map(frames, weights, tables, search)
+    motion, peak = peak_motion(corr, search)
+    return motion, peak, corr
+
+
+def wide_correlation(
+    frames: torch.Tensor, weights: torch.Tensor, template: torch.Tensor
+) -> torch.Tensor:
+    """Weighted Pearson correlation over every shift within a padded template.
+
+    The same statistic as :func:`correlation_map`, evaluated with FFTs for
+    all shifts at once: frame pixel ``(r, c)`` is compared with template
+    pixel ``(r + m + dr, c + m + dc)``, where the template is the frame
+    window padded by ``m`` on each side, for ``|dr|, |dc| <= m``. Unlike
+    MATLAB's search, the template is not cropped around a starting shift.
+
+    Parameters
+    ----------
+    frames, weights : torch.Tensor
+        ``(B, H, W)`` frame images (NaN where invalid) and freshness.
+    template : torch.Tensor
+        ``(H + 2m, W + 2m)`` template, NaN where invalid.
+
+    Returns
+    -------
+    torch.Tensor of float64
+        ``(B, 2m + 1, 2m + 1)`` maps indexed ``[b, dr + m, dc + m]``.
+    """
+    dt = torch.float64
+    ho, wo = template.shape
+    h, w = frames.shape[-2:]
+    reach = (ho - h) // 2
+    if ho - h != 2 * reach or wo - w != 2 * reach:
+        raise ValueError("the template must pad the frames equally")
+    f = frames.to(dt)
+    wt = torch.where(torch.isnan(f), 0.0, weights.to(dt))
+    mean0 = (wt * torch.nan_to_num(f)).sum((1, 2), keepdim=True) / wt.sum(
+        (1, 2), keepdim=True
+    )
+    fc = torch.where(wt > 0, f - mean0, 0.0)
+    t = template.to(dt)
+    tv = ~torch.isnan(t)
+    tz = torch.where(tv, t - t[tv].mean(), 0.0)
+    size = (ho, wo)
+    fa = [torch.fft.rfft2(a, s=size) for a in (wt, wt * fc, wt * fc * fc)]
+    fb = [torch.fft.rfft2(b) for b in (tv.to(dt), tz, tz * tz)]
+    n = 2 * reach + 1
+
+    def xc(a, b):
+        """Correlation of frame-side ``a`` with template-side ``b``."""
+        out = torch.fft.irfft2(torch.conj(a) * b[None], s=size)
+        return out[:, :n, :n]
+
+    sw, s_f, s_ff = xc(fa[0], fb[0]), xc(fa[1], fb[0]), xc(fa[2], fb[0])
+    s_t, s_tt, s_ft = xc(fa[0], fb[1]), xc(fa[0], fb[2]), xc(fa[1], fb[1])
+    m_f = s_f / sw
+    m_t = s_t / sw
+    cov = s_ft - sw * m_f * m_t
+    v_f = s_ff - sw * m_f * m_f
+    v_t = s_tt - sw * m_t * m_t
+    corr = cov / torch.sqrt(v_f * v_t)
+    return corr.masked_fill(
+        sw < 1e-9 * sw.amax((1, 2), keepdim=True), float("nan")
+    )
 
 
 def match(

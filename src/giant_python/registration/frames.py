@@ -16,6 +16,29 @@ import torch
 from ..io.slap2_raster import INVALID_SAMPLE, RasterLayout
 
 
+def _bands(lo: np.ndarray, hi: np.ndarray, band: int):
+    """Split frames into groups whose cycle ranges span at most ``band``.
+
+    Frames are taken in order of their first cycle; a frame without samples
+    (``hi < 0``) joins the current group.
+    """
+    order = np.argsort(lo, kind="stable")
+    groups, cur, start, end = [], [], None, None
+    for f in order:
+        if hi[f] < 0:
+            cur.append(f)
+            continue
+        if cur and start is not None and max(end, hi[f]) - start >= band:
+            groups.append(np.array(cur))
+            cur, start, end = [], None, None
+        cur.append(f)
+        start = lo[f] if start is None else start
+        end = hi[f] if end is None else max(end, hi[f])
+    if cur:
+        groups.append(np.array(cur))
+    return groups
+
+
 def _ceil_div(a: np.ndarray, b: int) -> np.ndarray:
     """Integer ceil(a / b) for positive b, exact for negative a."""
     return -((-a) // b)
@@ -73,9 +96,21 @@ class FrameFormer:
         table[inv[order], rank] = slots[order]
         self.rows = (self.pixels - 1) // layout.n_cols
         self.cols = (self.pixels - 1) % layout.n_cols
-        self._table = torch.from_numpy(table).to(self.device)
-        line = np.where(table >= 0, layout.slot_line[np.maximum(table, 0)], 1)
-        self._line = torch.from_numpy(line - 1).to(self.device)
+        # slots by line index, padded: (P, widest line); a pixel's slots as
+        # positions in that layout, for turning slot sums into pixel sums
+        p = layout.lines_per_cycle
+        per_line = [
+            slots[layout.slot_line[slots] == ln] for ln in range(1, p + 1)
+        ]
+        self._line_width = max(1, max(len(x) for x in per_line))
+        line_slots = np.full((p, self._line_width), -1, dtype=np.int64)
+        flat_of = np.full(layout.slot_line.size, -1, dtype=np.int64)
+        for i, x in enumerate(per_line):
+            line_slots[i, : x.size] = x
+            flat_of[x] = i * self._line_width + np.arange(x.size)
+        self._line_slots = torch.from_numpy(line_slots).to(self.device)
+        pix_flat = np.where(table >= 0, flat_of[np.maximum(table, 0)], -1)
+        self._pix_flat = torch.from_numpy(pix_flat).to(self.device)
         self._samples = torch.from_numpy(np.ascontiguousarray(samples)).to(
             self.device
         )
@@ -108,34 +143,69 @@ class FrameFormer:
         local = np.clip(local, 0, self.n_cycles - 1)
         return local, w, lines, ok
 
-    def _accumulate(self, local, w, channels):
+    def _accumulate(self, local, w, channels, band: int = 256):
         """Num and Den at the pixels for given sample cycles and weights.
 
         ``local`` and ``w`` are ``(frames, P, k)`` NumPy arrays: the local
         cycle and weight of each line index's k-th sample of each frame.
+        Frames are taken in groups spanning at most ``band`` cycles; for each
+        group, every line's samples are weighted by one matrix product
+        (frames x cycles) @ (cycles x slots), in double precision.
         """
         dev = self.device
-        local = torch.from_numpy(local).to(dev)
-        w = torch.from_numpy(w).to(dev)
         n_f, n_pix = local.shape[0], self.n_pixels
         num = torch.zeros(
             len(channels), n_f, n_pix, dtype=torch.float64, device=dev
         )
         den = torch.zeros_like(num)
-        for j in range(self._table.shape[1]):
-            slot = self._table[:, j]
-            has = slot >= 0
-            li = self._line[:, j]
-            cyc = local[:, li, :]
-            wj = w[:, li, :] * has[None, :, None]
-            flat = slot.clamp(min=0)[None, :, None] * self.n_cycles + cyc
-            for k, ch in enumerate(channels):
-                x = self._samples[ch].reshape(-1)[flat]
-                valid = x != INVALID_SAMPLE
-                xv = torch.where(valid, x, 0).to(torch.float64)
-                num[k] += (wj * xv).sum(-1)
-                den[k] += (wj * valid).sum(-1)
+        used = w > 0
+        lo = np.where(used, local, np.iinfo(np.int64).max).min((1, 2))
+        hi = np.where(used, local, -1).max((1, 2))
+        for group in _bands(lo, hi, band):
+            self._accumulate_band(
+                local[group],
+                w[group],
+                used[group],
+                channels,
+                group,
+                num,
+                den,
+            )
         return num, den
+
+    def _accumulate_band(self, local, w, used, channels, group, num, den):
+        """Add one band of frames' sums to ``num`` and ``den`` (in place)."""
+        dev = self.device
+        if not used.any():
+            return
+        c0 = int(local[used].min())
+        c1 = int(local[used].max()) + 1
+        nf, p, _ = local.shape
+        weights = np.zeros((nf, p, c1 - c0))
+        fi, li, ki = np.nonzero(used)
+        weights[fi, li, local[fi, li, ki] - c0] = w[fi, li, ki]
+        wt = torch.from_numpy(weights).to(dev).permute(1, 0, 2)  # P, F, C
+        pad = (self._line_slots >= 0)[:, :, None]
+        rows = torch.from_numpy(group).to(dev)
+        for k, ch in enumerate(channels):
+            x = self._samples[ch][:, c0:c1][self._line_slots.clamp(min=0)]
+            valid = (x != INVALID_SAMPLE) & pad
+            xv = torch.where(valid, x, 0).to(torch.float64)
+            s_num = torch.bmm(wt, xv.transpose(1, 2))  # P, F, slots
+            s_den = torch.bmm(wt, valid.to(torch.float64).transpose(1, 2))
+            s_num = s_num.permute(1, 0, 2).reshape(nf, -1)
+            s_den = s_den.permute(1, 0, 2).reshape(nf, -1)
+            add_n = torch.zeros(
+                nf, self.n_pixels, dtype=torch.float64, device=dev
+            )
+            add_d = torch.zeros_like(add_n)
+            for j in range(self._pix_flat.shape[1]):
+                pos = self._pix_flat[:, j]
+                has = (pos >= 0).to(torch.float64)
+                add_n += s_num[:, pos.clamp(min=0)] * has
+                add_d += s_den[:, pos.clamp(min=0)] * has
+            num[k].index_add_(0, rows, add_n)
+            den[k].index_add_(0, rows, add_d)
 
     def sums(
         self, times, dt: int, channels=None

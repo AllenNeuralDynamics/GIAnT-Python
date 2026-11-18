@@ -146,6 +146,19 @@ class TemplateState:
         self.count = self.count + sel
         self.template = self._template()
 
+    def update(self, images: torch.Tensor, sign: int = 1) -> None:
+        """Add (``sign=1``) or remove (``-1``) a stack of registered frames.
+
+        The template is recomputed once, after all frames.
+        """
+        if images.shape[0] == 0:
+            return
+        sel = ~torch.isnan(images)
+        z = torch.where(sel, images, 0.0).to(self.total.dtype)
+        self.total = self.total + sign * z.sum(0)
+        self.count = self.count + sign * sel.sum(0)
+        self.template = self._template()
+
     def matching_template(self) -> torch.Tensor:
         """Mean of the initial and running templates, ignoring NaNs."""
         a, b = self.initial, self.template

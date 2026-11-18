@@ -41,7 +41,7 @@ register_multiroi(
 
 or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run in `max_workers` parallel processes; on a GPU, one at a time.
 
-- Frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding.
+- By default frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding. `schedule="grow"` instead matches frames in batches, growing outward from seed frames spread over the trial (see `giant_python.registration.growth`); it is experimental and gives slightly different motion.
 - `compensate_online=True` (`--compensate-online`) undoes the online motion correction line by line, as MATLAB's `compensateOnline` does. The alignment file then records each frame's reference offset (`slap2/onlineCompensation`).
 - Not yet ported: `refStackTemplate`, `isReVolt` and integration ROIs. Setting any of them raises `NotImplementedError`.
 - Only single-plane recordings with one or two channels are supported.

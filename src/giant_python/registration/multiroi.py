@@ -9,7 +9,8 @@ online motion correction undone line by line (see :mod:`.compensation`).
 """
 
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
@@ -25,6 +26,7 @@ from ..io.slap2_raster import (
 from ..models.params import MultiRoiRegistrationParams
 from .compensation import compensation_record
 from .frames import FrameFormer
+from .growth import FrameCache, Grower, GrowthQC, seeds_from_consensus
 from .interpolation import interp_frame
 from .matching import match
 from .outputs import (
@@ -68,6 +70,10 @@ class TrialRegistration:
         Peak correlation of each frame's match.
     registration_failed : bool
         Whether the motion's standard deviation exceeded 1.5 pixels.
+    growth : GrowthQC or None
+        How each frame was registered, with ``schedule='grow'``.
+    timings : dict
+        Wall time in seconds of each phase.
     """
 
     ds_frames: np.ndarray
@@ -75,6 +81,26 @@ class TrialRegistration:
     motion_c: np.ndarray
     peak: np.ndarray
     registration_failed: bool
+    growth: Optional[GrowthQC] = None
+    timings: dict = field(default_factory=dict)
+
+
+class Timer:
+    """Wall time of consecutive phases (synchronizing CUDA at each mark)."""
+
+    def __init__(self, device):
+        """Start timing."""
+        self.device = torch.device(device)
+        self.times = {}
+        self._last = time.perf_counter()
+
+    def mark(self, name: str) -> None:
+        """Record the time since the previous mark under ``name``."""
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        now = time.perf_counter()
+        self.times[name] = self.times.get(name, 0.0) + now - self._last
+        self._last = now
 
 
 def resolve_device(device: str) -> torch.device:
@@ -112,8 +138,10 @@ def build_template(source, init, params, dtype):
 
     Returns
     -------
-    TemplateState
+    state : TemplateState
         The initial template and its sums.
+    cons : ConsensusResult
+        The pairwise matching that chose its frames.
     """
     window = source.window
     vals, fresh = source.frames(init)
@@ -135,7 +163,7 @@ def build_template(source, init, params, dtype):
         init.size,
         cons.reference,
     )
-    return state
+    return state, cons
 
 
 class OutputSink:
@@ -253,6 +281,49 @@ def register_sequential(
             init_c = int(np.clip(matlab_round(mc), -m, m))
         log.info("%d of %d frames", b, n)
     return motion[0], motion[1], motion[2]
+
+
+def register_grow(
+    source,
+    state,
+    cons,
+    init,
+    ds,
+    params,
+    sink: OutputSink,
+    dtype,
+    timer: Optional[Timer] = None,
+):
+    """Batched growth from seed frames, then rendering in frame order.
+
+    Returns
+    -------
+    motion_r, motion_c, peak : ndarray
+        Per-frame motion and peak correlation.
+    qc : GrowthQC
+        How each frame was registered.
+    """
+    timer = timer or Timer(source.former.device)
+    cache = FrameCache(source, ds)
+    timer.mark("frames")
+    reach = 2 * max(3 * source.dt, source.former.layout.lines_per_cycle)
+    seeds, candidates, independent = seeds_from_consensus(
+        cons, init, ds, reach
+    )
+    grower = Grower(
+        cache, state, params, seeds, candidates, dtype, independent
+    )
+    motion, qc = grower.run()
+    timer.mark("grow")
+    if params.polish:
+        motion = grower.polish(params.polish_radius)
+        timer.mark("polish")
+    m = int(params.maxshift)
+    for k in range(ds.size):
+        regs = cache.registered(k, motion[k], m)
+        sink.add(k, [r for r, _ in regs], regs[0][1])
+    timer.mark("render")
+    return motion[:, 0].copy(), motion[:, 1].copy(), qc.peak.copy(), qc
 
 
 def alignment_fields(
@@ -374,9 +445,11 @@ def register_trial(
     if params is None:
         params = MultiRoiRegistrationParams()
     device = torch.device(device)
+    timer = Timer(device)
     layout, former, init, ds, dtk = open_trial(
         dat_path, int(first_line), int(last_line), params, device
     )
+    timer.mark("read")
     log.info("%s: %d frames", Path(dat_path).name, ds.size)
     source = make_source(
         layout,
@@ -393,7 +466,8 @@ def register_trial(
             "undoing the online motion correction (%d x/y switches)",
             source.compensation.switch_lines.size,
         )
-    state = build_template(source, init, params, dtype)
+    state, cons = build_template(source, init, params, dtype)
+    timer.mark("template")
     m = int(params.maxshift)
     h, w = source.window.shape
     sink = OutputSink(
@@ -405,22 +479,37 @@ def register_trial(
         params.save_tif,
         device,
     )
+    qc = None
     try:
-        motion_r, motion_c, peak = register_sequential(
-            source, state, ds, params, sink, dtype
-        )
+        if params.schedule == "grow":
+            motion_r, motion_c, peak, qc = register_grow(
+                source, state, cons, init, ds, params, sink, dtype, timer
+            )
+        else:
+            motion_r, motion_c, peak = register_sequential(
+                source, state, ds, params, sink, dtype
+            )
+            timer.mark("register")
     except Exception:
         sink.abort()
         raise
     sink.movie.close()
+    timer.mark("movie")
     failed = bool(
         np.std(motion_c, ddof=1) > 1.5 or np.std(motion_r, ddof=1) > 1.5
     )
     if failed:
         log.warning("too much motion in %s; saving anyway", dat_path)
-    sink.adata.finish(
-        alignment_fields(
-            layout, source, ds, motion_r, motion_c, sink, params, failed
-        )
+    fields = alignment_fields(
+        layout, source, ds, motion_r, motion_c, sink, params, failed
     )
-    return TrialRegistration(ds, motion_r, motion_c, peak, failed)
+    if qc is not None:
+        fields["growthQC"] = qc.fields()
+    sink.adata.finish(fields)
+    timer.mark("alignment file")
+    log.info(
+        "timings (s): %s", {k: round(v, 2) for k, v in timer.times.items()}
+    )
+    return TrialRegistration(
+        ds, motion_r, motion_c, peak, failed, qc, timer.times
+    )

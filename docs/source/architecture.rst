@@ -42,6 +42,10 @@ All module names below are relative to ``giant_python``.
        (``xcorr2_nans_weighted``), freshness-weighted resampling
        (``interpFrame``) and the consensus and running templates. PyTorch,
        CPU or CUDA.
+   * - ``registration.growth``
+     - The batched ``schedule='grow'``: frame cache, islands grown from
+       consensus seeds, boundary retries, wide-search (FFT) seeds with
+       acceptance checks, junction resolution, optional polish.
    * - ``registration.compensation`` / ``registration.sources``
      - Online-motion compensation (``getLineOnlineOffsets``,
        ``frameOnlineOffsets``): line offsets with DMD-timed y, per-frame

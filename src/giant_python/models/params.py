@@ -174,6 +174,24 @@ class MultiRoiRegistrationParams:
         Largest shift of the pairwise matching (MATLAB: 3).
     min_samples : int
         Contributions a template pixel needs (MATLAB minSamps: 15).
+    schedule : str
+        ``'sequential'`` (MATLAB's frame loop, the default) or ``'grow'``
+        (batched growth from seed frames, see
+        :mod:`giant_python.registration.growth`).
+    frames_per_front : int
+        ``grow``: frames taken from each island edge per sub-round.
+    min_fronts : int
+        ``grow``: add seeds when fewer fronts remain.
+    seed_accept_quantile : float
+        ``grow``: a seed's peak correlation and margin must reach this
+        quantile of the aligned frames'.
+    junction_jump_px : float or None
+        ``grow``: motion jump at a junction that triggers realignment
+        (``None``: max(1, 99.9th percentile of per-frame steps)).
+    polish : bool
+        ``grow``: rematch every frame to the final template without itself.
+    polish_radius : int
+        ``grow``: search radius of the polish pass.
     """
 
     align_hz: float = 80.0
@@ -189,6 +207,13 @@ class MultiRoiRegistrationParams:
     init_frames: int = 40
     init_search: int = 3
     min_samples: int = 15
+    schedule: str = "sequential"
+    frames_per_front: int = 1
+    min_fronts: int = 16
+    seed_accept_quantile: float = 0.1
+    junction_jump_px: Optional[float] = None
+    polish: bool = False
+    polish_radius: int = 2
 
     def __post_init__(self) -> None:
         """Validate values and reject options that are not ported."""
@@ -199,12 +224,22 @@ class MultiRoiRegistrationParams:
             "init_frames",
             "init_search",
             "min_samples",
+            "frames_per_front",
+            "min_fronts",
+            "polish_radius",
         ):
             _positive(name, getattr(self, name), integer=True)
         _nonnegative("alpha", self.alpha)
+        if self.schedule not in ("sequential", "grow"):
+            raise ValueError("schedule must be 'sequential' or 'grow'")
+        if not 0 <= self.seed_accept_quantile < 1:
+            raise ValueError("seed_accept_quantile must be in [0, 1)")
+        if self.junction_jump_px is not None:
+            _positive("junction_jump_px", self.junction_jump_px)
         for name in (
             "overwrite_existing",
             "save_tif",
+            "polish",
             "ref_stack_template",
             "is_revolt",
             "include_integration_rois",
@@ -238,6 +273,17 @@ class MultiRoiRegistrationParams:
             "initFrames": float(self.init_frames),
             "initSearch": float(self.init_search),
             "minSamps": float(self.min_samples),
+            "schedule": self.schedule,
+            "framesPerFront": float(self.frames_per_front),
+            "minFronts": float(self.min_fronts),
+            "seedAcceptQuantile": float(self.seed_accept_quantile),
+            "junctionJumpPx": (
+                float("nan")
+                if self.junction_jump_px is None
+                else float(self.junction_jump_px)
+            ),
+            "polish": self.polish,
+            "polishRadius": float(self.polish_radius),
         }
 
 
