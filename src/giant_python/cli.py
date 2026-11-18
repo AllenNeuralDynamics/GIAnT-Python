@@ -138,6 +138,11 @@ def _add_register_options(parser: argparse.ArgumentParser) -> None:
         help="Save registered movies as HDF5 instead of TIFF.",
     )
     parser.add_argument(
+        "--compensate-online",
+        action="store_true",
+        help="Undo the online motion correction line by line.",
+    )
+    parser.add_argument(
         "--device",
         default=ExecutionOptions.device,
         help="'auto' (default), 'cpu', 'cuda' or 'cuda:N'.",
@@ -248,6 +253,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
             clip_shift=args.clip_shift,
             overwrite_existing=args.overwrite,
             save_tif=not args.h5,
+            compensate_online=args.compensate_online,
         ),
         execution=ExecutionOptions(
             max_workers=args.max_workers,

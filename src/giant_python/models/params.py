@@ -165,8 +165,9 @@ class MultiRoiRegistrationParams:
     ref_stack_template, is_revolt, include_integration_rois : bool
         MATLAB options not yet ported; must be False.
     compensate_online : bool
-        Undo the online motion correction line by line; not yet ported,
-        must be False.
+        Undo the online motion correction line by line, so that frames
+        spanning a change of the DMD offset are not blurred
+        (compensateOnline).
     init_frames : int
         Frames matched pairwise for the initial template (MATLAB: 40).
     init_search : int
@@ -215,7 +216,6 @@ class MultiRoiRegistrationParams:
             "ref_stack_template",
             "is_revolt",
             "include_integration_rois",
-            "compensate_online",
         ):
             if getattr(self, name):
                 raise NotImplementedError(

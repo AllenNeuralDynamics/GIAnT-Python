@@ -4,7 +4,8 @@ The trial's frames are registered sequentially, as in GIAnT-MATLAB: each DS
 frame is matched to the mean of the initial and running templates, starting
 from the previous frame's rounded motion with a search radius of
 ``max(|init|, clip_shift)``; its registered image is then added to the
-running template.
+running template. With ``compensate_online``, frames are formed with the
+online motion correction undone line by line (see :mod:`.compensation`).
 """
 
 import logging
@@ -22,6 +23,7 @@ from ..io.slap2_raster import (
     read_raster_samples,
 )
 from ..models.params import MultiRoiRegistrationParams
+from .compensation import compensation_record
 from .frames import FrameFormer
 from .interpolation import interp_frame
 from .matching import match
@@ -32,12 +34,8 @@ from .outputs import (
     matlab_round,
     rec_neg_err,
 )
-from .template import (
-    TemplateState,
-    consensus,
-    initial_template,
-    window_image,
-)
+from .sources import make_source
+from .template import TemplateState, consensus, initial_template
 
 log = logging.getLogger(__name__)
 
@@ -79,38 +77,6 @@ class TrialRegistration:
     registration_failed: bool
 
 
-@dataclass
-class Window:
-    """The trimmed raster window that frames are registered in.
-
-    Attributes
-    ----------
-    trim_rows, trim_cols : ndarray of int
-        One-based DMD rows and columns of the window (MATLAB trimRows /
-        trimCols).
-    pixels : torch.Tensor of int
-        Indices, among the frame former's pixels, of those in the window.
-    rows, cols : torch.Tensor of int
-        Zero-based positions of those pixels in the window.
-    """
-
-    trim_rows: np.ndarray
-    trim_cols: np.ndarray
-    pixels: torch.Tensor
-    rows: torch.Tensor
-    cols: torch.Tensor
-
-    @property
-    def shape(self) -> tuple:
-        """Window ``(rows, cols)``."""
-        return self.trim_rows.size, self.trim_cols.size
-
-    def image(self, values: torch.Tensor, fill: float) -> torch.Tensor:
-        """Place per-pixel values ``(..., pixels)`` into window images."""
-        flat = self.rows * self.shape[1] + self.cols
-        return window_image(values, flat, self.shape, fill)
-
-
 def resolve_device(device: str) -> torch.device:
     """``'auto'`` selects CUDA when available, else the CPU."""
     if device == "auto":
@@ -141,63 +107,24 @@ def frame_times(first_line: int, last_line: int, dt: float, n_init: int):
     return init[1:-1].astype(np.int64), ds.astype(np.int64)
 
 
-def trim_window(former: FrameFormer, valid: np.ndarray, device) -> Window:
-    """The bounding box of the pixels valid in a frame.
-
-    Parameters
-    ----------
-    former : FrameFormer
-        Supplies the pixels' DMD rows and columns.
-    valid : ndarray of bool
-        Which of the former's pixels are valid in the frame.
-    device : torch.device
-        Where the window's index tensors live.
+def build_template(source, init, params, dtype):
+    """Build the initial template from the ``init`` frames of a source.
 
     Returns
     -------
-    Window
-        The window and the pixels inside it.
-    """
-    if not valid.any():
-        raise ValueError("the first initial frame has no samples")
-    r0, r1 = former.rows[valid].min(), former.rows[valid].max()
-    c0, c1 = former.cols[valid].min(), former.cols[valid].max()
-    inside = np.flatnonzero(
-        (former.rows >= r0)
-        & (former.rows <= r1)
-        & (former.cols >= c0)
-        & (former.cols <= c1)
-    )
-    return Window(
-        trim_rows=np.arange(r0, r1 + 1) + 1,
-        trim_cols=np.arange(c0, c1 + 1) + 1,
-        pixels=torch.from_numpy(inside).to(device),
-        rows=torch.from_numpy(former.rows[inside] - r0).to(device),
-        cols=torch.from_numpy(former.cols[inside] - c0).to(device),
-    )
-
-
-def build_template(former, init, dtk, params, device, dtype):
-    """Trim the window and build the initial template from ``init`` frames.
-
-    Returns
-    -------
-    window : Window
-        The registration window.
-    state : TemplateState
+    TemplateState
         The initial template and its sums.
     """
-    vals, fresh = former.frames(init, dtk)
+    window = source.window
+    vals, fresh = source.frames(init)
     y = vals.sum(0)
-    window = trim_window(former, ~torch.isnan(y[0]).cpu().numpy(), device)
-    yb, fb = y[:, window.pixels], fresh[:, window.pixels]
-    images = window.image(yb, float("nan"))
+    images = window.image(y, float("nan"))
     cons = consensus(
-        yb, fb, images, window.rows, window.cols, params.init_search, dtype
+        y, fresh, images, window.rows, window.cols, params.init_search, dtype
     )
     state = initial_template(
         images,
-        window.image(fb, 0.0),
+        window.image(fresh, 0.0),
         cons,
         params.maxshift,
         params.min_samples,
@@ -208,7 +135,7 @@ def build_template(former, init, dtk, params, device, dtype):
         init.size,
         cons.reference,
     )
-    return window, state
+    return state
 
 
 class OutputSink:
@@ -275,11 +202,9 @@ class OutputSink:
 
 
 def register_sequential(
-    former,
-    window,
+    source,
     state: TemplateState,
     ds,
-    dtk,
     params,
     sink: OutputSink,
     dtype,
@@ -293,14 +218,14 @@ def register_sequential(
         Per-frame motion and peak correlation.
     """
     m = int(params.maxshift)
+    window = source.window
     h, w = window.shape
     n = ds.size
     motion = np.zeros((3, n))
     init_r = init_c = 0
     for a in range(0, n, chunk):
         b = min(n, a + chunk)
-        vals, fresh = former.frames(ds[a:b], dtk)
-        vals, fresh = vals[:, :, window.pixels], fresh[:, window.pixels]
+        vals, fresh = source.frames(ds[a:b])
         mov = torch.sqrt(vals.sum(0))
         for i in range(b - a):
             tmpl = state.matching_template()[
@@ -332,7 +257,7 @@ def register_sequential(
 
 def alignment_fields(
     layout: RasterLayout,
-    window: Window,
+    source,
     ds,
     motion_r,
     motion_c,
@@ -342,7 +267,13 @@ def alignment_fields(
 ):
     """The ALIGNMENTDATA struct, as MultiRoiRegistration saves it."""
     m = int(params.maxshift)
+    window = source.window
     h, w = window.shape
+    record = {"enabled": np.int8(0)}
+    if source.compensation is not None:
+        record = compensation_record(
+            source.compensation, source.references(ds)
+        )
     ho, wo = h + 2 * m, w + 2 * m
     x_off, y_off, z_off = read_line_offsets(layout, ds)
     return {
@@ -366,7 +297,7 @@ def alignment_fields(
             "onlineMotionXshift": x_off[:, None],
             "onlineMotionYshift": y_off[:, None],
             "onlineMotionZshift": z_off[:, None],
-            "onlineCompensation": {"enabled": np.int8(0)},
+            "onlineCompensation": record,
         },
     }
 
@@ -447,9 +378,24 @@ def register_trial(
         dat_path, int(first_line), int(last_line), params, device
     )
     log.info("%s: %d frames", Path(dat_path).name, ds.size)
-    window, state = build_template(former, init, dtk, params, device, dtype)
+    source = make_source(
+        layout,
+        former,
+        int(first_line),
+        int(last_line),
+        init,
+        ds,
+        dtk,
+        params.compensate_online,
+    )
+    if source.compensation is not None:
+        log.info(
+            "undoing the online motion correction (%d x/y switches)",
+            source.compensation.switch_lines.size,
+        )
+    state = build_template(source, init, params, dtype)
     m = int(params.maxshift)
-    h, w = window.shape
+    h, w = source.window.shape
     sink = OutputSink(
         movie_path,
         adata_path,
@@ -461,7 +407,7 @@ def register_trial(
     )
     try:
         motion_r, motion_c, peak = register_sequential(
-            former, window, state, ds, dtk, params, sink, dtype
+            source, state, ds, params, sink, dtype
         )
     except Exception:
         sink.abort()
@@ -474,7 +420,7 @@ def register_trial(
         log.warning("too much motion in %s; saving anyway", dat_path)
     sink.adata.finish(
         alignment_fields(
-            layout, window, ds, motion_r, motion_c, sink, params, failed
+            layout, source, ds, motion_r, motion_c, sink, params, failed
         )
     )
     return TrialRegistration(ds, motion_r, motion_c, peak, failed)

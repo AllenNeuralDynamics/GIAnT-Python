@@ -106,7 +106,36 @@ class FrameFormer:
         if np.any(ok & ((local < 0) | (local >= self.n_cycles))):
             raise ValueError("frame kernel reaches cycles that were not read")
         local = np.clip(local, 0, self.n_cycles - 1)
-        return local, w
+        return local, w, lines, ok
+
+    def _accumulate(self, local, w, channels):
+        """Num and Den at the pixels for given sample cycles and weights.
+
+        ``local`` and ``w`` are ``(frames, P, k)`` NumPy arrays: the local
+        cycle and weight of each line index's k-th sample of each frame.
+        """
+        dev = self.device
+        local = torch.from_numpy(local).to(dev)
+        w = torch.from_numpy(w).to(dev)
+        n_f, n_pix = local.shape[0], self.n_pixels
+        num = torch.zeros(
+            len(channels), n_f, n_pix, dtype=torch.float64, device=dev
+        )
+        den = torch.zeros_like(num)
+        for j in range(self._table.shape[1]):
+            slot = self._table[:, j]
+            has = slot >= 0
+            li = self._line[:, j]
+            cyc = local[:, li, :]
+            wj = w[:, li, :] * has[None, :, None]
+            flat = slot.clamp(min=0)[None, :, None] * self.n_cycles + cyc
+            for k, ch in enumerate(channels):
+                x = self._samples[ch].reshape(-1)[flat]
+                valid = x != INVALID_SAMPLE
+                xv = torch.where(valid, x, 0).to(torch.float64)
+                num[k] += (wj * xv).sum(-1)
+                den[k] += (wj * valid).sum(-1)
+        return num, den
 
     def sums(
         self, times, dt: int, channels=None
@@ -129,32 +158,53 @@ class FrameFormer:
             of their weights (``slap2FrameSums`` Num and Den).
         """
         times = np.asarray(times, dtype=np.int64).ravel()
+        channels = self._channels(channels)
+        local, w, _, _ = self._tables(times, int(dt))
+        return self._accumulate(local, w, channels)
+
+    def _channels(self, channels) -> list:
+        """Zero-based channels, all by default."""
         if channels is None:
-            channels = range(self.layout.num_channels)
-        channels = list(channels)
-        local, w = self._tables(times, int(dt))
-        dev = self.device
-        local = torch.from_numpy(local).to(dev)
-        w = torch.from_numpy(w).to(dev)
-        n_f, n_pix = times.size, self.n_pixels
-        num = torch.zeros(
-            len(channels), n_f, n_pix, dtype=torch.float64, device=dev
-        )
-        den = torch.zeros_like(num)
-        for j in range(self._table.shape[1]):
-            slot = self._table[:, j]
-            has = slot >= 0
-            li = self._line[:, j]
-            cyc = local[:, li, :]
-            wj = w[:, li, :] * has[None, :, None]
-            flat = slot.clamp(min=0)[None, :, None] * self.n_cycles + cyc
-            for k, ch in enumerate(channels):
-                x = self._samples[ch].reshape(-1)[flat]
-                valid = x != INVALID_SAMPLE
-                xv = torch.where(valid, x, 0).to(torch.float64)
-                num[k] += (wj * xv).sum(-1)
-                den[k] += (wj * valid).sum(-1)
-        return num, den
+            return list(range(self.layout.num_channels))
+        return list(channels)
+
+    def shifted_sums(self, times, dt: int, shift_fn, channels=None):
+        """Sums of frames whose samples move by a per-line displacement.
+
+        Each frame's samples are grouped by the integer displacement
+        ``shift_fn`` assigns to their line (as ``slap2FrameSums`` does with
+        ``CompensateOnline``); each group is summed at the pixels' own
+        positions, to be placed at the displaced positions by the caller.
+
+        Parameters
+        ----------
+        times : array_like of int
+            One-based line times of the frames.
+        dt : int
+            Kernel time constant in lines.
+        shift_fn : callable
+            ``shift_fn(lines) -> (dr, dc)`` for an ``(frames, P, k)`` array
+            of one-based lines.
+        channels : sequence of int, optional
+            Zero-based channels (default: all).
+
+        Yields
+        ------
+        (dr, dc), frames, num, den
+            The displacement, the indices of the frames with samples in the
+            group, and the group's Num and Den ``(channels, frames, pixels)``.
+        """
+        times = np.asarray(times, dtype=np.int64).ravel()
+        channels = self._channels(channels)
+        local, w, lines, ok = self._tables(times, int(dt))
+        dr, dc = shift_fn(lines)
+        pairs = np.unique(np.stack([dr[ok], dc[ok]], 1), axis=0)
+        for r, c in pairs:
+            group = ok & (dr == r) & (dc == c)
+            sel = np.flatnonzero(group.any(axis=(1, 2)))
+            wg = np.where(group[sel], w[sel], 0.0)
+            num, den = self._accumulate(local[sel], wg, channels)
+            yield (int(r), int(c)), sel, num, den
 
     def frames(
         self, times, dt: int, channels=None

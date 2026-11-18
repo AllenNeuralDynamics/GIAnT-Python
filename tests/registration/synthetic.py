@@ -88,19 +88,70 @@ def motion(n_lines: int, seed: int = 2) -> np.ndarray:
     )
 
 
-def write_recording(layout: RasterLayout, seed: int = 3, invalid=0.0):
+def online_offsets(n_lines: int, seed: int = 4):
+    """Piecewise-constant online offsets and the y they put on the DMD.
+
+    The correction switches every 37-80 lines; at a switch x, y or both
+    change. The header records both on the switch line; x reaches the DMD
+    then, y 2 lines earlier (6 when x changes too), as measured on SLAP2.
+
+    Returns
+    -------
+    x, y_header, y_dmd : ndarray of int
+        Per line (index ``line - 1``).
+    """
+    rng = np.random.default_rng(seed)
+    x = np.zeros(n_lines, dtype=np.int64)
+    y = np.zeros(n_lines, dtype=np.int64)
+    switches = []
+    s, cur = 0, (2, 0)
+    while s < n_lines:
+        nxt = s + int(rng.integers(37, 81))
+        kind = int(rng.integers(3))  # 0: x changes, 1: y changes, 2: both
+        new = cur
+        if s:
+            new = (
+                int(rng.integers(1, 4)) if kind != 1 else cur[0],
+                int(rng.integers(-1, 2)) if kind != 0 else cur[1],
+            )
+            switches.append((s, new[0] != cur[0], new[1] != cur[1]))
+        x[s:nxt], y[s:nxt] = new
+        cur, s = new, nxt
+    y_dmd = y.copy()
+    for s, x_changed, y_changed in switches:
+        if y_changed:
+            lead = 6 if x_changed else 2
+            y_dmd[s - lead : s] = y[s]
+    return x, y, y_dmd
+
+
+def write_recording(
+    layout: RasterLayout, seed: int = 3, invalid=0.0, online=None
+):
     """Write Poisson samples of the moving scene; return the true motion.
 
     The sample of pixel (r, c) on line l is the scene at
     ``(r - m_r(l), c - m_c(l))``; channel 2 sees 0.5 x the scene. Line
     headers record online offsets x = cycle % 3, y = -(cycle % 2) and
     z = 0.25 * cycle. A fraction ``invalid`` of samples is -32768.
+
+    With ``online = (x, y_header, y_dmd)`` (see :func:`online_offsets`) the
+    headers record those offsets and the DMD pattern moves with them, as in
+    GIAnT-MATLAB's transplant recordings: the sample is the scene at
+    ``(r + y_dmd(l) - m_r(l), c + x(l) - m_c(l))``.
     """
     rng = np.random.default_rng(seed)
     p = layout.lines_per_cycle
     n_c = layout.num_cycles
     n_lines = n_c * p
     m = motion(n_lines)
+    if online is None:
+        cyc = np.arange(n_lines) // p
+        x_h, y_h, y_d = cyc % 3, -(cyc % 2), np.zeros(n_lines, np.int64)
+        shift_x = np.zeros(n_lines, np.int64)
+    else:
+        x_h, y_h, y_d = online
+        shift_x = x_h
     img = scene(layout)
     words = np.zeros((n_c, layout.words_per_cycle), dtype=np.int16)
     pr = (layout.slot_pixel - 1) // layout.n_cols
@@ -109,17 +160,20 @@ def write_recording(layout: RasterLayout, seed: int = 3, invalid=0.0):
         for line in range(1, p + 1):
             hdr = layout.line_header_words[line - 1]
             raw = np.zeros(LINE_HEADER_BYTES, dtype=np.uint8)
-            raw[20:22] = np.array([c % 3], np.int16).view(np.uint8)
-            raw[22:24] = np.array([-(c % 2)], np.int16).view(np.uint8)
+            ln = c * p + line - 1
+            raw[20:22] = np.array([x_h[ln]], np.int16).view(np.uint8)
+            raw[22:24] = np.array([y_h[ln]], np.int16).view(np.uint8)
             raw[32:36] = np.array([0.25 * c], np.float32).view(np.uint8)
             words[c, hdr : hdr + LINE_HEADER_BYTES // 2] = raw.view(np.int16)
             sel = np.flatnonzero(layout.slot_line == line)
             if sel.size == 0:
                 continue
-            ln = c * p + line - 1
             lam = map_coordinates(
                 img,
-                [pr[sel] - m[ln, 0], pc[sel] - m[ln, 1]],
+                [
+                    pr[sel] + y_d[ln] - m[ln, 0],
+                    pc[sel] + shift_x[ln] - m[ln, 1],
+                ],
                 order=1,
                 mode="nearest",
             )

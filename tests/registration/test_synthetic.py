@@ -164,7 +164,7 @@ def test_register_multiroi_updates_trial_table(
 def test_unsupported_options_raise():
     """MATLAB options that are not ported are rejected."""
     with pytest.raises(NotImplementedError):
-        multiroi.MultiRoiRegistrationParams(compensate_online=True)
+        multiroi.MultiRoiRegistrationParams(ref_stack_template=True)
     with pytest.raises(TypeError):
         from giant_python.models.params import resolve_registration_options
 

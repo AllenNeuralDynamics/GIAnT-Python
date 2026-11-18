@@ -42,6 +42,11 @@ All module names below are relative to ``giant_python``.
        (``xcorr2_nans_weighted``), freshness-weighted resampling
        (``interpFrame``) and the consensus and running templates. PyTorch,
        CPU or CUDA.
+   * - ``registration.compensation`` / ``registration.sources``
+     - Online-motion compensation (``getLineOnlineOffsets``,
+       ``frameOnlineOffsets``): line offsets with DMD-timed y, per-frame
+       reference offsets, the compensation record; plain and compensated
+       frame sources in the trimmed window.
    * - ``registration.outputs``
      - Registered movie (TIFF/HDF5) and ``_ALIGNMENTDATA.h5`` writers,
        ``recNegErr``.
