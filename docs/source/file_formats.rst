@@ -153,7 +153,10 @@ Alignment data: external registration input
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Motion correction saves one alignment HDF5 file per trial. Python reads the
-band fields through ``giant_python.io.slap2.load_alignment_data_h5``. Raster
+band fields through ``giant_python.io.slap2.load_alignment_data_h5``. Python
+registration stores ``slap2/varFacDS`` chunked (one frame per chunk) and
+deflate-compressed by default (``var_factor_deflate``); readers that use the
+HDF5 library, MATLAB's ``h5read`` included, see the same values. Raster
 recordings can be registered in Python (``giant_python.registration``,
 ``giant register``), which writes the MultiRoiRegistration fields below in
 MATLAB layout (``row_major = 0``); band registration is external. The tree

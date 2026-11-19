@@ -43,6 +43,7 @@ or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run
 
 - By default frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding. `schedule="grow"` instead matches frames in batches, growing outward from seed frames spread over the trial (see `giant_python.registration.growth`); it is experimental and gives slightly different motion.
 - `compensate_online=True` (`--compensate-online`) undoes the online motion correction line by line, as MATLAB's `compensateOnline` does. The alignment file then records each frame's reference offset (`slap2/onlineCompensation`).
+- `varFacDS` is stored deflate-compressed (`var_factor_deflate=1`, about 16x smaller, identical values; MATLAB's `h5read` decompresses transparently). Set it to 0 for MATLAB's uncompressed layout. Registered movies stay TIFF by default; `save_tif=False` (`--h5`) writes a deflated HDF5 movie (`movie_deflate=1`, about 7x smaller), which MATLAB SILo also reads.
 - Not yet ported: `refStackTemplate`, `isReVolt` and integration ROIs. Setting any of them raises `NotImplementedError`.
 - Only single-plane recordings with one or two channels are supported.
 

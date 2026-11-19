@@ -222,3 +222,33 @@ def test_registration_runs_on_cuda_like_cpu(recording, tmp_path, monkeypatch):
     )
     # float32 sums differ in order; a near-tie peak may resolve differently
     assert np.median(diff) < 1e-3 and diff.max() < 0.1
+
+
+def test_var_factor_deflate_keeps_values(recording, tmp_path, monkeypatch):
+    """Deflated varFacDS (default) holds the same values as uncompressed."""
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    for level in (0, 1):
+        params = multiroi.MultiRoiRegistrationParams(
+            maxshift=5, var_factor_deflate=level, save_tif=False
+        )
+        multiroi.register_trial(
+            layout.files[0],
+            1,
+            3000,
+            tmp_path / f"m{level}.h5",
+            tmp_path / f"a{level}.h5",
+            params,
+        )
+    with (
+        h5py.File(tmp_path / "a0.h5") as a,
+        h5py.File(tmp_path / "a1.h5") as b,
+    ):
+        assert a["slap2/varFacDS"].compression is None
+        assert b["slap2/varFacDS"].compression == "gzip"
+        np.testing.assert_array_equal(
+            a["slap2/varFacDS"][()], b["slap2/varFacDS"][()]
+        )
+    with h5py.File(tmp_path / "m1.h5") as m:
+        assert m["data"].compression == "gzip"
+        assert m["data"].compression_opts == 1

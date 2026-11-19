@@ -192,6 +192,13 @@ class MultiRoiRegistrationParams:
         ``grow``: rematch every frame to the final template without itself.
     polish_radius : int
         ``grow``: search radius of the polish pass.
+    var_factor_deflate : int
+        Deflate level (0-9) of ``varFacDS`` in the alignment file; 0 stores
+        it uncompressed, as MATLAB does. MATLAB's ``h5read`` decompresses
+        transparently.
+    movie_deflate : int
+        Deflate level (0-9) of HDF5 movies (``save_tif=False``); MATLAB
+        writes 4.
     """
 
     align_hz: float = 80.0
@@ -214,6 +221,8 @@ class MultiRoiRegistrationParams:
     junction_jump_px: Optional[float] = None
     polish: bool = False
     polish_radius: int = 2
+    var_factor_deflate: int = 1
+    movie_deflate: int = 1
 
     def __post_init__(self) -> None:
         """Validate values and reject options that are not ported."""
@@ -230,12 +239,7 @@ class MultiRoiRegistrationParams:
         ):
             _positive(name, getattr(self, name), integer=True)
         _nonnegative("alpha", self.alpha)
-        if self.schedule not in ("sequential", "grow"):
-            raise ValueError("schedule must be 'sequential' or 'grow'")
-        if not 0 <= self.seed_accept_quantile < 1:
-            raise ValueError("seed_accept_quantile must be in [0, 1)")
-        if self.junction_jump_px is not None:
-            _positive("junction_jump_px", self.junction_jump_px)
+        self._validate_growth_and_output()
         for name in (
             "overwrite_existing",
             "save_tif",
@@ -256,6 +260,23 @@ class MultiRoiRegistrationParams:
                 raise NotImplementedError(
                     f"{name}=True is not supported yet in GIAnT-Python"
                 )
+
+    def _validate_growth_and_output(self) -> None:
+        """Validate the growth-schedule and output-compression settings."""
+        if self.schedule not in ("sequential", "grow"):
+            raise ValueError("schedule must be 'sequential' or 'grow'")
+        if not 0 <= self.seed_accept_quantile < 1:
+            raise ValueError("seed_accept_quantile must be in [0, 1)")
+        if self.junction_jump_px is not None:
+            _positive("junction_jump_px", self.junction_jump_px)
+        for name in ("var_factor_deflate", "movie_deflate"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Integral)
+                or not 0 <= value <= 9
+            ):
+                raise ValueError(f"{name} must be an integer from 0 to 9")
 
     def to_matlab(self) -> dict:
         """The parameters under GIAnT-MATLAB's ``align_params`` names."""
@@ -284,6 +305,8 @@ class MultiRoiRegistrationParams:
             ),
             "polish": self.polish,
             "polishRadius": float(self.polish_radius),
+            "varFactorDeflate": float(self.var_factor_deflate),
+            "movieDeflate": float(self.movie_deflate),
         }
 
 

@@ -10,6 +10,7 @@
 
 import os
 import warnings
+import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -52,6 +53,62 @@ class _Background:
             self._pool.shutdown(wait=True)
 
 
+_COMPRESSORS = None
+
+
+def _compressors() -> ThreadPoolExecutor:
+    """Shared pool that deflates chunks in parallel (zlib releases the GIL)."""
+    global _COMPRESSORS
+    if _COMPRESSORS is None:
+        _COMPRESSORS = ThreadPoolExecutor(
+            max_workers=max(1, min(8, (os.cpu_count() or 2) // 2))
+        )
+    return _COMPRESSORS
+
+
+def _deflate(page: np.ndarray, level: int) -> bytes:
+    """One frame's chunk, transposed to MATLAB layout and deflated."""
+    return zlib.compress(np.ascontiguousarray(page.T).tobytes(), level)
+
+
+class _ChunkedFrames:
+    """An HDF5 dataset of frames, one chunk each, optionally deflated.
+
+    Deflated chunks are compressed on a thread pool and stored in order
+    with ``write_direct_chunk``; the dataset carries HDF5's standard deflate
+    filter, so any reader (MATLAB's ``h5read`` included) decompresses them.
+    """
+
+    def __init__(self, group, name, n_frames, shape, level: int):
+        """Create the dataset ``(n_frames, cols, rows)`` (MATLAB layout)."""
+        rows, cols = shape
+        self.level = int(level)
+        opts = {}
+        if self.level:
+            opts = dict(compression="gzip", compression_opts=self.level)
+        self.ds = group.create_dataset(
+            name,
+            shape=(n_frames, cols, rows),
+            dtype=np.float32,
+            chunks=(1, cols, rows) if self.level else None,
+            **opts,
+        )
+
+    def prepare(self, page: np.ndarray):
+        """Start compressing a page; returns what :meth:`store` needs."""
+        page = np.asarray(page, np.float32)
+        if not self.level:
+            return page
+        return _compressors().submit(_deflate, page, self.level)
+
+    def store(self, index: int, prepared) -> None:
+        """Write a prepared page (call in frame order, from one thread)."""
+        if not self.level:
+            self.ds[index] = prepared.T
+            return
+        self.ds.id.write_direct_chunk((index, 0, 0), prepared.result())
+
+
 class MovieWriter:
     """Append registered pages to a TIFF or HDF5 movie.
 
@@ -64,8 +121,10 @@ class MovieWriter:
     n_pages : int
         Pages to be written (frames x channels); needed for HDF5.
     tiff : bool
-        Write a BigTIFF (else HDF5 ``/data``, deflate level 4, one chunk per
-        page, MATLAB dimensions ``[rows cols pages]``).
+        Write a BigTIFF (else HDF5 ``/data``, one chunk per page, MATLAB
+        dimensions ``[rows cols pages]``).
+    deflate : int
+        HDF5 movies: deflate level (0 for none; MATLAB writes 4).
     """
 
     def __init__(
@@ -74,6 +133,7 @@ class MovieWriter:
         shape,
         n_pages: int,
         tiff: bool = True,
+        deflate: int = 1,
     ):
         """Open the destination file."""
         self.path = Path(path)
@@ -88,14 +148,8 @@ class MovieWriter:
             if self.path.exists():
                 self.path.unlink()
             self._h5 = h5py.File(self.path, "w")
-            rows, cols = shape
-            self._ds = self._h5.create_dataset(
-                "data",
-                shape=(n_pages, cols, rows),
-                dtype=np.float32,
-                chunks=(1, cols, rows),
-                compression="gzip",
-                compression_opts=4,
+            self._frames = _ChunkedFrames(
+                self._h5, "data", n_pages, shape, deflate
             )
 
     def write(self, page: np.ndarray) -> None:
@@ -105,10 +159,13 @@ class MovieWriter:
         column-major, so a TIFF reader that is not MATLAB's (e.g.
         ``tifffile``) returns each page transposed, ``(cols, rows)``.
         """
-        self._bg.submit(self._write, np.asarray(page, np.float32), self.n)
+        page = np.asarray(page, np.float32)
+        if not self.tiff:
+            page = self._frames.prepare(page)
+        self._bg.submit(self._write, page, self.n)
         self.n += 1
 
-    def _write(self, page: np.ndarray, index: int) -> None:
+    def _write(self, page, index: int) -> None:
         """Write one page (on the background thread)."""
         if self.tiff:
             self._tw.write(
@@ -118,7 +175,7 @@ class MovieWriter:
                 resolutionunit="CENTIMETER",
             )
         else:
-            self._ds[index] = page.T
+            self._frames.store(index, page)
 
     def close(self) -> None:
         """Finish queued pages and close the file."""
@@ -142,30 +199,35 @@ class AlignmentFile:
         Shape of each frame's variance factor ``(rows, cols)``.
     n_frames : int
         Number of registered frames.
+    deflate : int
+        Deflate level of ``varFacDS`` (0 for none, as MATLAB writes it).
     """
 
-    def __init__(self, path: Union[str, Path], var_shape, n_frames: int):
+    def __init__(
+        self,
+        path: Union[str, Path],
+        var_shape,
+        n_frames: int,
+        deflate: int = 1,
+    ):
         """Create the temporary file and the variance-factor dataset."""
         self.path = Path(path)
         self.tmp = self.path.with_name(self.path.name + ".partial")
         if self.tmp.exists():
             self.tmp.unlink()
         self._f = h5py.File(self.tmp, "w")
-        rows, cols = var_shape
-        self._var = self._f.create_dataset(
-            "slap2/varFacDS", shape=(n_frames, cols, rows), dtype=np.float32
+        self._var = _ChunkedFrames(
+            self._f.require_group("slap2"),
+            "varFacDS",
+            n_frames,
+            var_shape,
+            deflate,
         )
         self._bg = _Background()
 
     def write_var_factor(self, index: int, var_factor: np.ndarray) -> None:
         """Queue frame ``index``'s ``(rows, cols)`` variance factor."""
-        self._bg.submit(
-            self._write_var, index, np.asarray(var_factor, np.float32)
-        )
-
-    def _write_var(self, index: int, var_factor: np.ndarray) -> None:
-        """Store one variance factor (on the background thread)."""
-        self._var[index] = var_factor.T
+        self._bg.submit(self._var.store, index, self._var.prepare(var_factor))
 
     def finish(self, fields: dict) -> None:
         """Write the remaining fields and move the file into place.

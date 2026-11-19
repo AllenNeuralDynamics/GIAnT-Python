@@ -181,6 +181,8 @@ class OutputSink:
         Movie format.
     device : torch.device
         Where the mean images accumulate.
+    movie_deflate, var_deflate : int
+        Deflate levels of an HDF5 movie and of ``varFacDS`` (0: none).
     """
 
     def __init__(
@@ -192,6 +194,8 @@ class OutputSink:
         n_channels,
         save_tif,
         device,
+        movie_deflate: int = 1,
+        var_deflate: int = 1,
     ):
         """Open the movie and the alignment file."""
         ho, wo = out_shape
@@ -201,9 +205,15 @@ class OutputSink:
             (n_frames, ho // 4, wo // 4), np.nan, dtype=np.float32
         )
         self.movie = MovieWriter(
-            movie_path, out_shape, n_frames * n_channels, save_tif
+            movie_path,
+            out_shape,
+            n_frames * n_channels,
+            save_tif,
+            movie_deflate,
         )
-        self.adata = AlignmentFile(adata_path, out_shape, n_frames)
+        self.adata = AlignmentFile(
+            adata_path, out_shape, n_frames, var_deflate
+        )
 
     def add(self, k: int, regs, var_factor: torch.Tensor) -> torch.Tensor:
         """Record frame ``k``'s registered channels; return their sum."""
@@ -478,6 +488,8 @@ def register_trial(
         layout.num_channels,
         params.save_tif,
         device,
+        params.movie_deflate,
+        params.var_factor_deflate,
     )
     qc = None
     try:
