@@ -1,5 +1,6 @@
 """Reader, frame formation and registration on a synthetic recording."""
 
+import dataclasses
 from pathlib import Path
 
 import h5py
@@ -8,12 +9,13 @@ import pytest
 import torch
 
 from giant_python.io.hdf5 import load_struct_h5, save_struct_h5
+from giant_python.io.slap2 import is_cycle_split
 from giant_python.io.slap2_raster import read_line_offsets, read_raster_samples
 from giant_python.io.trial_table import read_trial_table
 from giant_python.registration import multiroi
 from giant_python.registration.frames import FrameFormer
 
-from .synthetic import make_layout, write_recording
+from .synthetic import HEADER_WORDS, make_layout, write_recording
 
 
 @pytest.fixture(scope="module")
@@ -252,3 +254,71 @@ def test_var_factor_deflate_keeps_values(recording, tmp_path, monkeypatch):
     with h5py.File(tmp_path / "m1.h5") as m:
         assert m["data"].compression == "gzip"
         assert m["data"].compression_opts == 1
+
+
+def test_cycle_split_names():
+    """Files of CYCLE-split recordings are recognised by name only."""
+    assert is_cycle_split("acq_DMD1-TRIAL000001-CYCLE-000000.dat")
+    assert is_cycle_split("d/acq_DMD2-CYCLE-318000.dat")
+    assert is_cycle_split("acq_DMD1-CYCLE000000.dat")
+    assert not is_cycle_split("acq_DMD1-TRIAL000001.dat")
+    assert not is_cycle_split("CYCLE-1/acq_DMD1-TRIAL000001.dat")
+
+
+def split_recording(layout, k, tmp_path):
+    """The recording written as two files, split before cycle ``k``."""
+    raw = np.fromfile(layout.files[0], dtype=np.int16)
+    head = raw[:HEADER_WORDS]
+    body = raw[HEADER_WORDS:].reshape(layout.num_cycles, -1)
+    files = []
+    for name, part in (("a", body[:k]), ("b", body[k:])):
+        path = tmp_path / f"split_{name}.dat"
+        with open(path, "wb") as f:
+            f.write(head.tobytes())
+            f.write(part.tobytes())
+        files.append(str(path))
+    return dataclasses.replace(
+        layout,
+        files=tuple(files),
+        file_cycles=np.array([k, layout.num_cycles - k]),
+        file_offset_words=np.array([HEADER_WORDS, HEADER_WORDS]),
+    )
+
+
+def test_split_recording_reads_and_registers_alike(
+    recording, tmp_path, monkeypatch
+):
+    """Reads and registration across two files equal those of one file."""
+    layout, _ = recording
+    k = 500
+    split = split_recording(layout, k, tmp_path)
+    for cycles in ((k - 7, k + 9), (0, layout.num_cycles), (k + 3, k + 40)):
+        np.testing.assert_array_equal(
+            read_raster_samples(split, cycles, chunk_cycles=5),
+            read_raster_samples(layout, cycles),
+        )
+    p = layout.lines_per_cycle
+    lines = np.arange((k - 3) * p + 1, (k + 3) * p + 1)
+    for a, b in zip(
+        read_line_offsets(split, lines), read_line_offsets(layout, lines)
+    ):
+        np.testing.assert_array_equal(a, b)
+    params = multiroi.MultiRoiRegistrationParams(maxshift=5, save_tif=False)
+    first, last = (k - 150) * p + 1, (k + 150) * p
+    out = {}
+    for name, lay in (("one", layout), ("two", split)):
+        monkeypatch.setattr(
+            multiroi, "raster_layout", lambda path, lay=lay: lay
+        )
+        out[name] = multiroi.register_trial(
+            lay.files[0],
+            first,
+            last,
+            tmp_path / f"m_{name}.h5",
+            tmp_path / f"a_{name}.h5",
+            params,
+        )
+    for f in ("ds_frames", "motion_r", "motion_c", "peak"):
+        np.testing.assert_array_equal(
+            getattr(out["one"], f), getattr(out["two"], f)
+        )
