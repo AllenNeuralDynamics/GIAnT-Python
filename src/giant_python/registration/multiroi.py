@@ -110,13 +110,13 @@ def resolve_device(device: str) -> torch.device:
     return torch.device(device)
 
 
-def frame_times(first_line: int, last_line: int, dt: float, n_init: int):
+def frame_times(first_line: float, last_line: float, dt: float, n_init: int):
     """Line times of the initial frames and of the registered (DS) frames.
 
     Parameters
     ----------
-    first_line, last_line : int
-        One-based line range of the trial.
+    first_line, last_line : float
+        One-based line range of the trial (may be fractional).
     dt : float
         Lines per registered frame (line rate / alignHz).
     n_init : int
@@ -416,8 +416,8 @@ def open_trial(dat_path, first_line, last_line, params, device):
 
 def register_trial(
     dat_path: Union[str, Path],
-    first_line: int,
-    last_line: int,
+    first_line: float,
+    last_line: float,
     movie_path: Union[str, Path],
     adata_path: Union[str, Path],
     params: Optional[MultiRoiRegistrationParams] = None,
@@ -430,8 +430,10 @@ def register_trial(
     ----------
     dat_path : str or Path
         The trial's ``.dat`` file.
-    first_line, last_line : int
-        One-based line range of the trial.
+    first_line, last_line : float
+        One-based line range of the trial. Kept fractional, as in MATLAB:
+        trial tables of continuous recordings cut trials at ``linspace``
+        edges, and the frame times are ``ceil(first:dt:last)``.
     movie_path, adata_path : str or Path
         Destinations of the registered movie and the alignment data.
     params : MultiRoiRegistrationParams, optional
@@ -457,15 +459,15 @@ def register_trial(
     device = torch.device(device)
     timer = Timer(device)
     layout, former, init, ds, dtk = open_trial(
-        dat_path, int(first_line), int(last_line), params, device
+        dat_path, float(first_line), float(last_line), params, device
     )
     timer.mark("read")
     log.info("%s: %d frames", Path(dat_path).name, ds.size)
     source = make_source(
         layout,
         former,
-        int(first_line),
-        int(last_line),
+        float(first_line),
+        float(last_line),
         init,
         ds,
         dtk,

@@ -119,6 +119,34 @@ def test_register_trial_recovers_motion(recording, tmp_path, monkeypatch):
     assert not (tmp_path / "a.h5.partial").exists()
 
 
+def test_register_trial_keeps_fractional_lines(
+    recording, tmp_path, monkeypatch
+):
+    """Fractional trial edges set the frame times, as in MATLAB.
+
+    Trial tables of continuous recordings cut trials at ``linspace`` edges;
+    MultiRoiRegistration uses them unrounded: ``ceil(first:dt:last)``.
+    """
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6)
+    first, last = 1000.4, 4000.7
+    res = multiroi.register_trial(
+        layout.files[0],
+        first,
+        last,
+        tmp_path / "m.tif",
+        tmp_path / "a.h5",
+        params,
+    )
+    dt = 1600 / 80
+    n = int(np.floor((last - first) / dt)) + 1
+    np.testing.assert_array_equal(
+        res.ds_frames, np.ceil(first + dt * np.arange(n))
+    )
+    assert res.ds_frames[0] == 1001
+
+
 def test_register_multiroi_updates_trial_table(
     recording, tmp_path, monkeypatch
 ):
