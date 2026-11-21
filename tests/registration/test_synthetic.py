@@ -191,6 +191,48 @@ def test_register_multiroi_updates_trial_table(
     assert mc["registration_failed"].dtype == np.int8
 
 
+def test_register_multiroi_keeps_fractional_lines(
+    recording, tmp_path, monkeypatch
+):
+    """The pipeline passes the table's fractional trial edges on unrounded."""
+    from giant_python.io.hdf5 import load_struct_h5
+    from giant_python.pipeline.register import register_multiroi
+
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    dat = Path(layout.files[0])
+    table = tmp_path / "trial_table.h5"
+    first, last = 1000.4, 4000.7
+    save_struct_h5(
+        table,
+        {
+            "datadr": str(dat.parent),
+            "savedr": str(tmp_path),
+            "filename": np.array([[dat.name]], dtype=object),
+            "epoch": np.array([[3.0]]),
+            "true_trial_ix": np.array([[1.0]]),
+            "slap2_info": {
+                "first_line": np.array([[first]]),
+                "last_line": np.array([[last]]),
+            },
+        },
+    )
+    fields = register_multiroi(
+        table,
+        {"maxshift": 5, "save_tif": False},
+        execution={"device": "cpu", "max_workers": 1},
+    )
+    adata = load_struct_h5(
+        tmp_path / "motion_correction" / fields["fn_adata"][0, 0]
+    )
+    adata = adata.get("aData", adata)
+    dt = 1600 / 80
+    n = int(np.floor((last - first) / dt)) + 1
+    np.testing.assert_array_equal(
+        np.ravel(adata["DSframes"]), np.ceil(first + dt * np.arange(n))
+    )
+
+
 def test_unsupported_options_raise():
     """MATLAB options that are not ported are rejected."""
     with pytest.raises(NotImplementedError):
