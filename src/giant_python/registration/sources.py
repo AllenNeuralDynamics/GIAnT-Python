@@ -239,8 +239,8 @@ def make_source(
         The recording's layout.
     former : FrameFormer
         Frame former over the trial's cycles.
-    first_line, last_line : int
-        The trial's line range.
+    first_line, last_line : float
+        The trial's line range (may be fractional).
     init, ds : ndarray of int
         Initial and registered frame times.
     dt : int
