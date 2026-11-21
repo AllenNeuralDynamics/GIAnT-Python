@@ -169,8 +169,10 @@ def register_multiroi(
             jobs.append(
                 {
                     "dat": Path(tt.datadr) / str(files[d, t]),
-                    "first": int(first[d, t]),
-                    "last": int(last[d, t]),
+                    # fractional for continuous recordings; MATLAB keeps
+                    # them unrounded (ceil(first:dt:last))
+                    "first": float(first[d, t]),
+                    "last": float(last[d, t]),
                     "movie": moco / movie,
                     "adata": moco / adata,
                     "params": params,
