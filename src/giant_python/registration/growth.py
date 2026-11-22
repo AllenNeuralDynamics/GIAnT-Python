@@ -510,6 +510,8 @@ class Grower:
             kinds.append(GROWN)
         if not items:
             rest = np.flatnonzero(~self.aligned)
+            if rest.size == 0:  # the seeds above aligned the last frames
+                return
             self.try_seeds(rest[:1])
             if not self.aligned[rest[0]]:
                 items = [(int(rest[0]), 0, 0, self.p.clip_shift)]

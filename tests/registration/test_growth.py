@@ -179,6 +179,34 @@ def test_junction_regrows_a_wrong_island(plain_recording, monkeypatch):
     assert err.max() < 0.2
 
 
+def test_sub_round_ends_when_seeds_align_the_last_frame(monkeypatch):
+    """Seeds that align the last unaligned frame end the sub-round."""
+    from giant_python.registration.growth import Grower
+
+    class Frames:
+        """Stands in for a frame cache; only its length is used."""
+
+        def __len__(self):
+            """Five frames."""
+            return 5
+
+    params = multiroi.MultiRoiRegistrationParams(schedule="grow")
+    grower = Grower(Frames(), None, params, [], [4])
+    grower.aligned[:4] = True
+    grower.motion[:4] = 0.0
+    grower.root[:4] = 0
+
+    def seed(ks):
+        """Align the candidates, as an accepted wide search would."""
+        grower.aligned[ks] = True
+        grower.motion[ks] = 0.0
+
+    monkeypatch.setattr(grower, "_calibrated", lambda: True)
+    monkeypatch.setattr(grower, "try_seeds", seed)
+    grower._sub_round()
+    assert grower.aligned.all()
+
+
 def test_growth_handles_a_frame_without_valid_samples(
     plain_recording, monkeypatch
 ):
