@@ -227,7 +227,7 @@ def localize_trial(
             baseline = np.ascontiguousarray(
                 np.asarray(f["baseline"][()], np.float32).transpose(0, 2, 1)
             )
-    check_inputs(trial.movie.shape, p, baseline)
+    check_inputs(trial.movie.shape, p, baseline, trial.var_factor)
     try:
         loc = localize_sources(trial.movie, trial.var_factor, p, baseline)
     except Exception:  # MATLAB's catch: retry without the outer pixels

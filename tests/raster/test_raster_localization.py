@@ -166,6 +166,15 @@ def test_external_baseline_shape_checked():
         localize_sources(movie, None, baseline=np.ones((50, 10, 9)))
 
 
+def test_var_factor_shape_checked():
+    """The variance factor must have the movie's shape: a transposed one
+    of the same size, or a single frame, is rejected rather than reshaped."""
+    movie = np.ones((50, 10, 12), np.float32)
+    for vf in (np.ones((50, 12, 10)), np.ones((10, 12))):
+        with pytest.raises(ValueError, match="var_factor"):
+            localize_sources(movie, vf)
+
+
 def test_no_variance_floor_needs_an_external_baseline():
     """Without the floor, the moving median's low bias at low counts would
     blow up dim pixels' Z-scores, so an external baseline is required."""

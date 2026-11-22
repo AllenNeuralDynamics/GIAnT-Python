@@ -385,7 +385,10 @@ def _max3x3(stack: np.ndarray) -> np.ndarray:
 
 
 def check_inputs(
-    shape: tuple, params: RasterLocalizationParams, baseline=None
+    shape: tuple,
+    params: RasterLocalizationParams,
+    baseline=None,
+    var_factor=None,
 ) -> None:
     """Reject inputs :func:`localize_sources` cannot use (before any retry).
 
@@ -393,8 +396,13 @@ def check_inputs(
     ------
     ValueError
         If ``variance_floor=False`` has no external baseline, or the baseline
-        does not have the movie's shape.
+        or the variance factor does not have the movie's shape (a transposed
+        one of the same size would otherwise scramble the pixels).
     """
+    if var_factor is not None and np.shape(var_factor) != tuple(shape):
+        raise ValueError(
+            f"var_factor is {np.shape(var_factor)}, the movie {shape}"
+        )
     if not params.variance_floor and baseline is None:
         # the moving median is biased low at low counts (often 0), so without
         # the floor dim pixels' Z-scores blow up (4x lower AP on simulations)
@@ -447,7 +455,7 @@ def localize_sources(  # noqa: C901
     """
     p = params or RasterLocalizationParams()
     movie = np.asarray(movie)
-    check_inputs(movie.shape, p, baseline)
+    check_inputs(movie.shape, p, baseline, var_factor)
     n_t = movie.shape[0]
     baseline_window = math.ceil(p.baseline_window_s * p.align_hz)
     denoise_window = math.ceil(p.denoise_window_s * p.align_hz)
