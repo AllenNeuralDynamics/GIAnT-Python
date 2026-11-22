@@ -5,8 +5,8 @@ channel (NaN where it has no valid sample) and its freshness (0 there), as
 MultiRoiRegistration's ``getImageWrapper`` does after trimming:
 
 * :class:`PlainFrames`: ``slap2Frames`` frames, trimmed to the bounding box
-  of the pixels valid in the first initial frame (the first one that has
-  samples; MATLAB's window would be empty).
+  of the pixels valid in the first initial frame (if it has none, of those
+  valid in any initial frame; MATLAB's window would be empty).
 * :class:`CompensatedFrames`: ``slap2Frames(..., CompensateOnline=true,
   RefOffset=<frame offset>)`` frames, trimmed to the raster's extent. A
   sample moved by its line's online offset can land on a pixel the raster
@@ -247,17 +247,22 @@ class CompensatedFrames:
 
 
 def _window_pixels(former: FrameFormer, init, dt: int) -> np.ndarray:
-    """The former's pixels valid in the first initial frame with samples.
+    """The former's pixels whose bounding box is the registration window.
 
-    MATLAB trims to the first initial frame. When it has no samples (e.g.
-    a trial whose recording starts late), the next initial frame with
-    samples is used; when none has any, the whole raster.
+    MATLAB trims to the pixels valid in the first initial frame. When that
+    frame has no samples (e.g. a trial whose recording starts late), the
+    pixels valid in any initial frame are used: the first frame with
+    samples may cover only part of the raster. When no initial frame has
+    samples, the whole raster.
     """
-    for k in range(len(init)):
-        vals, _ = former.frames(init[k : k + 1], dt)
-        valid = ~torch.isnan(vals.sum(0)[0]).cpu().numpy()
-        if valid.any():
-            return valid
+    vals, _ = former.frames(init[:1], dt)
+    valid = ~torch.isnan(vals.sum(0)[0]).cpu().numpy()
+    if valid.any():
+        return valid
+    vals, _ = former.frames(init, dt)
+    valid = (~torch.isnan(vals.sum(0))).any(0).cpu().numpy()
+    if valid.any():
+        return valid
     return np.ones(former.rows.size, dtype=bool)
 
 

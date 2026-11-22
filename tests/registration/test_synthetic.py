@@ -192,8 +192,9 @@ def test_interrupted_publish_leaves_no_alignment_file(
     assert sorted(tmp_path.iterdir()) == [movie]
 
 
-def blank_frames(monkeypatch, blank):
-    """Frames formed at times where ``blank(times)`` holds have no samples."""
+def blank_frames(monkeypatch, blank, half=None):
+    """Frames formed at times where ``blank(times)`` holds have no samples;
+    where ``half(times)`` holds, the lower half of the raster has none."""
     from giant_python.registration.frames import FrameFormer
 
     frames = FrameFormer.frames
@@ -201,9 +202,12 @@ def blank_frames(monkeypatch, blank):
     def blanked(self, times, dt, channels=None):
         """The frames, with the selected ones emptied."""
         vals, fresh = frames(self, times, dt, channels)
-        hit = torch.as_tensor(
-            blank(np.asarray(times).ravel()), device=vals.device
-        )
+        t = np.asarray(times).ravel()
+        lower = self.rows > np.median(self.rows)
+        for i in np.flatnonzero(half(t) if half else []):
+            vals[:, i, lower] = float("nan")
+            fresh[i, lower] = 0
+        hit = torch.as_tensor(blank(t), device=vals.device)
         vals[:, hit] = float("nan")
         fresh[hit] = 0
         return vals, fresh
@@ -281,15 +285,25 @@ def test_trial_without_samples_at_its_start_or_at_all(
     recording, tmp_path, monkeypatch, schedule
 ):
     """A recording that starts late is registered from its first frames
-    with samples; a trial without any samples completes and is flagged."""
+    with samples, in the usual window even if the first of them covers
+    only part of the raster; a trial without any samples completes and is
+    flagged."""
+    from giant_python.registration.sources import make_source
+
     layout, _ = recording
     monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
     params = multiroi.MultiRoiRegistrationParams(
         maxshift=5, save_tif=False, schedule=schedule
     )
     args = (layout.files[0], 1, 3000)
+    lay, former, init, ds, dt = multiroi.open_trial(
+        *args, params, torch.device("cpu")
+    )
+    window = make_source(lay, former, 1, 3000, init, ds, dt, False).window
     with monkeypatch.context() as m:
-        blank_frames(m, lambda t: t < 1200)  # first initial frames too
+        # the first initial frames have no samples, the next one only half
+        assert np.sum((init >= 1200) & (init < 1300)) == 1
+        blank_frames(m, lambda t: t < 1200, lambda t: t < 1300)
         late = multiroi.register_trial(
             *args, tmp_path / "late.h5", tmp_path / "late_a.h5", params
         )
@@ -297,6 +311,9 @@ def test_trial_without_samples_at_its_start_or_at_all(
     assert np.isnan(late.motion_r[early]).all()
     assert np.isfinite(late.motion_r[late.ds_frames >= 1200]).all()
     assert not late.registration_failed
+    trim = load_struct_h5(tmp_path / "late_a.h5")["slap2"]
+    np.testing.assert_array_equal(trim["trimRows"].ravel(), window.trim_rows)
+    np.testing.assert_array_equal(trim["trimCols"].ravel(), window.trim_cols)
     with monkeypatch.context() as m:
         blank_frames(m, lambda t: np.ones(t.shape, dtype=bool))
         empty = multiroi.register_trial(
