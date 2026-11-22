@@ -168,6 +168,23 @@ def test_frame_without_valid_samples_has_nan_motion():
         match(frames, weights, *args)
 
 
+def test_motion_failed_needs_two_frames_with_motion():
+    """Missing frames are left out of the SD; a trial of several frames
+    with fewer than two with motion fails (SILo cannot interpolate it)."""
+    from giant_python.registration.multiroi import motion_failed
+
+    nan = np.nan
+    assert not motion_failed(np.array([0.1, 0.3, nan]), np.zeros(3))
+    assert motion_failed(np.array([0.0, 5.0, nan, -5.0]), np.zeros(4))
+    assert motion_failed(np.array([nan, 0.2, nan]), np.zeros(3))
+    assert motion_failed(np.full(3, nan), np.full(3, nan))
+    assert motion_failed(np.array([0.1, 0.2]), np.array([0.0, nan]))
+    with warnings.catch_warnings():  # SD of one value: NaN, as before
+        warnings.simplefilter("ignore", RuntimeWarning)
+        assert not motion_failed(np.array([0.2]), np.array([0.1]))
+    assert motion_failed(np.array([nan]), np.array([nan]))
+
+
 @pytest.mark.parametrize(
     "mr,mc", [(0.0, 0.0), (0.3, -0.7), (-1.25, 2.5), (3.0, -0.4), (30, 2)]
 )

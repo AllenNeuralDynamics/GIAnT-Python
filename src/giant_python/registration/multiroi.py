@@ -405,12 +405,15 @@ def register_grow(
 def motion_failed(motion_r, motion_c) -> bool:
     """``registrationFailed``: motion SD above 1.5 pixels on either axis.
 
-    Missing frames (NaN motion) are left out. A trial without any frame
-    that has samples counts as failed, so that SILo skips it (MATLAB's
-    drifting search-edge motion fails it too).
+    Missing frames (NaN motion) are left out. A trial of several frames
+    with fewer than two of them with motion counts as failed, so that SILo
+    skips it: it interpolates the motion with ``interp1``, which needs two
+    finite samples (it uses a one-frame trial's motion as a constant). This
+    includes a trial in which no frame has samples, which MATLAB's drifting
+    search-edge motion fails too.
     """
     ok = np.isfinite(motion_r) & np.isfinite(motion_c)
-    if not ok.any():
+    if ok.sum() < min(2, ok.size):
         return True
     return bool(
         np.std(motion_c[ok], ddof=1) > 1.5
@@ -589,8 +592,14 @@ def register_trial(
         sink.movie.close()
         timer.mark("movie")
         failed = motion_failed(motion_r, motion_c)
-        if not np.isfinite(motion_r).any():
-            log.warning("no frame of %s has valid samples", dat_path)
+        n_ok = int(np.isfinite(motion_r).sum())
+        if n_ok < min(2, ds.size):
+            log.warning(
+                "%d of %d frames of %s have valid samples; failed",
+                n_ok,
+                ds.size,
+                dat_path,
+            )
         elif failed:
             log.warning("too much motion in %s; saving anyway", dat_path)
         fields = alignment_fields(

@@ -167,9 +167,10 @@ fields except ``overwriteExisting``); struct readers ignore it, and
 requested settings. Frames without valid samples get NaN ``motionDSr`` and
 ``motionDSc`` and an all-NaN movie frame (MATLAB gives them an arbitrary
 finite motion); ``interp1(..., 'pchip')``, which SILo uses to upsample the
-motion, skips NaN samples. A trial in which no frame has samples is saved
-with ``registrationFailed`` set, so that SILo skips it. The tree includes
-fields not consumed by BandSILo::
+motion, skips NaN samples but needs two finite ones: a trial of several
+frames with fewer than two frames with samples is saved with
+``registrationFailed`` set, so that SILo skips it. The tree includes fields
+not consumed by BandSILo::
 
    <trial_stem>_ALIGNMENTDATA.h5
    ├── row_major
