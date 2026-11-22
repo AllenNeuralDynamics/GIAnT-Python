@@ -26,6 +26,7 @@ import numpy as np
 from .localization import (
     RasterLocalization,
     RasterLocalizationParams,
+    check_inputs,
     localize_sources,
     matlab_prctile,
 )
@@ -186,7 +187,7 @@ def localize_trial(
     With ``baseline_dir``, ``<trial>_BASELINE-80Hz.h5`` (``slap2-f0
     predict-registered``) replaces the moving median. As in MATLAB, a failed
     localization is retried with the first and last rows and columns set to
-    NaN (a wrong baseline size is not retried).
+    NaN (invalid inputs, such as a wrong baseline size, are not retried).
     """
     p = params or RasterLocalizationParams()
     trial = load_registered_trial(
@@ -207,15 +208,9 @@ def localize_trial(
             baseline = np.ascontiguousarray(
                 np.asarray(f["baseline"][()], np.float32).transpose(0, 2, 1)
             )
-        if baseline.shape != trial.movie.shape:
-            raise ValueError(
-                f"external baseline is {baseline.shape}, "
-                f"the movie {trial.movie.shape}"
-            )
+    check_inputs(trial.movie.shape, p, baseline)
     try:
         loc = localize_sources(trial.movie, trial.var_factor, p, baseline)
-    except ValueError:
-        raise
     except Exception:  # MATLAB's catch: retry without the outer pixels
         movie = trial.movie.copy()
         movie[:, [0, -1], :] = np.nan

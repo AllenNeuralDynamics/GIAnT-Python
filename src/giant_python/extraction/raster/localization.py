@@ -187,7 +187,10 @@ def movmean_nan(x: np.ndarray, window: int) -> np.ndarray:
     ahead = window - 1 - back
     ok = ~np.isnan(x)
     zero = np.zeros((1,) + x.shape[1:])
-    s = np.concatenate([zero, np.cumsum(np.where(ok, x, 0.0), axis=0)])
+    # float64 prefix sums: float32 ones drift over a long recording
+    s = np.concatenate(
+        [zero, np.cumsum(np.where(ok, x, 0.0), axis=0, dtype=np.float64)]
+    )
     c = np.concatenate([zero, np.cumsum(ok, axis=0, dtype=np.float64)])
     n = x.shape[0]
     hi = np.minimum(np.arange(n) + ahead + 1, n)
@@ -295,7 +298,9 @@ def temporal_filter(imf: np.ndarray, tau: float) -> np.ndarray:
 
 def _robust_scale(imf: np.ndarray, last: int) -> float:
     """1.4826 x MAD of the scored frames' filtered values (subsampled)."""
-    x = imf[1:last]
+    x = imf[1:last].reshape(-1)
+    if x.size > 60_000_000:  # sample before copying (most voxels are NaN)
+        x = x[:: int(np.ceil(x.size / 60_000_000))]
     x = x[~np.isnan(x)].astype(np.float64)
     if x.size > 20_000_000:
         x = x[:: int(np.ceil(x.size / 20_000_000))]
@@ -374,6 +379,27 @@ def _max3x3(stack: np.ndarray) -> np.ndarray:
     return out
 
 
+def check_inputs(
+    shape: tuple, params: RasterLocalizationParams, baseline=None
+) -> None:
+    """Reject inputs :func:`localize_sources` cannot use (before any retry).
+
+    Raises
+    ------
+    ValueError
+        If ``variance_floor=False`` has no external baseline, or the baseline
+        does not have the movie's shape.
+    """
+    if not params.variance_floor and baseline is None:
+        # the moving median is biased low at low counts (often 0), so without
+        # the floor dim pixels' Z-scores blow up (4x lower AP on simulations)
+        raise ValueError("variance_floor=False needs an external baseline")
+    if baseline is not None and np.shape(baseline) != tuple(shape):
+        raise ValueError(
+            f"external baseline is {np.shape(baseline)}, the movie {shape}"
+        )
+
+
 def summary_image(act_im: np.ndarray, valid: np.ndarray) -> np.ndarray:
     """The image SiLo seeds in: scaled, minus its 5x5 NaN-median."""
     s = np.array(act_im, dtype=np.float64)
@@ -415,11 +441,8 @@ def localize_sources(  # noqa: C901
     RasterLocalization
     """
     p = params or RasterLocalizationParams()
-    if not p.variance_floor and baseline is None:
-        # the moving median is biased low at low counts (often 0), so without
-        # the floor dim pixels' Z-scores blow up (4x lower AP on simulations)
-        raise ValueError("variance_floor=False needs an external baseline")
     movie = np.asarray(movie)
+    check_inputs(movie.shape, p, baseline)
     n_t = movie.shape[0]
     baseline_window = math.ceil(p.baseline_window_s * p.align_hz)
     denoise_window = math.ceil(p.denoise_window_s * p.align_hz)
@@ -458,10 +481,6 @@ def localize_sources(  # noqa: C901
 
     if baseline is not None:
         baseline = np.asarray(baseline)
-        if baseline.shape != shape:
-            raise ValueError(
-                f"external baseline is {baseline.shape}, the movie {shape}"
-            )
         imb = np.array(baseline.reshape(n_t, -1)[:, vidx], dtype=np.float32)
         imb[nan_v] = np.nan
     else:
@@ -477,11 +496,17 @@ def localize_sources(  # noqa: C901
         var_pred = np.nanmean(imb[first].astype(np.float64), 0) * np.nanmean(
             vf[first].astype(np.float64), 0
         )
-    with np.errstate(invalid="ignore"):
-        sel_bright = var_pred > matlab_prctile(var_pred, 90)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        top = matlab_prctile(var_pred, 90)
+        sel_bright = var_pred > top
+        if not sel_bright.any():  # uniform brightness: MATLAB's Vk is NaN
+            sel_bright = var_pred >= top
         vk = matlab_prctile(
             (var_im[sel_bright] - vb / p.vif) / var_pred[sel_bright], 10
         )
+        if not p.variance_floor and not vk > 0:
+            # without the floor nothing else keeps the variance positive
+            vk = float(np.nanmedian(var_im / var_pred))
     del ims
     vb_used = vb if p.variance_floor else 0.0
     info: dict = {"Vk": vk, "Vb": vb_used}
@@ -501,6 +526,8 @@ def localize_sources(  # noqa: C901
         )
     if not p.variance_floor:
         guard = 0.01 * np.nanmedian(std[~nan_v])
+        if not guard > 0:
+            raise ValueError("no positive noise variance without the floor")
         std = np.maximum(std, np.float32(guard))
     y /= std
     flat[:, vidx] = y

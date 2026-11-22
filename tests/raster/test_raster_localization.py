@@ -173,3 +173,22 @@ def test_no_variance_floor_needs_an_external_baseline():
     p = RasterLocalizationParams(variance_floor=False)
     with pytest.raises(ValueError, match="external baseline"):
         localize_sources(movie, None, p)
+
+
+def test_moving_mean_keeps_precision_on_long_recordings():
+    """Prefix sums in float64: no drift over a long float32 recording."""
+    x = np.full((24000, 2), 1.1, np.float32)
+    out = movmean_nan(x, 8)
+    np.testing.assert_allclose(out[-50:], np.float32(1.1), rtol=1e-6)
+
+
+def test_no_floor_with_a_uniform_external_baseline():
+    """A spatially uniform baseline (no pixel above the 90th percentile of
+    brightness) still gives a finite activity image without the floor."""
+    rng = np.random.default_rng(3)
+    base = np.full((600, 20, 20), 9.0, np.float32)
+    movie = (base + 3 * rng.standard_normal(base.shape)).astype(np.float32)
+    p = RasterLocalizationParams(variance_floor=False)
+    loc = localize_sources(movie, None, p, base, find_peaks=False)
+    assert np.isfinite(loc.act_im[loc.valid]).all()
+    assert loc.info["Vk"] > 0

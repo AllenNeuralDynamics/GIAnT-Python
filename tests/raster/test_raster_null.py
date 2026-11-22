@@ -124,3 +124,67 @@ def test_bootstrap_calibrates_dim_and_bright_pixels():
         assert 0.7 * 2.576 < t < 1.3 * 2.576
     info = cal.info["null"]
     assert info["s0"][0] > 1.3 * info["s0"][-1]
+
+
+def test_lag_correlations_skip_discarded_frames():
+    """Lags are counted in recorded frames: pairs across discarded frames
+    (here 3 of every 6) are not taken as lag-1 or lag-2 pairs."""
+    rng = np.random.default_rng(4)
+    t, n = 3000, 400
+    e = rng.standard_normal((t, n))
+    r = np.empty((t, n))
+    r[0] = e[0]
+    for k in range(1, t):  # AR(1), correlation 0.6 at lag 1
+        r[k] = 0.6 * r[k - 1] + 0.8 * e[k]
+    base = np.full((t, n), 4.0)
+    frames = np.flatnonzero((np.arange(t) // 3) % 2 == 0)
+    m = noise_model(r, base, np.ones_like(r), np.arange(n), (20, 20), frames)
+    np.testing.assert_allclose(m["rho"][:2], [0.6, 0.36], atol=0.03)
+
+
+def test_null_variance_next_to_bright_structures():
+    """Where brightness changes across the spatial kernel, every pixel keeps
+    the variance gain x b, and the measured model is still the drawn one."""
+    t, rows, cols, gain = 3000, 30, 30, 8.0
+    photons = np.where((np.arange(cols) // 3) % 2 == 0, 30.0, 0.3)
+    b = np.broadcast_to(photons[None, :] * gain, (rows, cols))
+    base = np.broadcast_to(b[None], (t, rows, cols)).astype(np.float32)
+    noise = dict(
+        gain=gain,
+        kt=temporal_kernel(0.6, 0.25),
+        kr=spatial_kernel(0.23),
+        kc=spatial_kernel(0.37),
+        q=1.0,
+    )
+    noise["W2"] = float(
+        (noise["kt"] ** 2).sum()
+        * (noise["kr"] ** 2).sum()
+        * (noise["kc"] ** 2).sum()
+    )
+    flat = base.reshape(t, -1)
+    ones = np.ones_like(flat)
+    vidx = np.arange(rows * cols)
+    z = null_movie(
+        flat, ones, ones, np.zeros(base.shape, bool), vidx, noise, seed=5
+    )
+    inner = (slice(None), slice(2, -2), slice(2, -2))
+    var = z[inner].var(0)
+    np.testing.assert_allclose(
+        (var / (gain * b[2:-2, 2:-2])).mean(0), 1, rtol=0.1
+    )
+    m = noise_model(
+        z.reshape(t, -1), flat, ones, vidx, (rows, cols), np.arange(1000)
+    )
+    np.testing.assert_allclose(m["rho"][:3], [0.6, 0.25, 0.23], atol=0.03)
+
+
+def test_bootstrap_on_a_uniform_baseline():
+    """A trial of one brightness is calibrated with a single bin."""
+    rng = np.random.default_rng(6)
+    t, rows, cols = 1200, 30, 30
+    base = np.full((t, rows, cols), 16.0, np.float32)
+    movie = (base + 4 * rng.standard_normal(base.shape)).astype(np.float32)
+    p = RasterLocalizationParams(variance_floor=False, null="bootstrap")
+    loc = localize_sources(movie, None, p, base, find_peaks=False)
+    assert np.isfinite(loc.act_im[loc.valid]).all()
+    assert loc.info["null"]["m0"].size == 1

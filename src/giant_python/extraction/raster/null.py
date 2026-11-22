@@ -15,7 +15,8 @@ through the same filters and score:
 * :func:`null_movie` draws filtered compound Poisson noise with that model,
   ``y = b + s (k * (N - lambda))``, ``N ~ Poisson(lambda)`` per voxel and ``k``
   a separable kernel with the measured correlations; its mean is the baseline,
-  its variance ``gain * b * v``, and its skew ``q`` times that of filtered
+  its variance ``gain * b * v`` (scaled per pixel where the rate varies across
+  the kernel), and its skew ``q`` times that of filtered
   Poisson noise at that gain (larger photon events, as in
   ``slap2_f0.simulate``);
 * :func:`null_calibration` scores the null movies like the trial and returns
@@ -136,7 +137,12 @@ def noise_model(
         raise ValueError("too few imaged pixels to measure the noise model")
     gain = float(np.median(var[use] / bv_mean[use]))
 
-    rho = [_pooled_corr(r[:-k][:, use], r[k:][:, use]) for k in (1, 2)]
+    # lags in recorded frames: pairs across discarded frames do not count
+    t_idx = np.arange(resid.shape[0])[sel]
+    rho = []
+    for k in (1, 2):
+        i = np.flatnonzero(t_idx[k:] - t_idx[:-k] == k)
+        rho.append(_pooled_corr(r[i][:, use], r[i + k][:, use]))
     col_of = np.full(shape2d[0] * shape2d[1], -1)
     col_of[vidx[use]] = np.flatnonzero(use)
     col_of = col_of.reshape(shape2d)
@@ -177,6 +183,31 @@ def _filter_rows_cols(d: np.ndarray, kr: np.ndarray, kc: np.ndarray):
 
     out = ndimage.correlate1d(d, kr, axis=1, mode="constant", cval=0.0)
     return ndimage.correlate1d(out, kc, axis=2, mode="constant", cval=0.0)
+
+
+def _mixing_correction(lam, vidx, rows, cols, kr, kc) -> np.ndarray:
+    """Per-pixel factor that gives each pixel the variance ``gain * b * v``.
+
+    The spatial kernel mixes the neighbours' Poisson fluctuations into a
+    pixel, so where the rate changes across the kernel (next to bright
+    structures) the variance would follow the neighbours' rates. This scales
+    each pixel by ``sqrt(sum(k^2) lam / (k^2 * lam))`` of the time-mean rates
+    (1 where they are uniform).
+    """
+    from scipy import ndimage
+
+    lam_mean = np.zeros(rows * cols)
+    lam_mean[vidx] = lam.mean(0)
+    mixed = ndimage.correlate1d(
+        lam_mean.reshape(rows, cols), kr**2, axis=0, mode="constant"
+    )
+    mixed = ndimage.correlate1d(mixed, kc**2, axis=1, mode="constant")
+    mixed = mixed.ravel()[vidx]
+    own = float((kr**2).sum() * (kc**2).sum()) * lam_mean[vidx]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        f = np.sqrt(own / mixed)
+    f[~np.isfinite(f) | ~(own > 0)] = 1.0
+    return f.astype(np.float32)
 
 
 def null_movie(
@@ -223,6 +254,7 @@ def null_movie(
         lam_all = baseline.astype(np.float64) * lam_scale / var_factor
         gain_z = (s * var_factor / std).astype(np.float32)
     lam_all[~(lam_all > 0) | ~np.isfinite(lam_all)] = 0.0
+    gain_z *= _mixing_correction(lam_all, vidx, rows, cols, kr, kc)
     out = np.full(nans.shape, np.nan, dtype=np.float32)
     flat_out = out.reshape(n_t, -1)
     drawn = np.zeros((0, rows * cols), dtype=np.float32)
@@ -321,6 +353,8 @@ def null_calibration(
         raise ValueError("too few imaged pixels for the null calibration")
     lp = np.log(photons[ok])
     edges = np.unique(np.quantile(lp, np.linspace(0, 1, _N_BINS + 1)))
+    if edges.size == 1:  # a single brightness: one bin
+        edges = np.repeat(edges, 2)
     bins = np.clip(np.searchsorted(edges, lp, side="right") - 1, 0, None)
     bins = np.minimum(bins, edges.size - 2)
     vals = null_ims[:, ok]

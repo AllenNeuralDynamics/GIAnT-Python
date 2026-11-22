@@ -54,3 +54,35 @@ def test_load_registered_trial(tmp_path):
     assert np.isnan(tr.movie[tr.discard]).all()
     np.testing.assert_allclose(tr.mean_im[..., 1], 100)
     np.testing.assert_allclose(tr.var_factor, vf.transpose(0, 2, 1))
+
+
+def test_localize_trial_retries_numerical_failures(monkeypatch):
+    """Any failure of the localization itself is retried with the outer
+    rows and columns NaN (MATLAB's catch); invalid inputs are not."""
+    import giant_python.extraction.raster.trial as trial_mod
+    from giant_python.extraction.raster.localization import (
+        RasterLocalizationParams,
+    )
+
+    movie = np.ones((20, 6, 7), np.float32)
+    fake = trial_mod.RegisteredTrial(
+        movie, None, np.ones((6, 7, 1)), np.zeros(20, bool), 80.0
+    )
+    monkeypatch.setattr(trial_mod, "load_registered_trial", lambda *a: fake)
+    seen = []
+
+    def flaky(mov, *args):
+        """Fails like a numerical error unless the edges are NaN."""
+        seen.append(bool(np.isnan(mov[:, 0, :]).all()))
+        if not seen[-1]:
+            raise ValueError("non-finite residuals")
+        return "ok"
+
+    monkeypatch.setattr(trial_mod, "localize_sources", flaky)
+    loc, _ = trial_mod.localize_trial("dir", "x_REGISTERED.tif", 1)
+    assert loc == "ok" and seen == [False, True]
+    seen.clear()
+    p = RasterLocalizationParams(variance_floor=False)
+    with pytest.raises(ValueError, match="external baseline"):
+        trial_mod.localize_trial("dir", "x_REGISTERED.tif", 1, p)
+    assert seen == []
