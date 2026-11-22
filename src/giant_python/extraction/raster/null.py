@@ -19,9 +19,13 @@ through the same filters and score:
   Poisson noise at that gain (larger photon events, as in
   ``slap2_f0.simulate``);
 * :func:`null_calibration` scores the null movies like the trial and returns
-  ``(act_im - m0) / s0``, with ``m0`` and ``s0`` the null image's mean and SD
-  among pixels of similar brightness (12 equal-count bins of log photons per
-  frame).
+  ``(act_im - m0) / s0``, with ``m0`` and ``s0`` the null image's centre and
+  scale among pixels of similar brightness (12 equal-count bins of log photons
+  per frame). By default (``null_scale="tail"``) they are the median and the
+  distance from it to the 99.5th percentile in Gaussian units, so every
+  brightness has the same upper tail: at 0.03-0.3 photons the null image is
+  so heavy-tailed that a bin's SD hangs on a few pixels. ``"sd"`` uses the
+  mean and SD.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ import time
 import numpy as np
 
 _N_BINS = 12
+_TAIL_Q = 0.995
+_TAIL_Z = 2.5758293035489004  # standard normal quantile at 0.995
 
 
 def _pooled_corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -268,11 +274,13 @@ def null_calibration(
 
     Runs ``params.null_draws`` null movies (:func:`null_movie`) through the
     trial's activity score (with the trial's ``sd_u``) and returns
-    ``(act_im - m0) / s0``: ``m0`` and ``s0`` are the null image's mean and SD
-    among pixels of similar brightness (12 equal-count bins of the log mean
-    photons per frame, linear in between, constant beyond the outer bins'
-    centres). Also returns the noise model, bin brightness (photons per
-    frame), ``m0``, ``s0`` and the seconds taken.
+    ``(act_im - m0) / s0``: ``m0`` and ``s0`` are the null image's centre and
+    scale among pixels of similar brightness (12 equal-count bins of the log
+    mean photons per frame, linear in between, constant beyond the outer bins'
+    centres): with ``params.null_scale`` "tail" the median and
+    ``(q99.5 - median) / 2.576``, with "sd" the mean and SD. Also returns
+    the noise model, bin brightness (photons per frame), ``m0``, ``s0`` and
+    the seconds taken.
     """
     from .localization import activity_score
 
@@ -298,7 +306,17 @@ def null_calibration(
         del z0
     null_ims = np.stack(null_ims)
 
-    ok = valid & (photons > 0) & np.isfinite(null_ims).all(0)
+    # pixels that rarely have a full 3x3 neighbourhood (the edges of the
+    # imaged area) can never be maxima there; they do not set the scale
+    from scipy import ndimage
+
+    edge = (
+        ndimage.maximum_filter(
+            nans, size=(1, 3, 3), mode="constant", cval=1
+        ).mean(0)
+        > 0.5
+    )
+    ok = valid & ~edge & (photons > 0) & np.isfinite(null_ims).all(0)
     if ok.sum() < 2:
         raise ValueError("too few imaged pixels for the null calibration")
     lp = np.log(photons[ok])
@@ -312,10 +330,14 @@ def null_calibration(
         x = vals[:, in_bin].ravel()
         if x.size < 2:
             continue
-        sd = float(np.std(x, ddof=1))
+        if params.null_scale == "tail":
+            mid_x = float(np.median(x))
+            sd = (float(np.quantile(x, _TAIL_Q)) - mid_x) / _TAIL_Z
+        else:
+            mid_x, sd = float(np.mean(x)), float(np.std(x, ddof=1))
         if sd > 0:
             centre.append(float(np.median(lp[in_bin])))
-            m0.append(float(np.mean(x)))
+            m0.append(mid_x)
             s0.append(sd)
     if not centre:
         raise ValueError("the null activity image has no spread")

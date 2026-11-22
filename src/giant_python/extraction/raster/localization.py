@@ -86,6 +86,9 @@ class RasterLocalizationParams:
         Noise movies per trial for the bootstrap null.
     null_seed : int
         Seed of the first noise movie (draw ``k`` uses ``null_seed + k``).
+    null_scale : str
+        Calibration per brightness: ``"tail"`` (median and 99.5th percentile)
+        or ``"sd"`` (mean and SD).
     variance_floor : bool
         Add ``Vb`` to the Z-score's variance model.
     score : str
@@ -107,6 +110,7 @@ class RasterLocalizationParams:
     null: str = "none"
     null_draws: int = 1
     null_seed: int = 0
+    null_scale: str = "tail"
     variance_floor: bool = True
     score: str = "squared_maxima"
     soft_th: float = 2.0
@@ -127,6 +131,8 @@ class RasterLocalizationParams:
             raise ValueError(
                 f"null must be one of {_NULLS}, not {self.null!r}"
             )
+        if self.null_scale not in ("tail", "sd"):
+            raise ValueError("null_scale must be 'tail' or 'sd'")
         if self.score not in _SCORES:
             raise ValueError(
                 f"score must be one of {_SCORES}, not {self.score!r}"
