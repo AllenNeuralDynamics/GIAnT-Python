@@ -36,6 +36,7 @@ from .outputs import (
     matlab_round,
     publish,
     rec_neg_err,
+    settings_record,
 )
 from .sources import make_source
 from .template import TemplateState, consensus, initial_template
@@ -241,10 +242,10 @@ class OutputSink:
         mean = self.sum / torch.clamp(self.count, min=1)
         return mean.masked_fill(self.count < 1, float("nan")).cpu().numpy()
 
-    def finish(self, fields: dict) -> None:
+    def finish(self, fields: dict, settings: Optional[dict] = None) -> None:
         """Complete the alignment file and publish it with the movie."""
         self.movie.close()
-        self.adata.finish(fields)
+        self.adata.finish(fields, settings)
         publish(self.movie, self.adata)
 
     def abort(self) -> None:
@@ -532,7 +533,7 @@ def register_trial(
         )
         if qc is not None:
             fields["growthQC"] = qc.fields()
-        sink.finish(fields)
+        sink.finish(fields, settings_record(params))
     except BaseException:
         sink.abort()
         raise

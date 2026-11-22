@@ -2,6 +2,7 @@
 
 import dataclasses
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -307,6 +308,45 @@ def test_rerun_keeps_the_saved_failure_flag(recording, tmp_path, monkeypatch):
     assert digests(adata) == before  # reused, not registered again
     assert fields["registration_failed"][0, 0]
     assert read_trial_table(table).motion_correction["registration_failed"]
+
+
+def test_rerun_with_other_settings_registers_again(
+    recording, tmp_path, monkeypatch
+):
+    """Outputs are reused only if made with the requested settings."""
+    from giant_python.pipeline.register import register_multiroi
+    from giant_python.registration.outputs import SETTINGS_ATTR
+
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    table = one_trial_table(layout, tmp_path)
+    execution = {"device": "cpu", "max_workers": 1}
+    sequential = {"maxshift": 5, "save_tif": False}
+    grow = dict(sequential, schedule="grow")
+    fields = register_multiroi(table, sequential, execution=execution)
+    adata = tmp_path / "motion_correction" / fields["fn_adata"][0, 0]
+    first = digests(adata)
+    assert "growthQC" not in load_struct_h5(adata)
+
+    fields = register_multiroi(table, grow, execution=execution)
+    assert digests(adata) != first  # registered again
+    assert "growthQC" in load_struct_h5(adata)
+    mc = read_trial_table(table).motion_correction
+    assert mc["align_params"]["schedule"] == "grow"
+    with h5py.File(adata) as f:
+        saved = json.loads(f.attrs[SETTINGS_ATTR])
+    assert saved["schedule"] == "grow" and saved["maxshift"] == 5
+    assert "overwriteExisting" not in saved
+
+    grown = digests(adata)
+    register_multiroi(table, grow, execution=execution)
+    assert digests(adata) == grown  # same settings: reused
+
+    with h5py.File(adata, "r+") as f:  # outputs that do not record them
+        del f.attrs[SETTINGS_ATTR]
+    register_multiroi(table, grow, execution=execution)
+    with h5py.File(adata) as f:
+        assert SETTINGS_ATTR in f.attrs
 
 
 def test_trial_table_update_keeps_other_entries(tmp_path, monkeypatch):

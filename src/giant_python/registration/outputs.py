@@ -6,6 +6,8 @@
 * ``<trial>_ALIGNMENTDATA.h5``: the alignment struct written column-major by
   ``saveStructToH5``. Its per-frame variance factor is streamed to disk while
   frames are registered; the file is complete only after :meth:`finish`.
+  The settings that produced it are recorded as a JSON root attribute
+  (:data:`SETTINGS_ATTR`), which struct readers ignore.
 
 Both are written under temporary names (``<name>.partial``) and moved into
 place together by :func:`publish` once both are complete, the alignment file
@@ -14,13 +16,15 @@ that fails while publishing leaves no alignment file, so the trial is not
 mistaken for registered.
 """
 
+import json
+import math
 import os
 import warnings
 import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import h5py
 import numpy as np
@@ -29,6 +33,34 @@ from ..io.hdf5 import write_matlab_value
 
 PIXELS_PER_CM = 4e4
 """Resolution tag of the registered TIFF (250 nm pixels), as in MATLAB."""
+
+SETTINGS_ATTR = "align_params"
+"""Root attribute of an alignment file: JSON of :func:`settings_record`."""
+
+
+def settings_record(params) -> dict:
+    """The settings that produced a trial's outputs, as saved with them.
+
+    The trial table's ``align_params`` fields (MATLAB names) without
+    ``overwriteExisting``, which only decides whether outputs are made;
+    NaN (no junction limit) is stored as None.
+
+    Parameters
+    ----------
+    params : MultiRoiRegistrationParams
+        Settings of the registration.
+
+    Returns
+    -------
+    dict
+        JSON-serializable record.
+    """
+    record = params.to_matlab()
+    record.pop("overwriteExisting")
+    return {
+        key: None if isinstance(value, float) and math.isnan(value) else value
+        for key, value in record.items()
+    }
 
 
 class _Background:
@@ -257,7 +289,7 @@ class AlignmentFile:
         """Queue frame ``index``'s ``(rows, cols)`` variance factor."""
         self._bg.submit(self._var.store, index, self._var.prepare(var_factor))
 
-    def finish(self, fields: dict) -> None:
+    def finish(self, fields: dict, settings: Optional[dict] = None) -> None:
         """Write the remaining fields and close the (still temporary) file.
 
         Parameters
@@ -265,6 +297,9 @@ class AlignmentFile:
         fields : dict
             Struct fields as accepted by ``write_matlab_value``; entries of a
             ``'slap2'`` dict go into the existing ``/slap2`` group.
+        settings : dict, optional
+            :func:`settings_record` of the registration, saved as the root
+            attribute :data:`SETTINGS_ATTR`.
         """
         self._bg.close()
         fields = dict(fields)
@@ -275,6 +310,8 @@ class AlignmentFile:
         for key, value in slap2.items():
             write_matlab_value(grp, key, value)
         self._f.create_dataset("row_major", data=np.zeros((1, 1), np.uint8))
+        if settings is not None:
+            self._f.attrs[SETTINGS_ATTR] = json.dumps(settings, sort_keys=True)
         self._f.close()
 
     def abort(self) -> None:

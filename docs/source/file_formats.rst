@@ -159,8 +159,12 @@ deflate-compressed by default (``var_factor_deflate``); readers that use the
 HDF5 library, MATLAB's ``h5read`` included, see the same values. Raster
 recordings can be registered in Python (``giant_python.registration``,
 ``giant register``), which writes the MultiRoiRegistration fields below in
-MATLAB layout (``row_major = 0``); band registration is external. The tree
-includes fields not consumed by BandSILo::
+MATLAB layout (``row_major = 0``); band registration is external. Python
+registration also saves the settings it used as a JSON string attribute
+``align_params`` of the root group (the trial table's ``align_params``
+fields except ``overwriteExisting``); struct readers ignore it, and
+``register_multiroi`` keeps existing outputs only if it matches the
+requested settings. The tree includes fields not consumed by BandSILo::
 
    <trial_stem>_ALIGNMENTDATA.h5
    ├── row_major

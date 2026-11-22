@@ -9,6 +9,7 @@ kept), as ``MultiRoiRegistration.m`` does. The table must be MATLAB-written
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -89,23 +90,47 @@ def _register_job(job: dict) -> dict:
         return {"failed": True, "error": repr(exc)}
 
 
-def _reusable(movie: Path, adata: Path) -> Optional[bool]:
+def _reusable(movie: Path, adata: Path, settings: dict) -> Optional[bool]:
     """Whether a trial's existing outputs can be kept, and their status.
+
+    Outputs are kept only if their alignment file records the requested
+    settings, so that ``align_params`` describes every output in the
+    table. Outputs made with other settings, or that do not record theirs
+    (e.g. MATLAB's), are registered again.
+
+    Parameters
+    ----------
+    movie, adata : Path
+        The trial's registered movie and alignment file.
+    settings : dict
+        :func:`~giant_python.registration.outputs.settings_record` of the
+        requested registration.
 
     Returns
     -------
     bool or None
-        The alignment file's ``registrationFailed`` if both files exist
-        and it can be read; otherwise None (register the trial again).
+        The alignment file's ``registrationFailed`` if the outputs can be
+        kept; otherwise None (register the trial again).
     """
+    from ..registration.outputs import SETTINGS_ATTR
+
     if not (movie.exists() and adata.exists()):
         return None
     try:
         with h5py.File(adata, "r") as f:
-            return bool(np.asarray(f["registrationFailed"][()]).ravel()[0])
-    except (OSError, KeyError, IndexError):
+            saved = f.attrs.get(SETTINGS_ATTR)
+            failed = bool(np.asarray(f["registrationFailed"][()]).ravel()[0])
+        saved = None if saved is None else json.loads(saved)
+    except (OSError, KeyError, IndexError, ValueError):
         log.info("%s cannot be read; registering again", adata.name)
         return None
+    if saved != settings:
+        log.info(
+            "%s does not record the requested settings; registering again",
+            adata.name,
+        )
+        return None
+    return failed
 
 
 def _stage(grp: h5py.Group, fields: dict) -> dict:
@@ -181,6 +206,7 @@ def register_multiroi(
         ``fn_adata``, ``registration_failed`` and ``align_params``.
     """
     from ..registration.multiroi import resolve_device
+    from ..registration.outputs import settings_record
 
     params, execution = resolve_registration_options(params, execution)
     path = Path(trial_table)
@@ -200,6 +226,7 @@ def register_multiroi(
     moco = Path(tt.savedr) / "motion_correction"
     moco.mkdir(parents=True, exist_ok=True)
     device = resolve_device(execution.device)
+    settings = settings_record(params)
     fn_reg = np.empty((n_dmd, n_trials), dtype=object)
     fn_adata = np.empty((n_dmd, n_trials), dtype=object)
     failed = np.zeros((n_dmd, n_trials), dtype=bool)
@@ -209,7 +236,7 @@ def register_multiroi(
             movie, adata = output_names(epoch[d, t], t + 1, d + 1, params)
             fn_reg[d, t], fn_adata[d, t] = movie, adata
             if not params.overwrite_existing:
-                saved = _reusable(moco / movie, moco / adata)
+                saved = _reusable(moco / movie, moco / adata, settings)
                 if saved is not None:
                     log.info("%s is already registered; skipping", adata)
                     failed[d, t] = saved  # as recorded when registered

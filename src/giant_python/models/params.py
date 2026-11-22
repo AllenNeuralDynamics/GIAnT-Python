@@ -159,7 +159,9 @@ class MultiRoiRegistrationParams:
     alpha : float
         Unused template decay (kept for parity with MATLAB's parameters).
     overwrite_existing : bool
-        Re-register trials whose outputs exist.
+        Re-register trials whose outputs exist. Otherwise existing outputs
+        are kept if they were made with the same settings (all fields but
+        this one), and registered again if not.
     save_tif : bool
         Save the registered movie as TIFF (else HDF5 ``/data``).
     ref_stack_template, is_revolt, include_integration_rois : bool
