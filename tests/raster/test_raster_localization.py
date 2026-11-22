@@ -1,0 +1,165 @@
+"""Tests of the multi-ROI (raster) SiLo localization port and its options."""
+
+from pathlib import Path
+
+import h5py
+import numpy as np
+import pytest
+
+from giant_python.extraction.raster.localization import (
+    RasterLocalizationParams,
+    activity_score,
+    gauss_filter,
+    localize_sources,
+    matlab_prctile,
+    movmean_nan,
+    movmedian_nan,
+)
+
+FIXTURE = Path(__file__).parent / "data" / "matlab_localization.h5"
+
+
+def _fixture():
+    """The synthetic trial and GIAnT-MATLAB's results on it.
+
+    HDF5 holds MATLAB's (rows, cols, frames) arrays as (frames, cols, rows).
+    """
+    with h5py.File(FIXTURE, "r") as f:
+        movie = f["movie"][()].transpose(0, 2, 1)
+        vf = f["var_factor"][()].transpose(0, 2, 1)
+        base = f["baseline"][()].transpose(0, 2, 1)
+        ref = {}
+        for kind in ("movmedian", "external"):
+            g = f["matlab"][kind]
+            ref[kind] = dict(
+                act_im=g["act_im"][()].T,
+                summary=g["summary"][()].T,
+                peaks={
+                    th: np.atleast_2d(g[f"peaks_{th}"][()].T)
+                    for th in (3, 5, 8)
+                },
+            )
+    return movie, vf, base, ref
+
+
+def _seed_offsets(py, ml):
+    """Distance from each MATLAB seed (1-based) to the nearest Python seed."""
+    if ml.size == 0 or py.size == 0:
+        return np.array([])
+    d = np.hypot(
+        ml[:, 1:2] - 1 - py[None, :, 1], ml[:, 2:3] - 1 - py[None, :, 2]
+    )
+    return d.min(1)
+
+
+@pytest.mark.parametrize("kind", ["movmedian", "external"])
+def test_matches_matlab(kind):
+    """Activity image, summary and seeds agree with GIAnT-MATLAB."""
+    movie, vf, base, ref = _fixture()
+    r = localize_sources(
+        movie,
+        vf,
+        RasterLocalizationParams(),
+        base if kind == "external" else None,
+    )
+    want = ref[kind]
+    assert np.array_equal(np.isnan(r.act_im), np.isnan(want["act_im"]))
+    ok = np.isfinite(want["act_im"])
+    scale = np.max(np.abs(want["act_im"][ok]))
+    assert np.max(np.abs(r.act_im[ok] - want["act_im"][ok])) < 1e-3 * scale
+    ok = np.isfinite(want["summary"])
+    assert np.corrcoef(r.summary[ok], want["summary"][ok])[0, 1] > 0.99999
+    for th in (5, 8):
+        from giant_python.extraction.raster.peaks import get_act_im_peaks
+
+        py = get_act_im_peaks(r.summary, th)
+        ml = want["peaks"][th]
+        assert py.shape[0] == ml.shape[0]
+        assert np.all(_seed_offsets(py, ml) < 0.1)
+
+
+def test_peak_port_on_matlab_summary():
+    """Seeds from MATLAB's own summary image agree with MATLAB's seeds."""
+    from giant_python.extraction.raster.peaks import get_act_im_peaks
+
+    _, _, _, ref = _fixture()
+    for kind in ("movmedian", "external"):
+        for th in (3, 5, 8):
+            ml = ref[kind]["peaks"][th]
+            py = get_act_im_peaks(ref[kind]["summary"], th)
+            assert abs(py.shape[0] - ml.shape[0]) <= max(1, 0.1 * ml.shape[0])
+            assert np.mean(_seed_offsets(py, ml) < 0.1) >= 0.9
+
+
+def test_moving_windows_match_matlab():
+    """smoothdata movmean/movmedian with 'omitnan' and an even window."""
+    x = np.array([1, np.nan, 3, 4, np.nan, 6, 7, 8, 9, 10], np.float32)
+    mean = movmean_nan(x[:, None], 4).ravel()
+    med = movmedian_nan(x[:, None], 4).ravel()
+    np.testing.assert_allclose(
+        mean, [1, 2, 8 / 3, 3.5, 13 / 3, 17 / 3, 7, 7.5, 8.5, 9], rtol=1e-6
+    )
+    np.testing.assert_allclose(med, [1, 2, 3, 3.5, 4, 6, 7, 7.5, 8.5, 9])
+    assert matlab_prctile(np.array([3, 1, 4, 1, 5, 9, 2, 6.0]), 90) == (
+        pytest.approx(8.1)
+    )
+
+
+def test_no_surround_is_the_gaussian_alone():
+    """surround=False: the spatial filter is the Gaussian, without the DoG."""
+    rng = np.random.default_rng(0)
+    z = rng.standard_normal((40, 30, 32)).astype(np.float32)
+    nans = np.zeros(z.shape, bool)
+    p0 = RasterLocalizationParams(surround=False)
+    sk, _ = activity_score(z.copy(), nans, p0)
+    # the same score by hand: exponential filter, Gaussian, maxima squared
+    from giant_python.extraction.raster.localization import temporal_filter
+
+    g = gauss_filter(temporal_filter(z.copy(), p0.tau_frames), p0.sigma_px)
+    sk_with, _ = activity_score(z.copy(), nans, RasterLocalizationParams())
+    assert not np.allclose(sk, sk_with)
+    last = g.shape[0] - int(np.ceil(1.5 * p0.tau_frames))
+    from scipy import ndimage
+
+    want = np.zeros(g.shape[1:])
+    for fr in range(1, last):
+        mx = ndimage.maximum_filter(g[fr], 3, mode="constant", cval=0)
+        is_max = (g[fr] == mx) & (g[fr] > g[fr - 1]) & (g[fr] >= g[fr + 1])
+        want[is_max] += g[fr][is_max].astype(float) ** 2
+    want /= 300 + (last - 1)
+    # the 3x3 maximum at the border sees MATLAB's zero padding in both
+    np.testing.assert_allclose(sk, want, rtol=1e-5, atol=1e-9)
+
+
+def test_soft_threshold_ignores_noise_maxima():
+    """Maxima below soft_th add nothing; a strong event still scores."""
+    rng = np.random.default_rng(1)
+    z = rng.standard_normal((300, 24, 24)).astype(np.float32)
+    nans = np.zeros(z.shape, bool)
+    p = RasterLocalizationParams(score="soft_threshold", soft_th=2.0)
+    sk_noise, sd = activity_score(z.copy(), nans, p)
+    sk_sq, _ = activity_score(z.copy(), nans, RasterLocalizationParams())
+    assert sd > 0
+    assert np.mean(sk_noise == 0) > 0.5 > np.mean(sk_sq == 0)
+    z[150:153, 12, 12] += 40
+    sk_ev, _ = activity_score(z.copy(), nans, p, sd)
+    assert np.unravel_index(np.argmax(sk_ev), sk_ev.shape) == (12, 12)
+
+
+def test_params_validation():
+    """Unknown option values are rejected."""
+    with pytest.raises(ValueError):
+        RasterLocalizationParams(null="signflip")
+    with pytest.raises(ValueError):
+        RasterLocalizationParams(score="energy")
+    with pytest.raises(ValueError):
+        RasterLocalizationParams(null_draws=0)
+    with pytest.raises(ValueError):
+        RasterLocalizationParams(soft_th=-1)
+
+
+def test_external_baseline_shape_checked():
+    """An external baseline must have the movie's shape."""
+    movie = np.ones((50, 10, 10), np.float32)
+    with pytest.raises(ValueError):
+        localize_sources(movie, None, baseline=np.ones((50, 10, 9)))
