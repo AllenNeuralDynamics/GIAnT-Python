@@ -164,3 +164,12 @@ def test_external_baseline_shape_checked():
     movie = np.ones((50, 10, 10), np.float32)
     with pytest.raises(ValueError):
         localize_sources(movie, None, baseline=np.ones((50, 10, 9)))
+
+
+def test_no_variance_floor_needs_an_external_baseline():
+    """Without the floor, the moving median's low bias at low counts would
+    blow up dim pixels' Z-scores, so an external baseline is required."""
+    movie = np.ones((50, 10, 10), np.float32)
+    p = RasterLocalizationParams(variance_floor=False)
+    with pytest.raises(ValueError, match="external baseline"):
+        localize_sources(movie, None, p)

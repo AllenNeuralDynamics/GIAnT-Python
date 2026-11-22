@@ -28,7 +28,8 @@ Options, all off by default (:class:`RasterLocalizationParams`):
   through the same filters (:mod:`giant_python.extraction.raster.null`), so
   that one threshold means one false-positive rate on dim and bright pixels.
 * ``variance_floor=False`` drops ``Vb`` from the Z-score's variance (meant with
-  the bootstrap null, which handles the dim pixels).
+  the bootstrap null, which handles the dim pixels). It needs an external
+  baseline: the moving median is biased low at low counts.
 * ``score="soft_threshold"`` sums ``max(0, u - soft_th)^2`` at the local maxima
   instead of their squares, with ``u`` the filtered value in robust SD units,
   so noise maxima add nothing.
@@ -414,6 +415,10 @@ def localize_sources(  # noqa: C901
     RasterLocalization
     """
     p = params or RasterLocalizationParams()
+    if not p.variance_floor and baseline is None:
+        # the moving median is biased low at low counts (often 0), so without
+        # the floor dim pixels' Z-scores blow up (4x lower AP on simulations)
+        raise ValueError("variance_floor=False needs an external baseline")
     movie = np.asarray(movie)
     n_t = movie.shape[0]
     baseline_window = math.ceil(p.baseline_window_s * p.align_hz)
