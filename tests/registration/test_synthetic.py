@@ -265,6 +265,78 @@ def test_register_multiroi_updates_trial_table(
     assert mc["registration_failed"].dtype == np.int8
 
 
+def test_trial_table_update_keeps_other_entries(tmp_path, monkeypatch):
+    """Only the registration fields are replaced, once all are written.
+
+    Other entries of the group and their attributes are left untouched.
+    """
+    from giant_python.pipeline import register
+
+    table = tmp_path / "trial_table.h5"
+    save_struct_h5(
+        table,
+        {
+            "datadr": "d",
+            "motion_correction": {
+                "keep_me": 7.0,
+                "fn_adata": "old.h5",
+                "align_params": {"old_only": 1.0},
+            },
+        },
+    )
+    with h5py.File(table, "r+") as f:
+        mc = f["motion_correction"]
+        mc.attrs["note"] = "kept"
+        mc["keep_me"].attrs["unit"] = "px"
+        mc.create_dataset("empty", shape=(0, 0), dtype=np.float64)
+        nested = mc.create_group("nested")
+        nested.create_dataset("row_major", data=np.zeros((1, 1), np.uint8))
+    fields = {
+        "fn_adata": np.array([["new.h5"]], dtype=object),
+        "registration_failed": np.array([[True]]),
+        "align_params": {"alignHz": 80.0},
+    }
+    write = register.write_matlab_value
+
+    def fail_on_align_params(grp, key, value):
+        """Fail while writing the last field."""
+        if key.startswith("align_params"):
+            raise OSError("disk full")
+        write(grp, key, value)
+
+    def entries():
+        """Every entry under motion_correction."""
+        names = []
+        with h5py.File(table) as f:
+            f["motion_correction"].visit(names.append)
+        return set(names)
+
+    kept = {"keep_me", "empty", "nested", "nested/row_major"}
+    with monkeypatch.context() as m:
+        m.setattr(register, "write_matlab_value", fail_on_align_params)
+        with pytest.raises(OSError):
+            register._update_trial_table(table, fields)
+    old = {"fn_adata", "align_params", "align_params/old_only"}
+    assert entries() == kept | old
+    assert load_struct_h5(table)["motion_correction"]["fn_adata"] == "old.h5"
+    register._update_trial_table(table, fields)
+    assert entries() == kept | {
+        "fn_adata",
+        "registration_failed",
+        "align_params",
+        "align_params/alignHz",
+    }
+    with h5py.File(table) as f:
+        mc = f["motion_correction"]
+        assert mc.attrs["note"] == "kept"
+        assert mc["keep_me"].attrs["unit"] == "px"
+        assert mc["empty"].shape == (0, 0)
+    mc = load_struct_h5(table)["motion_correction"]
+    assert mc["fn_adata"] == "new.h5"
+    assert mc["registration_failed"].item() == 1
+    assert mc["align_params"]["alignHz"].item() == 80.0
+
+
 def test_register_multiroi_keeps_fractional_lines(
     recording, tmp_path, monkeypatch
 ):

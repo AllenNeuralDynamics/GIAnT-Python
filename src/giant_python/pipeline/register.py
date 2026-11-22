@@ -1,9 +1,9 @@
 """Register every trial of a SLAP2 raster trial table (MultiRoiRegistration).
 
 Outputs go to ``<savedr>/motion_correction`` with GIAnT-MATLAB's names, and
-the trial table's ``motion_correction`` group is rewritten in place (other
-groups and other ``motion_correction`` fields are kept), as
-``MultiRoiRegistration.m`` does. The table must be MATLAB-written
+the registration fields of the trial table's ``motion_correction`` group are
+replaced in place (other groups and other ``motion_correction`` entries are
+kept), as ``MultiRoiRegistration.m`` does. The table must be MATLAB-written
 (column-major).
 """
 
@@ -18,7 +18,7 @@ from typing import Union
 import h5py
 import numpy as np
 
-from ..io.hdf5 import _read_group, write_matlab_value
+from ..io.hdf5 import write_matlab_value
 from ..io.trial_table import read_trial_table
 from ..models.params import (
     ExecutionInput,
@@ -89,8 +89,37 @@ def _register_job(job: dict) -> dict:
         return {"failed": True, "error": repr(exc)}
 
 
+def _stage(grp: h5py.Group, fields: dict) -> dict:
+    """Write each field under a staged name; remove them all on failure.
+
+    Returns
+    -------
+    dict
+        The staged name of each field.
+    """
+    # '.' cannot occur in MATLAB field names
+    staged = {key: f"{key}.staged" for key in fields}
+    try:
+        for key, value in fields.items():
+            if staged[key] in grp:
+                del grp[staged[key]]
+            write_matlab_value(grp, staged[key], value)
+    except BaseException:
+        for name in staged.values():
+            if name in grp:
+                del grp[name]
+        raise
+    return staged
+
+
 def _update_trial_table(path: Path, fields: dict) -> None:
-    """Rewrite the table's ``motion_correction`` group, keeping its others."""
+    """Replace ``fields`` in the table's ``motion_correction`` group.
+
+    Other entries of the group (and their attributes) are left as they
+    are. Every new value is first written under a staged name; old values
+    are deleted only once all are written, so a failure while writing
+    leaves the table unchanged.
+    """
     with h5py.File(path, "r+") as f:
         flag = f.get("row_major")
         if flag is not None and int(np.asarray(flag[()]).ravel()[0]) != 0:
@@ -98,12 +127,13 @@ def _update_trial_table(path: Path, fields: dict) -> None:
                 "only MATLAB-written (column-major) trial tables can be "
                 "updated"
             )
-        existing = {}
-        if "motion_correction" in f:
-            existing = _read_group(f["motion_correction"], row_major=False)
-            del f["motion_correction"]
-        existing.update(fields)
-        write_matlab_value(f, "motion_correction", existing)
+        grp = f.require_group("motion_correction")
+        staged = _stage(grp, fields)
+        for key, name in staged.items():
+            if key in grp:
+                del grp[key]
+            if name in grp:  # empty values are not written, as in MATLAB
+                grp.move(name, key)
 
 
 def register_multiroi(
