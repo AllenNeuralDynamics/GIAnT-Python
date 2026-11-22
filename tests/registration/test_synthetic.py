@@ -134,9 +134,7 @@ def test_failed_rerun_keeps_the_previous_outputs(
     """A run that fails while writing leaves an existing pair as it was."""
     layout, _ = recording
     monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
-    params = multiroi.MultiRoiRegistrationParams(
-        maxshift=5, save_tif=save_tif
-    )
+    params = multiroi.MultiRoiRegistrationParams(maxshift=5, save_tif=save_tif)
     movie = tmp_path / ("m.tif" if save_tif else "m.h5")
     adata = tmp_path / "a.h5"
     args = (layout.files[0], 1, 3000, movie, adata, params)
@@ -462,6 +460,40 @@ def test_rerun_with_other_settings_registers_again(
     register_multiroi(table, grow, execution=execution)
     with h5py.File(adata) as f:
         assert SETTINGS_ATTR in f.attrs
+
+
+def test_failed_rerun_does_not_name_the_old_outputs(
+    recording, tmp_path, monkeypatch
+):
+    """A re-registration that raises leaves the old files on disk but
+    clears their names, so the table never pairs them with new settings."""
+    from giant_python.pipeline.register import register_multiroi
+
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    table = one_trial_table(layout, tmp_path)
+    execution = {"device": "cpu", "max_workers": 1}
+    sequential = {"maxshift": 5, "save_tif": False}
+    fields = register_multiroi(table, sequential, execution=execution)
+    moco = tmp_path / "motion_correction"
+    files = [moco / fields["fn_reg_ds"][0, 0], moco / fields["fn_adata"][0, 0]]
+    before = digests(*files)
+
+    def fail(*args, **kwargs):
+        """Fail before anything is published."""
+        raise OSError("disk full")
+
+    monkeypatch.setattr(multiroi, "register_trial", fail)
+    fields = register_multiroi(
+        table, dict(sequential, schedule="grow"), execution=execution
+    )
+    assert fields["fn_reg_ds"][0, 0] == fields["fn_adata"][0, 0] == ""
+    assert fields["registration_failed"][0, 0]
+    assert digests(*files) == before
+    mc = read_trial_table(table).motion_correction
+    assert mc["fn_reg_ds"] == mc["fn_adata"] == ""
+    assert mc["registration_failed"]
+    assert mc["align_params"]["schedule"] == "grow"
 
 
 def test_trial_table_update_keeps_other_entries(tmp_path, monkeypatch):

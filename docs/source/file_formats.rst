@@ -404,11 +404,13 @@ Trial table fields
    * - ``motion_correction/fn_reg_ds``
      - nPaths x total trials
      - string
-     - Registered and downsampled TIFF filename.
+     - Registered and downsampled TIFF filename (empty where Python
+       registration raised).
    * - ``motion_correction/fn_adata``
      - nPaths x total trials
      - string
-     - Alignment metadata ``_ALIGNMENTDATA.h5`` filename.
+     - Alignment metadata ``_ALIGNMENTDATA.h5`` filename (empty where
+       Python registration raised).
    * - ``motion_correction/fn_raw``
      - nPaths x total trials
      - string

@@ -133,6 +133,19 @@ def _reusable(movie: Path, adata: Path, settings: dict) -> Optional[bool]:
     return failed
 
 
+def _record(results, where, failed, fn_reg, fn_adata) -> None:
+    """Enter each job's outcome in the trial table's grids.
+
+    A trial whose registration raised published nothing; files left from
+    an earlier run were made with other settings, so its filenames are
+    cleared (the files stay on disk).
+    """
+    for (d, t), res in zip(where, results):
+        failed[d, t] = res["failed"]
+        if res["error"] is not None:
+            fn_reg[d, t] = fn_adata[d, t] = ""
+
+
 def _stage(grp: h5py.Group, fields: dict) -> dict:
     """Write each field under a staged name; remove them all on failure.
 
@@ -203,7 +216,8 @@ def register_multiroi(
     -------
     dict
         The ``motion_correction`` fields written: ``fn_reg_ds``,
-        ``fn_adata``, ``registration_failed`` and ``align_params``.
+        ``fn_adata``, ``registration_failed`` and ``align_params``. Trials
+        whose registration raised are failed and have empty filenames.
     """
     from ..registration.multiroi import resolve_device
     from ..registration.outputs import settings_record
@@ -270,8 +284,7 @@ def register_multiroi(
         n_workers=workers,
         desc="Registering" if execution.verbose else None,
     )
-    for (d, t), res in zip(where, results):
-        failed[d, t] = res["failed"]
+    _record(results, where, failed, fn_reg, fn_adata)
     align = params.to_matlab()
     align["nWorkers"] = float(workers)
     align["device"] = str(device)
