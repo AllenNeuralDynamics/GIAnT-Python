@@ -5,11 +5,11 @@
 
 GIAnT-Python is a Python package for processing glutamate imaging data, with advanced capabilities for SLAP2 recordings.
 
-Currently, **SLAP2 Band Scan processing** is implemented (**BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings), and the per-trial **localization of SILo for raster (multi-ROI) recordings**. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
+Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's MultiRoiRegistration, on the CPU or a CUDA GPU), the per-trial **localization of SILo for raster (multi-ROI) recordings**, and **SLAP2 Band Scan processing**: **BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
 
 ## Requirements and scope
 
-Provide an existing trial table, raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python consumes these inputs; it does not organize or register recordings. Standard SILo (apart from its per-trial raster localization, below), standalone deconvolution, trial-table writing, config-file loading, and checkpoint/resume are not supported.
+Provide an existing trial table, raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. Standard SILo (apart from its per-trial raster localization, below), standalone deconvolution, general trial-table writing, config-file loading, and checkpoint/resume are not supported.
 
 Analysis trials come from the supplied table; Python does not split or merge them.
 
@@ -24,6 +24,28 @@ pip install -e .
 Installation requires Git/network access for the `slap2_utils` dependency. Interactive ROI drawing uses OpenCV and tkinter; tkinter must be available in the Python installation. Headless extraction does not need a display.
 
 For development setup and documentation builds, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Register raster recordings
+
+`register_multiroi` registers every trial and DMD path of a MATLAB-written trial table, as GIAnT-MATLAB's `MultiRoiRegistration` does, and writes the same files: `E<epoch>T<trial>DMD<path>_REGISTERED_DOWNSAMPLED-80Hz.tif` (or `.h5`) and `..._ALIGNMENTDATA.h5` under `<savedr>/motion_correction`. It then rewrites the table's `motion_correction` group in MATLAB's layout, so GIAnT-MATLAB SILo can use the results unchanged.
+
+```python
+from giant_python import ExecutionOptions, register_multiroi
+
+register_multiroi(
+    "path/to/trial_table.h5",
+    {"align_hz": 80},  # MultiRoiRegistrationParams fields
+    execution=ExecutionOptions(device="auto", max_workers=6, verbose=True),
+)
+```
+
+or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run in `max_workers` parallel processes; on a GPU, one at a time. The command lists trials flagged `registrationFailed` and exits with status 1 if the registration of any trial raised (those trials get no outputs and empty filenames). Cells of a ragged trial table without a recording are skipped: their filenames stay empty and they are flagged `registration_failed`.
+
+- By default frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding. `schedule="grow"` instead matches frames in batches, growing outward from seed frames spread over the trial (see `giant_python.registration.growth`); it is experimental and gives slightly different motion.
+- `compensate_online=True` (`--compensate-online`) undoes the online motion correction line by line, as MATLAB's `compensateOnline` does. The alignment file then records each frame's reference offset (`slap2/onlineCompensation`).
+- `varFacDS` is stored deflate-compressed (`var_factor_deflate=1`, about 16x smaller, identical values; MATLAB's `h5read` decompresses transparently). Set it to 0 for MATLAB's uncompressed layout. Registered movies stay TIFF by default; `save_tif=False` (`--h5`) writes a deflated HDF5 movie (`movie_deflate=1`, about 7x smaller), which MATLAB SILo also reads.
+- Not yet ported: `refStackTemplate`, `isReVolt` and integration ROIs. Setting any of them raises `NotImplementedError`.
+- Only single-plane recordings with one or two channels are supported.
 
 ## Run BandSILo
 
