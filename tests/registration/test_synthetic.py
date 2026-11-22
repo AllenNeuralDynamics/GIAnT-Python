@@ -1,6 +1,8 @@
 """Reader, frame formation and registration on a synthetic recording."""
 
 import dataclasses
+import hashlib
+import os
 from pathlib import Path
 
 import h5py
@@ -117,6 +119,78 @@ def test_register_trial_recovers_motion(recording, tmp_path, monkeypatch):
     )
     np.testing.assert_array_equal(a["DSframes"].ravel(), res.ds_frames)
     assert not (tmp_path / "a.h5.partial").exists()
+
+
+def digests(*paths):
+    """SHA-256 of each file."""
+    return [hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths]
+
+
+@pytest.mark.parametrize("save_tif", [True, False])
+def test_failed_rerun_keeps_the_previous_outputs(
+    recording, tmp_path, monkeypatch, save_tif
+):
+    """A run that fails while writing leaves an existing pair as it was."""
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(
+        maxshift=5, save_tif=save_tif
+    )
+    movie = tmp_path / ("m.tif" if save_tif else "m.h5")
+    adata = tmp_path / "a.h5"
+    args = (layout.files[0], 1, 3000, movie, adata, params)
+    multiroi.register_trial(*args)
+    before = digests(movie, adata)
+    add = multiroi.OutputSink.add
+
+    def fail_midway(self, k, regs, var_factor):
+        """Write 50 frames, then fail."""
+        if k == 50:
+            raise OSError("disk full")
+        return add(self, k, regs, var_factor)
+
+    def fail_at_the_end(*args, **kwargs):
+        """Fail after the movie is complete."""
+        raise OSError("disk full")
+
+    for target, name, fail in (
+        (multiroi.OutputSink, "add", fail_midway),
+        (multiroi, "alignment_fields", fail_at_the_end),
+    ):
+        with monkeypatch.context() as m:
+            m.setattr(target, name, fail)
+            with pytest.raises(OSError):
+                multiroi.register_trial(*args)
+        assert digests(movie, adata) == before
+        assert sorted(tmp_path.iterdir()) == sorted([movie, adata])
+
+
+def test_interrupted_publish_leaves_no_alignment_file(
+    recording, tmp_path, monkeypatch
+):
+    """A pair that cannot be moved into place leaves no alignment file.
+
+    The movie may then be new, but without an alignment file the trial is
+    not taken for registered.
+    """
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(maxshift=5, save_tif=False)
+    movie, adata = tmp_path / "m.h5", tmp_path / "a.h5"
+    args = (layout.files[0], 1, 3000, movie, adata, params)
+    multiroi.register_trial(*args)
+    replace = os.replace
+
+    def refuse_alignment_file(src, dst):
+        """Fail to move the alignment file into place."""
+        if Path(dst) == adata:
+            raise PermissionError("in use")
+        replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", refuse_alignment_file)
+    with pytest.raises(PermissionError):
+        multiroi.register_trial(*args)
+    assert sorted(tmp_path.iterdir()) == [movie]
 
 
 def test_register_trial_keeps_fractional_lines(

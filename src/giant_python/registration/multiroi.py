@@ -34,6 +34,7 @@ from .outputs import (
     MovieWriter,
     downsample2,
     matlab_round,
+    publish,
     rec_neg_err,
 )
 from .sources import make_source
@@ -169,6 +170,9 @@ def build_template(source, init, params, dtype):
 class OutputSink:
     """Accumulate per-frame outputs: movie pages, variance factors, means.
 
+    The movie and the alignment file are written under temporary names and
+    replace any existing pair only in :meth:`finish`.
+
     Parameters
     ----------
     movie_path, adata_path : str or Path
@@ -211,9 +215,13 @@ class OutputSink:
             save_tif,
             movie_deflate,
         )
-        self.adata = AlignmentFile(
-            adata_path, out_shape, n_frames, var_deflate
-        )
+        try:
+            self.adata = AlignmentFile(
+                adata_path, out_shape, n_frames, var_deflate
+            )
+        except BaseException:
+            self.movie.abort()
+            raise
 
     def add(self, k: int, regs, var_factor: torch.Tensor) -> torch.Tensor:
         """Record frame ``k``'s registered channels; return their sum."""
@@ -233,10 +241,18 @@ class OutputSink:
         mean = self.sum / torch.clamp(self.count, min=1)
         return mean.masked_fill(self.count < 1, float("nan")).cpu().numpy()
 
-    def abort(self) -> None:
-        """Close the movie and discard the partial alignment file."""
+    def finish(self, fields: dict) -> None:
+        """Complete the alignment file and publish it with the movie."""
         self.movie.close()
-        self.adata.abort()
+        self.adata.finish(fields)
+        publish(self.movie, self.adata)
+
+    def abort(self) -> None:
+        """Discard the partial movie and alignment file."""
+        try:
+            self.movie.abort()
+        finally:
+            self.adata.abort()
 
 
 def register_sequential(
@@ -504,22 +520,22 @@ def register_trial(
                 source, state, ds, params, sink, dtype
             )
             timer.mark("register")
-    except Exception:
+        sink.movie.close()
+        timer.mark("movie")
+        failed = bool(
+            np.std(motion_c, ddof=1) > 1.5 or np.std(motion_r, ddof=1) > 1.5
+        )
+        if failed:
+            log.warning("too much motion in %s; saving anyway", dat_path)
+        fields = alignment_fields(
+            layout, source, ds, motion_r, motion_c, sink, params, failed
+        )
+        if qc is not None:
+            fields["growthQC"] = qc.fields()
+        sink.finish(fields)
+    except BaseException:
         sink.abort()
         raise
-    sink.movie.close()
-    timer.mark("movie")
-    failed = bool(
-        np.std(motion_c, ddof=1) > 1.5 or np.std(motion_r, ddof=1) > 1.5
-    )
-    if failed:
-        log.warning("too much motion in %s; saving anyway", dat_path)
-    fields = alignment_fields(
-        layout, source, ds, motion_r, motion_c, sink, params, failed
-    )
-    if qc is not None:
-        fields["growthQC"] = qc.fields()
-    sink.adata.finish(fields)
     timer.mark("alignment file")
     log.info(
         "timings (s): %s", {k: round(v, 2) for k, v in timer.times.items()}
