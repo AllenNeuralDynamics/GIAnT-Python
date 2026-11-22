@@ -112,10 +112,42 @@ class Timer:
 
 
 def resolve_device(device: str) -> torch.device:
-    """``'auto'`` selects CUDA when available, else the CPU."""
+    """``'auto'`` selects CUDA when available, else the CPU.
+
+    Raises
+    ------
+    ValueError
+        For a CUDA device that is not available.
+    """
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    return torch.device(device)
+    dev = torch.device(device)
+    if dev.type == "cuda" and (
+        not torch.cuda.is_available()
+        or (dev.index or 0) >= torch.cuda.device_count()
+    ):
+        raise ValueError(f"CUDA device {device!r} is not available")
+    return dev
+
+
+def check_layout(layout: RasterLayout) -> None:
+    """Reject recordings that registration does not support.
+
+    Raises
+    ------
+    ValueError
+        For more than one fast-z plane, or channel counts other than 1
+        or 2.
+    """
+    if layout.fast_zs.size != 1:
+        raise ValueError("only single-plane acquisitions are supported")
+    if layout.num_channels not in (1, 2):
+        raise ValueError("only one- or two-channel recordings are supported")
+
+
+def check_recording(dat_path: Union[str, Path]) -> None:
+    """Read a recording's layout and reject it if it is not supported."""
+    check_layout(raster_layout(dat_path))
 
 
 def frame_times(first_line: float, last_line: float, dt: float, n_init: int):
@@ -483,10 +515,7 @@ def open_trial(dat_path, first_line, last_line, params, device):
         Kernel time constant in lines.
     """
     layout = raster_layout(dat_path)
-    if layout.fast_zs.size != 1:
-        raise ValueError("only single-plane acquisitions are supported")
-    if layout.num_channels not in (1, 2):
-        raise ValueError("only one- or two-channel recordings are supported")
+    check_layout(layout)
     p = layout.lines_per_cycle
     dt = (1.0 / layout.line_period_s) / params.align_hz
     dtk = int(np.ceil(dt))

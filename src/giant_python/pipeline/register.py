@@ -5,6 +5,10 @@ the registration fields of the trial table's ``motion_correction`` group are
 replaced in place (other groups and other ``motion_correction`` entries are
 kept), as ``MultiRoiRegistration.m`` does. The table must be MATLAB-written
 (column-major).
+
+A request is validated before anything is written: the table's layout, the
+device, and every recording that will be registered. A rejected request
+leaves the outputs and the table as they were.
 """
 
 from __future__ import annotations
@@ -146,6 +150,36 @@ def _record(results, where, failed, fn_reg, fn_adata) -> None:
             fn_reg[d, t] = fn_adata[d, t] = ""
 
 
+def _check_column_major(f: h5py.File) -> None:
+    """Reject trial tables that are not MATLAB-written (column-major)."""
+    flag = f.get("row_major")
+    if flag is not None and int(np.asarray(flag[()]).ravel()[0]) != 0:
+        raise ValueError(
+            "only MATLAB-written (column-major) trial tables can be updated"
+        )
+
+
+def _check_recordings(jobs: list) -> None:
+    """Reject the request if a recording to register is not supported.
+
+    Each data file is checked once, before anything is written.
+    """
+    from ..registration.multiroi import check_recording
+
+    problems = {}
+    for dat in dict.fromkeys(job["dat"] for job in jobs):
+        try:
+            check_recording(dat)
+        except (OSError, ValueError) as exc:
+            problems[dat] = exc
+    if problems:
+        listed = "; ".join(f"{p.name}: {e}" for p, e in problems.items())
+        raise ValueError(
+            f"{len(problems)} recording(s) cannot be registered, so nothing "
+            f"was written: {listed}"
+        )
+
+
 def _stage(grp: h5py.Group, fields: dict) -> dict:
     """Write each field under a staged name; remove them all on failure.
 
@@ -178,12 +212,7 @@ def _update_trial_table(path: Path, fields: dict) -> None:
     leaves the table unchanged.
     """
     with h5py.File(path, "r+") as f:
-        flag = f.get("row_major")
-        if flag is not None and int(np.asarray(flag[()]).ravel()[0]) != 0:
-            raise ValueError(
-                "only MATLAB-written (column-major) trial tables can be "
-                "updated"
-            )
+        _check_column_major(f)
         grp = f.require_group("motion_correction")
         staged = _stage(grp, fields)
         for key, name in staged.items():
@@ -218,6 +247,13 @@ def register_multiroi(
         The ``motion_correction`` fields written: ``fn_reg_ds``,
         ``fn_adata``, ``registration_failed`` and ``align_params``. Trials
         whose registration raised are failed and have empty filenames.
+
+    Raises
+    ------
+    ValueError
+        Before anything is written, for a row-major trial table, one
+        without ``slap2_info``, an unavailable device, or a recording to
+        register that is not supported (or cannot be read).
     """
     from ..registration.multiroi import resolve_device
     from ..registration.outputs import settings_record
@@ -225,6 +261,8 @@ def register_multiroi(
     params, execution = resolve_registration_options(params, execution)
     path = Path(trial_table)
     start = _now()
+    with h5py.File(path, "r") as f:
+        _check_column_major(f)
     tt = read_trial_table(path)
     if tt.slap2_info is None:
         raise ValueError("the trial table has no slap2_info")
@@ -238,7 +276,6 @@ def register_multiroi(
         n_dmd, n_trials
     )
     moco = Path(tt.savedr) / "motion_correction"
-    moco.mkdir(parents=True, exist_ok=True)
     device = resolve_device(execution.device)
     settings = settings_record(params)
     fn_reg = np.empty((n_dmd, n_trials), dtype=object)
@@ -270,6 +307,8 @@ def register_multiroi(
                 }
             )
             where.append((d, t))
+    _check_recordings(jobs)
+    moco.mkdir(parents=True, exist_ok=True)
     workers = 1
     if device.type == "cpu":
         workers = max(

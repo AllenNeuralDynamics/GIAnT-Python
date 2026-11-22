@@ -513,6 +513,45 @@ def test_failed_rerun_does_not_name_the_old_outputs(
     assert mc["align_params"]["schedule"] == "grow"
 
 
+@pytest.mark.parametrize("case", ["row_major", "channels", "device"])
+def test_rejected_request_writes_nothing(
+    recording, tmp_path, monkeypatch, case
+):
+    """A request that fails validation (a row-major table, an unsupported
+    recording, an unavailable device) leaves outputs and table untouched."""
+    from giant_python.pipeline.register import register_multiroi
+
+    layout, _ = recording
+    lay = layout
+    if case == "channels":
+        lay = dataclasses.replace(layout, num_channels=3)
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: lay)
+    table = one_trial_table(layout, tmp_path)
+    if case == "row_major":
+        with h5py.File(table, "r+") as f:
+            f["row_major"][...] = 1
+    moco = tmp_path / "motion_correction"
+    moco.mkdir()
+    old = [
+        moco / "E3T1DMD1_REGISTERED_DOWNSAMPLED-80Hz.h5",
+        moco / "E3T1DMD1_ALIGNMENTDATA.h5",
+    ]
+    for p in old:
+        p.write_bytes(b"from an earlier run")
+    before = digests(table, *old)
+    with pytest.raises(ValueError):
+        register_multiroi(
+            table,
+            {"maxshift": 5, "save_tif": False, "overwrite_existing": True},
+            execution={
+                "device": "cuda:99" if case == "device" else "cpu",
+                "max_workers": 1,
+            },
+        )
+    assert digests(table, *old) == before
+    assert sorted(moco.iterdir()) == sorted(old)
+
+
 def test_trial_table_update_keeps_other_entries(tmp_path, monkeypatch):
     """Only the registration fields are replaced, once all are written.
 
