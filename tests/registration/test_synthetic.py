@@ -194,6 +194,121 @@ def test_interrupted_publish_leaves_no_alignment_file(
     assert sorted(tmp_path.iterdir()) == [movie]
 
 
+def blank_frames(monkeypatch, blank):
+    """Frames formed at times where ``blank(times)`` holds have no samples."""
+    from giant_python.registration.frames import FrameFormer
+
+    frames = FrameFormer.frames
+
+    def blanked(self, times, dt, channels=None):
+        """The frames, with the selected ones emptied."""
+        vals, fresh = frames(self, times, dt, channels)
+        hit = torch.as_tensor(
+            blank(np.asarray(times).ravel()), device=vals.device
+        )
+        vals[:, hit] = float("nan")
+        fresh[hit] = 0
+        return vals, fresh
+
+    monkeypatch.setattr(FrameFormer, "frames", blanked)
+
+
+@pytest.mark.parametrize("schedule", ["sequential", "grow"])
+def test_frame_without_samples_is_missing(
+    recording, tmp_path, monkeypatch, schedule
+):
+    """A frame without valid samples in mid-trial gets NaN motion and an
+    all-NaN movie frame; the other frames are registered exactly as in a
+    run without that frame, and the trial does not fail."""
+    from giant_python.registration.growth import MISSING
+
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(
+        maxshift=5, save_tif=False, schedule=schedule
+    )
+    dt = (1 / layout.line_period_s) / params.align_hz
+    init, ds = multiroi.frame_times(1, 3000, dt, params.init_frames)
+    k = 70
+    assert ds[k] not in init
+    times = multiroi.frame_times
+    out = {}
+    for name in ("blank", "without"):
+        with monkeypatch.context() as m:
+            if name == "blank":
+                blank_frames(m, lambda t: t == ds[k])
+            else:
+                m.setattr(
+                    multiroi,
+                    "frame_times",
+                    lambda *a: (times(*a)[0], np.delete(times(*a)[1], k)),
+                )
+            out[name] = multiroi.register_trial(
+                layout.files[0],
+                1,
+                3000,
+                tmp_path / f"{name}.h5",
+                tmp_path / f"{name}_a.h5",
+                params,
+            )
+    res, ref = out["blank"], out["without"]
+    assert not res.registration_failed
+    assert np.isnan([res.motion_r[k], res.motion_c[k], res.peak[k]]).all()
+    others = np.arange(ds.size) != k
+    for f in ("motion_r", "motion_c", "peak"):
+        np.testing.assert_array_equal(getattr(res, f)[others], getattr(ref, f))
+    n_ch = layout.num_channels
+    with (
+        h5py.File(tmp_path / "blank.h5") as a,
+        h5py.File(tmp_path / "without.h5") as b,
+    ):
+        pages = a["data"][()]
+        mine = np.s_[k * n_ch : (k + 1) * n_ch]
+        assert np.isnan(pages[mine]).all()
+        np.testing.assert_array_equal(
+            np.delete(pages, mine, axis=0), b["data"][()]
+        )
+    adata = load_struct_h5(tmp_path / "blank_a.h5")
+    want = load_struct_h5(tmp_path / "without_a.h5")
+    assert adata["registrationFailed"].item() == 0
+    assert np.isnan(adata["motionDSr"].ravel()[k])
+    assert np.isnan(adata["slap2"]["varFacDS"][..., k]).all()
+    np.testing.assert_array_equal(adata["meanIM"], want["meanIM"])
+    if schedule == "grow":
+        assert adata["growthQC"]["kind"].ravel()[k] == MISSING
+
+
+@pytest.mark.parametrize("schedule", ["sequential", "grow"])
+def test_trial_without_samples_at_its_start_or_at_all(
+    recording, tmp_path, monkeypatch, schedule
+):
+    """A recording that starts late is registered from its first frames
+    with samples; a trial without any samples completes and is flagged."""
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(
+        maxshift=5, save_tif=False, schedule=schedule
+    )
+    args = (layout.files[0], 1, 3000)
+    with monkeypatch.context() as m:
+        blank_frames(m, lambda t: t < 1200)  # first initial frames too
+        late = multiroi.register_trial(
+            *args, tmp_path / "late.h5", tmp_path / "late_a.h5", params
+        )
+    early = late.ds_frames < 1200
+    assert np.isnan(late.motion_r[early]).all()
+    assert np.isfinite(late.motion_r[late.ds_frames >= 1200]).all()
+    assert not late.registration_failed
+    with monkeypatch.context() as m:
+        blank_frames(m, lambda t: np.ones(t.shape, dtype=bool))
+        empty = multiroi.register_trial(
+            *args, tmp_path / "empty.h5", tmp_path / "empty_a.h5", params
+        )
+    assert np.isnan(empty.motion_r).all() and empty.registration_failed
+    with h5py.File(tmp_path / "empty.h5") as f:
+        assert np.isnan(f["data"][()]).all()
+
+
 def test_register_trial_keeps_fractional_lines(
     recording, tmp_path, monkeypatch
 ):

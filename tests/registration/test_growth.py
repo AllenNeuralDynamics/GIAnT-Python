@@ -210,7 +210,12 @@ def test_sub_round_ends_when_seeds_align_the_last_frame(monkeypatch):
 def test_growth_handles_a_frame_without_valid_samples(
     plain_recording, monkeypatch
 ):
-    """A frame with an undefined correlation keeps its anchor's motion."""
+    """Inside the grower, a frame whose correlation is undefined keeps its
+    anchor's motion and does not stop a realignment chain.
+
+    (``register_grow`` leaves frames without samples out beforehand; this
+    covers frames whose correlation is undefined for other reasons.)
+    """
     from giant_python.registration.growth import FrameCache, Grower
     from giant_python.registration.multiroi import build_template, open_trial
     from giant_python.registration.sources import make_source

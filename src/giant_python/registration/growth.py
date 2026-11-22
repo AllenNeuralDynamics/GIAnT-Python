@@ -32,7 +32,9 @@ once:
    ``polish_radius`` of its motion, to the final template without its own
    contribution.
 
-Outputs are then rendered in frame order, exactly as in sequential mode.
+Frames without valid samples are left out of growth (they neither seed nor
+anchor other frames) and get NaN motion, as in sequential mode. Outputs are
+then rendered in frame order, exactly as in sequential mode.
 """
 
 import logging
@@ -45,11 +47,12 @@ import torch
 from .interpolation import interp_frame
 from .matching import match_maps, peak_index, peak_margin, wide_correlation
 from .outputs import matlab_round
+from .sources import has_samples
 from .template import TemplateState
 
 log = logging.getLogger(__name__)
 
-GROWN, CONSENSUS, SEED, REGROWN, AT_LIMIT = 0, 1, 2, 3, 4
+GROWN, CONSENSUS, SEED, REGROWN, AT_LIMIT, MISSING = 0, 1, 2, 3, 4, 5
 """Values of :attr:`GrowthQC.kind`."""
 
 
@@ -90,6 +93,16 @@ class FrameCache:
     def __len__(self) -> int:
         """Number of frames."""
         return self.freshness.shape[0]
+
+    def present(self) -> np.ndarray:
+        """Which frames have at least one valid sample."""
+        return has_samples(self.values)
+
+    def keep(self, mask) -> None:
+        """Keep only the frames selected by the boolean ``mask``."""
+        sel = torch.as_tensor(np.flatnonzero(mask), device=self.values.device)
+        self.values = self.values[:, sel]
+        self.freshness = self.freshness[sel]
 
     def batch(self, idx):
         """``(channels, B, pixels)`` values and ``(B, pixels)`` freshness."""
@@ -147,7 +160,8 @@ class GrowthQC:
     retries : ndarray of int
         Boundary retries.
     kind : ndarray of int
-        ``GROWN``, ``CONSENSUS``, ``SEED``, ``REGROWN`` or ``AT_LIMIT``.
+        ``GROWN``, ``CONSENSUS``, ``SEED``, ``REGROWN``, ``AT_LIMIT`` or
+        ``MISSING`` (no valid samples; not registered).
     junctions : list
         ``(frame, neighbour, jump, outcome)`` for each conflicting junction.
     seeds_tried, seeds_accepted : int
@@ -177,6 +191,44 @@ class GrowthQC:
             "seedsAccepted": float(self.seeds_accepted),
             "junctionConflicts": float(len(self.junctions)),
         }
+
+    @classmethod
+    def missing(cls, n: int) -> "GrowthQC":
+        """The record of ``n`` frames none of which has samples."""
+        return cls(
+            peak=np.full(n, np.nan),
+            margin=np.full(n, np.nan),
+            round=np.zeros(n, dtype=np.int64),
+            anchor=np.full(n, -1),
+            retries=np.zeros(n, dtype=np.int64),
+            kind=np.full(n, MISSING),
+        )
+
+    def expanded(self, present: np.ndarray) -> "GrowthQC":
+        """This record of the ``present`` frames, over all frames.
+
+        Frame indices (anchors, junctions) are mapped back; the other
+        frames are ``MISSING``.
+        """
+        if present.all():
+            return self
+        idx = np.flatnonzero(present)
+        out = GrowthQC.missing(present.size)
+        out.peak[idx] = self.peak
+        out.margin[idx] = self.margin
+        out.round[idx] = self.round
+        out.anchor[idx] = np.where(
+            self.anchor >= 0, idx[np.maximum(self.anchor, 0)], -1
+        )
+        out.retries[idx] = self.retries
+        out.kind[idx] = self.kind
+        out.junctions = [
+            (int(idx[k]), int(idx[g]), jump, outcome)
+            for k, g, jump, outcome in self.junctions
+        ]
+        out.seeds_tried = self.seeds_tried
+        out.seeds_accepted = self.seeds_accepted
+        return out
 
 
 class Grower:
@@ -739,7 +791,7 @@ def seeds_from_consensus(cons, init, ds, reach=None):
         if i not in members and int(near[i]) not in taken
     ]
     independent = np.ones(ds.size, dtype=bool)
-    if reach is not None:
+    if reach is not None and len(cons.members):
         t0 = init[cons.members]
         independent = np.abs(ds[:, None] - t0[None, :]).min(1) > reach
     return seeds, candidates, independent

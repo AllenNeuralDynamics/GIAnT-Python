@@ -164,7 +164,12 @@ registration also saves the settings it used as a JSON string attribute
 ``align_params`` of the root group (the trial table's ``align_params``
 fields except ``overwriteExisting``); struct readers ignore it, and
 ``register_multiroi`` keeps existing outputs only if it matches the
-requested settings. The tree includes fields not consumed by BandSILo::
+requested settings. Frames without valid samples get NaN ``motionDSr`` and
+``motionDSc`` and an all-NaN movie frame (MATLAB gives them an arbitrary
+finite motion); ``interp1(..., 'pchip')``, which SILo uses to upsample the
+motion, skips NaN samples. A trial in which no frame has samples is saved
+with ``registrationFailed`` set, so that SILo skips it. The tree includes
+fields not consumed by BandSILo::
 
    <trial_stem>_ALIGNMENTDATA.h5
    ├── row_major

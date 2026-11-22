@@ -6,6 +6,12 @@ from the previous frame's rounded motion with a search radius of
 ``max(|init|, clip_shift)``; its registered image is then added to the
 running template. With ``compensate_online``, frames are formed with the
 online motion correction undone line by line (see :mod:`.compensation`).
+
+Frames without valid samples (e.g. before a late recording start) are
+missing frames: they get NaN motion and an all-NaN movie frame and are not
+matched, so they change neither the template nor the next frame's start,
+nor ``registrationFailed``. MATLAB gives them an arbitrary finite motion
+(the edge of the search range); their registered images are NaN there too.
 """
 
 import logging
@@ -28,7 +34,7 @@ from .compensation import compensation_record
 from .frames import FrameFormer
 from .growth import FrameCache, Grower, GrowthQC, seeds_from_consensus
 from .interpolation import interp_frame
-from .matching import match
+from .matching import RegistrationError, match_maps
 from .outputs import (
     AlignmentFile,
     MovieWriter,
@@ -38,7 +44,7 @@ from .outputs import (
     rec_neg_err,
     settings_record,
 )
-from .sources import make_source
+from .sources import has_samples, make_source
 from .template import TemplateState, consensus, initial_template
 
 log = logging.getLogger(__name__)
@@ -150,7 +156,14 @@ def build_template(source, init, params, dtype):
     y = vals.sum(0)
     images = window.image(y, float("nan"))
     cons = consensus(
-        y, fresh, images, window.rows, window.cols, params.init_search, dtype
+        y,
+        fresh,
+        images,
+        window.rows,
+        window.cols,
+        params.init_search,
+        dtype,
+        keep=has_samples(vals),
     )
     state = initial_template(
         images,
@@ -224,6 +237,13 @@ class OutputSink:
             self.movie.abort()
             raise
 
+    def add_missing(self, k: int) -> None:
+        """Record frame ``k`` as missing: all-NaN pages and variance."""
+        blank = torch.full(
+            self.sum.shape[1:], float("nan"), device=self.sum.device
+        )
+        self.add(k, [blank] * self.sum.shape[0], blank)
+
     def add(self, k: int, regs, var_factor: torch.Tensor) -> torch.Tensor:
         """Record frame ``k``'s registered channels; return their sum."""
         self.adata.write_var_factor(k, var_factor.cpu().numpy())
@@ -267,6 +287,11 @@ def register_sequential(
 ):
     """MATLAB's frame loop: match, resample, add to the template.
 
+    Frames without valid samples are missing (NaN motion, all-NaN output)
+    and skipped. A frame with samples whose correlation is undefined at
+    every shift keeps the previous frame's motion, as the growth schedule
+    gives such a frame its anchor's.
+
     Returns
     -------
     motion_r, motion_c, peak : ndarray
@@ -278,16 +303,22 @@ def register_sequential(
     n = ds.size
     motion = np.zeros((3, n))
     init_r = init_c = 0
+    prev = (0.0, 0.0)
     for a in range(0, n, chunk):
         b = min(n, a + chunk)
         vals, fresh = source.frames(ds[a:b])
+        present = has_samples(vals)
         mov = torch.sqrt(vals.sum(0))
         for i in range(b - a):
+            if not present[i]:
+                motion[:, a + i] = np.nan
+                sink.add_missing(a + i)
+                continue
             tmpl = state.matching_template()[
                 m - init_r : m - init_r + h, m - init_c : m - init_c + w
             ]
             search = max(abs(init_c), abs(init_r), params.clip_shift)
-            mot, pk = match(
+            mot, pk, _ = match_maps(
                 mov[i : i + 1],
                 fresh[i : i + 1],
                 tmpl,
@@ -296,8 +327,14 @@ def register_sequential(
                 search,
                 dtype,
             )
-            mr, mc = init_r + float(mot[0, 0]), init_c + float(mot[0, 1])
+            if torch.isnan(pk[0]):
+                mr, mc = prev
+            elif torch.isnan(mot).any():
+                raise RegistrationError("Computed motion contains NaN.")
+            else:
+                mr, mc = init_r + float(mot[0, 0]), init_c + float(mot[0, 1])
             motion[:, a + i] = mr, mc, float(pk[0])
+            prev = (mr, mc)
             fimg = window.image(fresh[i], 0.0)
             regs = []
             for ch in range(vals.shape[0]):
@@ -332,25 +369,53 @@ def register_grow(
     """
     timer = timer or Timer(source.former.device)
     cache = FrameCache(source, ds)
+    present = cache.present()
+    if not present.all():  # frames without samples are left out
+        cache.keep(present)
     timer.mark("frames")
-    reach = 2 * max(3 * source.dt, source.former.layout.lines_per_cycle)
-    seeds, candidates, independent = seeds_from_consensus(
-        cons, init, ds, reach
-    )
-    grower = Grower(
-        cache, state, params, seeds, candidates, dtype, independent
-    )
-    motion, qc = grower.run()
-    timer.mark("grow")
-    if params.polish:
-        motion = grower.polish(params.polish_radius)
-        timer.mark("polish")
+    motion = np.full((ds.size, 2), np.nan)
+    qc = GrowthQC.missing(ds.size)
+    if present.any():
+        reach = 2 * max(3 * source.dt, source.former.layout.lines_per_cycle)
+        seeds, candidates, independent = seeds_from_consensus(
+            cons, init, ds[present], reach
+        )
+        grower = Grower(
+            cache, state, params, seeds, candidates, dtype, independent
+        )
+        grown, qc = grower.run()
+        timer.mark("grow")
+        if params.polish:
+            grown = grower.polish(params.polish_radius)
+            timer.mark("polish")
+        motion[present] = grown
+        qc = qc.expanded(present)
     m = int(params.maxshift)
+    j = np.cumsum(present) - 1  # index of each frame in the cache
     for k in range(ds.size):
-        regs = cache.registered(k, motion[k], m)
+        if not present[k]:
+            sink.add_missing(k)
+            continue
+        regs = cache.registered(int(j[k]), motion[k], m)
         sink.add(k, [r for r, _ in regs], regs[0][1])
     timer.mark("render")
     return motion[:, 0].copy(), motion[:, 1].copy(), qc.peak.copy(), qc
+
+
+def motion_failed(motion_r, motion_c) -> bool:
+    """``registrationFailed``: motion SD above 1.5 pixels on either axis.
+
+    Missing frames (NaN motion) are left out. A trial without any frame
+    that has samples counts as failed, so that SILo skips it (MATLAB's
+    drifting search-edge motion fails it too).
+    """
+    ok = np.isfinite(motion_r) & np.isfinite(motion_c)
+    if not ok.any():
+        return True
+    return bool(
+        np.std(motion_c[ok], ddof=1) > 1.5
+        or np.std(motion_r[ok], ddof=1) > 1.5
+    )
 
 
 def alignment_fields(
@@ -523,10 +588,10 @@ def register_trial(
             timer.mark("register")
         sink.movie.close()
         timer.mark("movie")
-        failed = bool(
-            np.std(motion_c, ddof=1) > 1.5 or np.std(motion_r, ddof=1) > 1.5
-        )
-        if failed:
+        failed = motion_failed(motion_r, motion_c)
+        if not np.isfinite(motion_r).any():
+            log.warning("no frame of %s has valid samples", dat_path)
+        elif failed:
             log.warning("too much motion in %s; saving anyway", dat_path)
         fields = alignment_fields(
             layout, source, ds, motion_r, motion_c, sink, params, failed

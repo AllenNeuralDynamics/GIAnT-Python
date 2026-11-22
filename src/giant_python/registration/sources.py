@@ -5,7 +5,8 @@ channel (NaN where it has no valid sample) and its freshness (0 there), as
 MultiRoiRegistration's ``getImageWrapper`` does after trimming:
 
 * :class:`PlainFrames`: ``slap2Frames`` frames, trimmed to the bounding box
-  of the pixels valid in the first initial frame.
+  of the pixels valid in the first initial frame (the first one that has
+  samples; MATLAB's window would be empty).
 * :class:`CompensatedFrames`: ``slap2Frames(..., CompensateOnline=true,
   RefOffset=<frame offset>)`` frames, trimmed to the raster's extent. A
   sample moved by its line's online offset can land on a pixel the raster
@@ -27,6 +28,23 @@ from .compensation import (
 )
 from .frames import FrameFormer
 from .template import window_image
+
+
+def has_samples(values: torch.Tensor) -> np.ndarray:
+    """Which frames have at least one valid sample.
+
+    Parameters
+    ----------
+    values : torch.Tensor
+        ``(channels, frames, pixels)`` frame values, NaN where a pixel has
+        no valid sample.
+
+    Returns
+    -------
+    ndarray of bool
+        ``(frames,)``.
+    """
+    return (~torch.isnan(values.sum(0))).any(-1).cpu().numpy()
 
 
 @dataclass
@@ -228,6 +246,21 @@ class CompensatedFrames:
         return (num / den).to(torch.float32), den[0].to(torch.float32)
 
 
+def _window_pixels(former: FrameFormer, init, dt: int) -> np.ndarray:
+    """The former's pixels valid in the first initial frame with samples.
+
+    MATLAB trims to the first initial frame. When it has no samples (e.g.
+    a trial whose recording starts late), the next initial frame with
+    samples is used; when none has any, the whole raster.
+    """
+    for k in range(len(init)):
+        vals, _ = former.frames(init[k : k + 1], dt)
+        valid = ~torch.isnan(vals.sum(0)[0]).cpu().numpy()
+        if valid.any():
+            return valid
+    return np.ones(former.rows.size, dtype=bool)
+
+
 def make_source(
     layout, former, first_line, last_line, init, ds, dt, compensate: bool
 ):
@@ -254,9 +287,7 @@ def make_source(
         The source.
     """
     if not compensate:
-        vals, _ = former.frames(init[:1], dt)
-        valid = ~torch.isnan(vals.sum(0)[0]).cpu().numpy()
-        return PlainFrames(former, valid, dt)
+        return PlainFrames(former, _window_pixels(former, init, dt), dt)
     margin = 2 * max(3 * dt, layout.lines_per_cycle) + 8
     offsets = line_offsets(layout, (first_line - margin, last_line + margin))
     return CompensatedFrames(former, offsets, dt, np.concatenate([init, ds]))
