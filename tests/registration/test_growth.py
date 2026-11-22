@@ -265,3 +265,52 @@ def test_consensus_seeds_stay_within_maxshift(plain_recording, monkeypatch):
     assert grower.seeds == [(10, 2, -2)]
     grower._seed_round()
     assert grower.aligned[10] and np.all(np.isfinite(grower.motion[10]))
+
+
+def test_seed_candidates_are_listed_once():
+    """Initial frames nearest the same DS frame give one candidate."""
+    init = np.array([2, 4, 6, 105])
+    ds = np.arange(1, 200, 20)
+    cons = ConsensusResult(
+        np.eye(4), np.zeros((2, 4, 4)), reference=3, members=np.array([3])
+    )
+    seeds, cands, _ = seeds_from_consensus(cons, init, ds)
+    assert seeds == [(5, 0, 0)] and cands == [0]
+
+
+def test_a_seed_tried_twice_is_added_once(plain_recording, monkeypatch):
+    """A frame passed twice to the wide search adds one contribution to
+    the template, not two."""
+    from giant_python.registration.growth import FrameCache, Grower
+    from giant_python.registration.multiroi import build_template, open_trial
+    from giant_python.registration.sources import make_source
+
+    layout, _ = plain_recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6, schedule="grow")
+    lay, former, init, ds, dt = open_trial(
+        layout.files[0], 1, 9000, params, torch.device("cpu")
+    )
+    source = make_source(lay, former, 1, 9000, init, ds, dt, False)
+    state, cons = build_template(source, init, params, torch.float32)
+    seeds, cands, indep = seeds_from_consensus(cons, init, ds)
+    grower = Grower(
+        FrameCache(source, ds), state, params, seeds, cands, independent=indep
+    )
+    grower.run()
+    peak = np.where(
+        (grower.qc.kind == GROWN)
+        & indep
+        & ~np.isin(np.arange(ds.size), list(grower.tried)),
+        grower.qc.peak,
+        -np.inf,
+    )
+    k = int(np.argmax(peak))
+    grower._withdraw([k])
+    count = grower.state.count.clone()
+    accepted = grower.qc.seeds_accepted
+    grower.try_seeds([k, k])
+    assert grower.aligned[k] and grower.qc.seeds_accepted == accepted + 1
+    img = grower.cache.registered_sum([k], grower.motion[[k]], grower.m)[0]
+    added = grower.state.count - count
+    assert torch.equal(added, (~torch.isnan(img)).to(added.dtype))

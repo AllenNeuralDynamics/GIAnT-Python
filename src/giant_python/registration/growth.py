@@ -401,9 +401,14 @@ class Grower:
 
     def try_seeds(self, ks):
         """Wide-search seed candidates; accept those passing the checks."""
-        ks = [
-            int(k) for k in ks if not self.aligned[k] and k not in self.tried
-        ]
+        # each frame once: a frame matched twice would be added twice
+        ks = list(
+            dict.fromkeys(
+                int(k)
+                for k in ks
+                if not self.aligned[k] and k not in self.tried
+            )
+        )
         if not ks:
             return
         self.tried.update(ks)
@@ -765,7 +770,7 @@ def seeds_from_consensus(cons, init, ds, reach=None):
         DS frame nearest each consensus member, with the member's motion
         relative to the reference (``-motion[:, i, ref]``), rounded.
     candidates : list of int
-        DS frames nearest the other initial frames.
+        DS frames nearest the other initial frames, each listed once.
     independent : ndarray of bool
         DS frames more than ``reach`` lines (two kernel half-widths) from
         every consensus member, so sharing none of its samples (all frames
@@ -786,11 +791,13 @@ def seeds_from_consensus(cons, init, ds, reach=None):
         mot = -cons.motion[:, i, ref]
         seeds.append((k, int(matlab_round(mot[0])), int(matlab_round(mot[1]))))
     members = set(int(i) for i in cons.members)
-    candidates = [
-        int(near[i])
-        for i in range(init.size)
-        if i not in members and int(near[i]) not in taken
-    ]
+    candidates = list(
+        dict.fromkeys(
+            int(near[i])
+            for i in range(init.size)
+            if i not in members and int(near[i]) not in taken
+        )
+    )
     independent = np.ones(ds.size, dtype=bool)
     if reach is not None and len(cons.members):
         t0 = init[cons.members]
