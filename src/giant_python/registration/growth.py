@@ -243,7 +243,8 @@ class Grower:
     params : MultiRoiRegistrationParams
         Settings (``clip_shift``, ``maxshift``, growth options).
     seeds : list of (int, int, int)
-        Consensus seeds: frame index and starting [row, col] motion.
+        Consensus seeds: frame index and starting [row, col] motion
+        (clamped to ``maxshift``, like every other starting shift).
     candidates : sequence of int
         Further seed candidates (frames nearest the other initial frames).
     dtype : torch.dtype
@@ -284,7 +285,7 @@ class Grower:
             retries=np.zeros(n, dtype=np.int64),
             kind=np.zeros(n, dtype=np.int64),
         )
-        self.seeds = [(int(k), int(r), int(c)) for k, r, c in seeds]
+        self.seeds = [(int(k), *self._init_of((r, c))) for k, r, c in seeds]
         self.candidates = [int(k) for k in candidates]
         self.independent = (
             np.ones(n, dtype=bool) if independent is None else independent

@@ -242,3 +242,26 @@ def test_growth_handles_a_frame_without_valid_samples(
     chain, peak, _ = grower._chain([k], motion[k - 1])
     np.testing.assert_array_equal(chain[0], motion[k - 1])
     assert np.isnan(peak[0])
+
+
+def test_consensus_seeds_stay_within_maxshift(plain_recording, monkeypatch):
+    """Seeds start inside the padded template even when the consensus
+    motion (up to ``init_search``) exceeds ``maxshift``."""
+    from giant_python.registration.growth import FrameCache, Grower
+    from giant_python.registration.multiroi import build_template, open_trial
+    from giant_python.registration.sources import make_source
+
+    layout, _ = plain_recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(
+        maxshift=2, init_search=3, schedule="grow"
+    )
+    lay, former, init, ds, dt = open_trial(
+        layout.files[0], 1, 3000, params, torch.device("cpu")
+    )
+    source = make_source(lay, former, 1, 3000, init, ds, dt, False)
+    state, cons = build_template(source, init, params, torch.float32)
+    grower = Grower(FrameCache(source, ds), state, params, [(10, 3, -3)], [])
+    assert grower.seeds == [(10, 2, -2)]
+    grower._seed_round()
+    assert grower.aligned[10] and np.all(np.isfinite(grower.motion[10]))
