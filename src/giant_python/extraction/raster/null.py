@@ -61,7 +61,8 @@ def temporal_kernel(t1: float, t2: float) -> np.ndarray:
     """Seven symmetric taps fitted to the correlations at 1 and 2 frames.
 
     As ``slap2_f0.simulate.noise_kernels`` without its long-average term; short
-    kernels are preferred where the two lags leave taps free. Sums to 1.
+    kernels are preferred where the two lags leave taps free. Sums to 1; only
+    taps whose raw sum is at least 0.5 are considered, so it stays finite.
     """
     t1 = float(np.clip(t1, 0.0, 0.9))
     t2 = float(np.clip(t2, -0.2, 0.8))
@@ -80,6 +81,9 @@ def temporal_kernel(t1: float, t2: float) -> np.ndarray:
         + (r2 / r0 - t2) ** 2
         + 1e-6 * (k1**2 + k2**2 + k3**2)
     )
+    # only kernels that can be normalised: a sum near 0 (negative lag-2
+    # correlations) would blow the taps up
+    err = np.where(1 + 2 * (k1 + k2 + k3) >= 0.5, err, np.inf)
     i = np.unravel_index(np.argmin(err), err.shape)
     a1, a2, a3 = k1.flat[i[0]], k2.flat[i[1]], k3.flat[i[2]]
     k = np.array([a3, a2, a1, 1.0, a1, a2, a3])

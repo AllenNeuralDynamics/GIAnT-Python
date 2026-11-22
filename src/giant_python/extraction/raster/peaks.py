@@ -83,28 +83,32 @@ class _IntegratedGaussians:
         self.x_lo, self.x_hi = xe[:-1][xi], xe[1:][xi]
 
     @staticmethod
-    def _axis(lo, hi, mu, s):
-        """Integral over [lo, hi] and its derivatives in mu and sigma."""
+    def _axis(lo, hi, mu, s, derivs=True):
+        """Integral over [lo, hi] and (with ``derivs``) its derivatives in mu
+        and sigma."""
         u_hi = (hi[:, None] - mu[None, :]) / (_SQRT2 * s[None, :])
         u_lo = (lo[:, None] - mu[None, :]) / (_SQRT2 * s[None, :])
-        e_hi, e_lo = np.exp(-(u_hi**2)), np.exp(-(u_lo**2))
         val = _SQRT_PI_2 * s[None, :] * (erf(u_hi) - erf(u_lo))
+        if not derivs:
+            return val
+        e_hi, e_lo = np.exp(-(u_hi**2)), np.exp(-(u_lo**2))
         d_mu = -(e_hi - e_lo)
         d_s = val / s[None, :] - _SQRT2 * (u_hi * e_hi - u_lo * e_lo)
         return val, d_mu, d_s
 
-    def parts(self, theta: np.ndarray):
-        """Per-axis integrals (pixels x peaks) and their derivatives."""
+    def parts(self, theta: np.ndarray, derivs: bool = True):
+        """Per-axis integrals (pixels x peaks), with their derivatives
+        unless ``derivs`` is False."""
         n = theta.size // 4
         a, my, mx = theta[:n], theta[n : 2 * n], theta[2 * n : 3 * n]
         s = np.maximum(theta[3 * n :], np.finfo(float).eps)
-        iy = self._axis(self.y_lo, self.y_hi, my, s)
-        ix = self._axis(self.x_lo, self.x_hi, mx, s)
+        iy = self._axis(self.y_lo, self.y_hi, my, s, derivs)
+        ix = self._axis(self.x_lo, self.x_hi, mx, s, derivs)
         return a, iy, ix
 
     def value(self, theta: np.ndarray) -> np.ndarray:
         """Model value at each selected pixel."""
-        a, (vy, _, _), (vx, _, _) = self.parts(theta)
+        a, vy, vx = self.parts(theta, derivs=False)
         return (vy * vx) @ a
 
     def jacobian(self, theta: np.ndarray) -> np.ndarray:

@@ -177,6 +177,11 @@ class RasterLocalization:
     info: dict = field(default_factory=dict)
 
 
+# pixels missing more than this share of frames do not enter the variance
+# model (Vb, Vk), as in MATLAB
+_VAR_NAN_FRAC = 0.4
+
+
 def movmean_nan(x: np.ndarray, window: int) -> np.ndarray:
     """MATLAB ``smoothdata(x, 1, 'movmean', window, 'omitnan')`` (axis 0).
 
@@ -451,7 +456,8 @@ def localize_sources(  # noqa: C901
     if not valid.any():
         warnings.warn("Recording had no valid pixels; likely too much motion")
         empty = np.full(movie.shape[1:], np.nan)
-        return RasterLocalization(empty, empty.copy(), np.zeros((0, 4)), valid)
+        peaks = np.zeros((0, 4)) if find_peaks else None
+        return RasterLocalization(empty, empty.copy(), peaks, valid)
 
     imf = np.array(
         movie, dtype=np.float32, order="C"
@@ -490,6 +496,7 @@ def localize_sources(  # noqa: C901
     # percentiles over all pixels see NaN outside the valid ones
     first = np.flatnonzero((~nans).any(axis=(1, 2)))[:500]
     var_im = _nanvar1(ims[first])
+    var_im[nan_v.mean(0) > _VAR_NAN_FRAC] = np.nan  # MATLAB: nanFrac > 0.4
     vb = p.vif * matlab_prctile(var_im, 10)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)

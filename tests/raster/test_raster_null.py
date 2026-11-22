@@ -237,3 +237,17 @@ def test_bootstrap_on_a_uniform_baseline():
     loc = localize_sources(movie, None, p, base, find_peaks=False)
     assert np.isfinite(loc.act_im[loc.valid]).all()
     assert loc.info["null"]["m0"].size == 1
+
+
+def test_temporal_kernel_stays_finite_for_negative_lag2():
+    """A negative lag-2 correlation whose best unconstrained taps sum to 0
+    (``[-0.4, -0.1, 0, 1, 0, -0.1, -0.4]``) gives a finite kernel."""
+    k = temporal_kernel(0.08 / 1.34, -0.2 / 1.34)
+    assert np.isfinite(k).all() and np.isclose(k.sum(), 1)
+    assert np.abs(k).max() < 2.0
+    ac = np.correlate(k, k, "full")[k.size - 1 :] / (k**2).sum()
+    np.testing.assert_allclose(ac[1:3], [0.08 / 1.34, -0.2 / 1.34], atol=0.02)
+    for t1, t2 in ((0.7, 0.37), (0.6, 0.25), (0.3, 0.05)):
+        k = temporal_kernel(t1, t2)  # measured SLAP2 values: unchanged fits
+        ac = np.correlate(k, k, "full")[k.size - 1 :] / (k**2).sum()
+        assert abs(ac[1] - t1) < 0.02 and abs(ac[2] - t2) < 0.02

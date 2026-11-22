@@ -39,6 +39,9 @@ def test_jacobian_matches_finite_differences():
         ]
     )
     np.testing.assert_allclose(jac, num, rtol=1e-5, atol=1e-8)
+    # the value-only path (no derivatives) is the Jacobian path's value
+    a, (vy, _, _), (vx, _, _) = model.parts(theta)
+    np.testing.assert_array_equal(model.value(theta), (vy * vx) @ a)
 
 
 def test_finds_separated_gaussians():

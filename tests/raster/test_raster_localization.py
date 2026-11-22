@@ -192,3 +192,34 @@ def test_no_floor_with_a_uniform_external_baseline():
     loc = localize_sources(movie, None, p, base, find_peaks=False)
     assert np.isfinite(loc.act_im[loc.valid]).all()
     assert loc.info["Vk"] > 0
+
+
+def test_no_valid_pixels_keeps_find_peaks_false():
+    """The early return for a trial without valid pixels honours
+    ``find_peaks``: peaks are None when seeding was not requested."""
+    movie = np.full((50, 10, 10), np.nan, np.float32)
+    with pytest.warns(UserWarning):
+        loc = localize_sources(movie, find_peaks=False)
+    assert loc.peaks is None
+    with pytest.warns(UserWarning):
+        assert localize_sources(movie).peaks.shape == (0, 4)
+
+
+def test_pixels_mostly_missing_leave_the_variance_model():
+    """As MATLAB (``varIM(nanFrac > 0.4) = nan``): valid pixels missing
+    more than 40% of frames do not change Vb."""
+    rng = np.random.default_rng(5)
+    t = 600
+    movie = (20 + 3 * rng.standard_normal((t, 20, 20))).astype(np.float32)
+    gone = rng.random(t) < 0.45
+    p = RasterLocalizationParams(nan_thresh=0.5)
+    vb = []
+    for scale in (0.1, 30.0):  # those pixels' noise: tiny, or huge
+        m = movie.copy()
+        block = 20 + scale * rng.standard_normal((t, 5, 5))
+        m[:, :5, :5] = block.astype(np.float32)
+        m[gone, :5, :5] = np.nan
+        loc = localize_sources(m, None, p, find_peaks=False)
+        assert loc.valid[:5, :5].all()
+        vb.append(loc.info["Vb"])
+    assert vb[0] == vb[1]
