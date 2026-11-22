@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import h5py
 import numpy as np
@@ -87,6 +87,25 @@ def _register_job(job: dict) -> dict:
     except Exception as exc:  # reported per trial, as MATLAB continues
         log.exception("registration failed for %s", job["dat"])
         return {"failed": True, "error": repr(exc)}
+
+
+def _reusable(movie: Path, adata: Path) -> Optional[bool]:
+    """Whether a trial's existing outputs can be kept, and their status.
+
+    Returns
+    -------
+    bool or None
+        The alignment file's ``registrationFailed`` if both files exist
+        and it can be read; otherwise None (register the trial again).
+    """
+    if not (movie.exists() and adata.exists()):
+        return None
+    try:
+        with h5py.File(adata, "r") as f:
+            return bool(np.asarray(f["registrationFailed"][()]).ravel()[0])
+    except (OSError, KeyError, IndexError):
+        log.info("%s cannot be read; registering again", adata.name)
+        return None
 
 
 def _stage(grp: h5py.Group, fields: dict) -> dict:
@@ -189,13 +208,12 @@ def register_multiroi(
         for t in range(n_trials):
             movie, adata = output_names(epoch[d, t], t + 1, d + 1, params)
             fn_reg[d, t], fn_adata[d, t] = movie, adata
-            if (
-                not params.overwrite_existing
-                and (moco / movie).exists()
-                and (moco / adata).exists()
-            ):
-                log.info("%s is already registered; skipping", adata)
-                continue
+            if not params.overwrite_existing:
+                saved = _reusable(moco / movie, moco / adata)
+                if saved is not None:
+                    log.info("%s is already registered; skipping", adata)
+                    failed[d, t] = saved  # as recorded when registered
+                    continue
             jobs.append(
                 {
                     "dat": Path(tt.datadr) / str(files[d, t]),

@@ -265,6 +265,50 @@ def test_register_multiroi_updates_trial_table(
     assert mc["registration_failed"].dtype == np.int8
 
 
+def one_trial_table(layout, tmp_path):
+    """A MATLAB-style trial table with one 3000-line trial."""
+    dat = Path(layout.files[0])
+    table = tmp_path / "trial_table.h5"
+    save_struct_h5(
+        table,
+        {
+            "datadr": str(dat.parent),
+            "savedr": str(tmp_path),
+            "filename": np.array([[dat.name]], dtype=object),
+            "epoch": np.array([[3.0]]),
+            "true_trial_ix": np.array([[1.0]]),
+            "slap2_info": {
+                "first_line": np.array([[1.0]]),
+                "last_line": np.array([[3000.0]]),
+            },
+        },
+    )
+    return table
+
+
+def test_rerun_keeps_the_saved_failure_flag(recording, tmp_path, monkeypatch):
+    """Reused outputs report the registrationFailed they were saved with."""
+    from giant_python.pipeline.register import register_multiroi
+
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    table = one_trial_table(layout, tmp_path)
+    run = dict(
+        params={"maxshift": 5, "save_tif": False},
+        execution={"device": "cpu", "max_workers": 1},
+    )
+    fields = register_multiroi(table, **run)
+    assert not fields["registration_failed"][0, 0]
+    adata = tmp_path / "motion_correction" / fields["fn_adata"][0, 0]
+    with h5py.File(adata, "r+") as f:  # as if the motion had been too large
+        f["registrationFailed"][...] = 1
+    before = digests(adata)
+    fields = register_multiroi(table, **run)
+    assert digests(adata) == before  # reused, not registered again
+    assert fields["registration_failed"][0, 0]
+    assert read_trial_table(table).motion_correction["registration_failed"]
+
+
 def test_trial_table_update_keeps_other_entries(tmp_path, monkeypatch):
     """Only the registration fields are replaced, once all are written.
 
