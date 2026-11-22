@@ -122,9 +122,7 @@ def _fit(theta0, y, x, data, lb, ub):
     x0 = np.clip(theta0.ravel(order="F").astype(float), lb_f, ub_f)
     n_par = x0.size
     max_iter = max(1, (_MAX_FUN_EVALS - (n_par + 1)) // (n_par + 1))
-    res = least_squares(
-        lambda t: model.value(t) - data,
-        x0,
+    kw = dict(
         jac=model.jacobian,
         bounds=(lb_f, ub_f),
         method="trf",
@@ -133,6 +131,15 @@ def _fit(theta0, y, x, data, lb, ub):
         gtol=1e-6,
         max_nfev=max_iter,
     )
+    try:
+        res = least_squares(lambda t: model.value(t) - data, x0, **kw)
+    except np.linalg.LinAlgError:
+        # LAPACK's SVD now and then fails to converge on a fit that succeeds
+        # when rerun (once in a run of 24 simulated trials under full load);
+        # the lsmr trust-region solver needs no SVD
+        res = least_squares(
+            lambda t: model.value(t) - data, x0, tr_solver="lsmr", **kw
+        )
     return res.x.reshape(theta0.shape, order="F")
 
 

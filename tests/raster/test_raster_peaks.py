@@ -57,6 +57,36 @@ def test_finds_separated_gaussians():
     )
 
 
+def test_fit_falls_back_when_svd_fails(monkeypatch):
+    """A LAPACK SVD failure in the default solver retries with lsmr."""
+    import giant_python.extraction.raster.peaks as peaks
+
+    calls = []
+    real = peaks.least_squares
+
+    def flaky(*args, **kwargs):
+        """least_squares whose default (SVD) solver always fails."""
+        calls.append(kwargs.get("tr_solver"))
+        if kwargs.get("tr_solver") is None:
+            raise np.linalg.LinAlgError("SVD did not converge")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(peaks, "least_squares", flaky)
+    yy, xx = np.mgrid[1:16, 1:16]
+    model = _IntegratedGaussians(yy.ravel() + 0.0, xx.ravel() + 0.0)
+    data = model.value(np.array([3.0, 7.4, 8.2, 1.2]))
+    theta = peaks._fit(
+        np.array([[2.0, 7.0, 8.0, 1.0]]),
+        yy.ravel() + 0.0,
+        xx.ravel() + 0.0,
+        data,
+        np.array([[0.0, 5.5, 6.5, 0.2]]),
+        np.array([[np.inf, 8.5, 9.5, 5.0]]),
+    )
+    assert calls == [None, "lsmr"]
+    np.testing.assert_allclose(theta[0], [3.0, 7.4, 8.2, 1.2], atol=1e-3)
+
+
 def test_exclusion_mask_and_empty():
     """No seeds inside the exclusion mask; none in pure noise."""
     rng = np.random.default_rng(1)
