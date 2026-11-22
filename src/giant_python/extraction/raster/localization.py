@@ -138,7 +138,11 @@ class RasterLocalizationParams:
             raise ValueError(
                 f"score must be one of {_SCORES}, not {self.score!r}"
             )
-        if int(self.null_draws) != self.null_draws or self.null_draws < 1:
+        if (
+            isinstance(self.null_draws, bool)
+            or not isinstance(self.null_draws, (int, np.integer))
+            or self.null_draws < 1
+        ):  # a float such as 2.0 would fail later in range()
             raise ValueError("null_draws must be a positive integer")
         if not (np.isfinite(self.soft_th) and self.soft_th >= 0):
             raise ValueError("soft_th must be a finite number >= 0")

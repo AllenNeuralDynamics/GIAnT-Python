@@ -298,3 +298,39 @@ def test_calibration_of_zero_brightness_is_the_dimmest_bin():
     m, s = _calibration_maps(photons, centre, m0, s0)
     np.testing.assert_array_equal(m, [1, 1, 2, 1, 2, 3])
     np.testing.assert_array_equal(s, [10, 10, 20, 10, 20, 30])
+
+
+def test_null_has_no_noise_at_zero_baselines():
+    """A zero-baseline pixel next to bright ones gets no null noise (its
+    variance gain x b is 0), not its neighbours' mixed in."""
+    t, rows, cols, gain = 2000, 16, 16, 8.0
+    noise = dict(
+        gain=gain,
+        kt=temporal_kernel(0.6, 0.25),
+        kr=spatial_kernel(0.23),
+        kc=spatial_kernel(0.37),
+        q=1.0,
+    )
+    noise["W2"] = float(
+        (noise["kt"] ** 2).sum()
+        * (noise["kr"] ** 2).sum()
+        * (noise["kc"] ** 2).sum()
+    )
+    photons = np.where((np.arange(cols) // 2) % 2 == 0, 20.0, 0.0)
+    b = np.broadcast_to(photons[None, :] * gain, (rows, cols))
+    base = np.broadcast_to(b[None], (t, rows, cols)).reshape(t, -1)
+    base = base.astype(np.float32)
+    ones = np.ones_like(base)
+    z = null_movie(
+        base,
+        ones,
+        ones,
+        np.zeros((t, rows, cols), bool),
+        np.arange(rows * cols),
+        noise,
+        seed=9,
+    )
+    var = z.var(0)
+    assert np.all(var[:, photons == 0] == 0)
+    bright = var[2:-2][:, photons > 0][:, 1:-1] / (gain * 20.0 * gain)
+    np.testing.assert_allclose(bright.mean(), 1, rtol=0.1)

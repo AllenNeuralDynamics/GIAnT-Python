@@ -219,7 +219,8 @@ def _variance_factor(lam, a, b, h, vidx, rows, cols, kt, kr, kc):
     (next to bright structures, or where the baseline changes within a few
     frames) the variance would follow the neighbours' rates. This scales each
     voxel by ``sqrt(sum(k^2) lam / (k^2 * lam))`` (1 where the rates are
-    uniform), with zero rates outside the trial as in the draw.
+    uniform, 0 at a zero rate), with zero rates outside the trial as in the
+    draw.
     """
     n_t = lam.shape[0]
     lo, hi = max(0, a - h), min(n_t, b + h)
@@ -235,7 +236,10 @@ def _variance_factor(lam, a, b, h, vidx, rows, cols, kt, kr, kc):
     own = np.float32(w2) * lam[a:b].astype(np.float32)
     with np.errstate(invalid="ignore", divide="ignore"):
         f = np.sqrt(own / m)
-    f[~np.isfinite(f) | ~(own > 0)] = 1.0
+    # a zero rate gets no noise (0), not its neighbours'; 1 where nothing
+    # was drawn at all
+    f[~(m > 0)] = 1.0
+    f[~(own > 0) & (m > 0)] = 0.0
     return f
 
 

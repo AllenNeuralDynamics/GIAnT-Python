@@ -155,6 +155,10 @@ def test_params_validation():
         RasterLocalizationParams(score="energy")
     with pytest.raises(ValueError):
         RasterLocalizationParams(null_draws=0)
+    for bad in (2.0, True):  # would fail in range() or count as 1
+        with pytest.raises(ValueError):
+            RasterLocalizationParams(null_draws=bad)
+    assert RasterLocalizationParams(null_draws=np.int64(3)).null_draws == 3
     with pytest.raises(ValueError):
         RasterLocalizationParams(soft_th=-1)
 
