@@ -3,6 +3,7 @@
 import numpy as np
 
 from giant_python.extraction.raster.peaks import (
+    _eval_budget,
     _IntegratedGaussians,
     get_act_im_peaks,
     ordfilt3x3,
@@ -118,3 +119,13 @@ def test_no_fitted_centre_inside_the_exclusion_mask():
     np.testing.assert_allclose(pk[0, 1:3], [15.0, 30.0], atol=0.15)
     unmasked = get_act_im_peaks(img, 8)
     assert unmasked.shape[0] == 2
+
+
+def test_eval_budget_matches_matlab_iterations():
+    """MATLAB's 5000 evaluations with finite differences allow
+    (5000 - 1) // (n + 1) iterations; the budget here allows as many steps
+    (one evaluation each, plus the start), down to one step at n = 2500."""
+    for n in (4, 40, 400, 2500, 4998):
+        assert _eval_budget(n) - 1 == (5000 - 1) // (n + 1)
+    assert _eval_budget(2500) == 2  # one step (was 1: none)
+    assert _eval_budget(5000) == 1  # MATLAB cannot take a step either

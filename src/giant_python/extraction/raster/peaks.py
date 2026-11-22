@@ -119,13 +119,24 @@ class _IntegratedGaussians:
         )
 
 
+def _eval_budget(n_par: int) -> int:
+    """``max_nfev`` that gives ``least_squares`` MATLAB's iterations.
+
+    ``lsqcurvefit`` with ``MaxFunEvals`` 5000 and finite differences spends
+    one evaluation on the start and ``n_par + 1`` per iteration (Jacobian
+    and step), so ``(5000 - 1) // (n_par + 1)`` iterations. With the
+    analytical Jacobian each iteration costs one evaluation here, plus one
+    for the start.
+    """
+    return 1 + (_MAX_FUN_EVALS - 1) // (n_par + 1)
+
+
 def _fit(theta0, y, x, data, lb, ub):
     """lsqcurvefit-like bounded least squares of integrated Gaussians."""
     model = _IntegratedGaussians(y, x)
     lb_f, ub_f = lb.ravel(order="F"), ub.ravel(order="F")
     x0 = np.clip(theta0.ravel(order="F").astype(float), lb_f, ub_f)
-    n_par = x0.size
-    max_iter = max(1, (_MAX_FUN_EVALS - (n_par + 1)) // (n_par + 1))
+    max_iter = _eval_budget(x0.size)
     kw = dict(
         jac=model.jacobian,
         bounds=(lb_f, ub_f),
