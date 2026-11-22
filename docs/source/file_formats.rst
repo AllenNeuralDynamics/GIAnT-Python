@@ -405,8 +405,8 @@ Trial table fields
    * - ``motion_correction/fn_reg_ds``
      - nPaths x total trials
      - string
-     - Registered and downsampled TIFF filename (empty where Python
-       registration raised).
+     - Registered and downsampled movie filename, ``.tif`` or ``.h5``
+       (empty where Python registration raised).
    * - ``motion_correction/fn_adata``
      - nPaths x total trials
      - string

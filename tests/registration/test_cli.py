@@ -34,3 +34,32 @@ def test_register_reports_failed_trials(
     assert f"{registered} of 2 trials registered" in out
     assert ("registrationFailed" in out) == (failed[0][0] or failed[0][1])
     assert ("trial 2 (path 1)" in err) == (code == 1)
+
+
+@pytest.mark.parametrize(
+    "flags,save_tif", [([], False), (["--h5"], False), (["--tif"], True)]
+)
+def test_register_movie_format(monkeypatch, flags, save_tif):
+    """Registered movies are HDF5 unless ``--tif`` asks for TIFF."""
+    from giant_python.pipeline import register
+
+    seen = {}
+
+    def fake(table, params, **kwargs):
+        seen["params"] = params
+        return {
+            "registration_failed": np.array([[False]]),
+            "fn_reg_ds": np.array([["a"]], dtype=object),
+            "fn_adata": np.array([["a"]], dtype=object),
+            "align_params": {},
+        }
+
+    monkeypatch.setattr(register, "register_multiroi", fake)
+    assert cli.main(["register", "trial_table.h5", *flags]) == 0
+    assert seen["params"].save_tif is save_tif
+
+
+def test_register_movie_formats_exclusive():
+    """``--tif`` and ``--h5`` cannot be combined."""
+    with pytest.raises(SystemExit):
+        cli.main(["register", "trial_table.h5", "--tif", "--h5"])

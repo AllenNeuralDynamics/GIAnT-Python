@@ -133,11 +133,21 @@ def _add_register_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Re-register trials whose outputs exist.",
     )
-    parser.add_argument(
-        "--h5",
+    movie = parser.add_mutually_exclusive_group()
+    movie.add_argument(
+        "--tif",
+        dest="save_tif",
         action="store_true",
-        help="Save registered movies as HDF5 instead of TIFF.",
+        help="Save registered movies as TIFF, as GIAnT-MATLAB does, instead "
+        "of deflated HDF5 (the default).",
     )
+    movie.add_argument(
+        "--h5",
+        dest="save_tif",
+        action="store_false",
+        help="Save registered movies as deflated HDF5 (the default).",
+    )
+    parser.set_defaults(save_tif=defaults.save_tif)
     parser.add_argument(
         "--compensate-online",
         action="store_true",
@@ -266,7 +276,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
             maxshift=args.maxshift,
             clip_shift=args.clip_shift,
             overwrite_existing=args.overwrite,
-            save_tif=not args.h5,
+            save_tif=args.save_tif,
             compensate_online=args.compensate_online,
             schedule=args.schedule,
             polish=args.polish,
