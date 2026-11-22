@@ -103,6 +103,27 @@ class RegisteredTrial:
     align_hz: float
 
 
+def _read_tiff_pages(path) -> np.ndarray:
+    """All pages of a registered TIFF as one ``(pages, rows, cols)`` array.
+
+    MATLAB's ``Fast_BigTiff_Write`` gives one series of all pages, but
+    GIAnT-Python's registration writes one page per ``TiffWriter.write``, a
+    series each; ``tifffile.imread`` would return only the first.
+    """
+    import tifffile
+
+    with tifffile.TiffFile(path) as tf:
+        if len(tf.series) == 1 and len(tf.series[0].shape) == 3:
+            return tf.series[0].asarray()
+        pages = tf.pages
+        first = pages[0].asarray()
+        out = np.empty((len(pages),) + first.shape, first.dtype)
+        out[0] = first
+        for k in range(1, len(pages)):
+            out[k] = pages[k].asarray()
+        return out
+
+
 def load_registered_trial(
     moco_dir: str | Path,
     fn: str,
@@ -141,9 +162,7 @@ def load_registered_trial(
                 ()
             ]  # (pages, cols, rows): MATLAB's rows x cols x pages
     else:
-        import tifffile
-
-        raw = tifffile.imread(path)  # (pages, MATLAB col, MATLAB row)
+        raw = _read_tiff_pages(path)  # (pages, MATLAB col, MATLAB row)
     raw = np.asarray(raw, dtype=np.float32).transpose(0, 2, 1)
     n_frames = raw.shape[0] // num_channels
     stack = raw[: n_frames * num_channels].reshape(

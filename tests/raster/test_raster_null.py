@@ -251,3 +251,38 @@ def test_temporal_kernel_stays_finite_for_negative_lag2():
         k = temporal_kernel(t1, t2)  # measured SLAP2 values: unchanged fits
         ac = np.correlate(k, k, "full")[k.size - 1 :] / (k**2).sum()
         assert abs(ac[1] - t1) < 0.02 and abs(ac[2] - t2) < 0.02
+
+
+def test_null_variance_follows_a_fast_changing_baseline():
+    """Where the baseline changes within the temporal kernel (here every
+    2 frames, 30 or 0.3 photons), each frame keeps the variance gain x b."""
+    t, rows, cols, gain = 4000, 12, 12, 8.0
+    noise = dict(
+        gain=gain,
+        kt=temporal_kernel(0.6, 0.25),
+        kr=spatial_kernel(0.23),
+        kc=spatial_kernel(0.37),
+        q=1.0,
+    )
+    noise["W2"] = float(
+        (noise["kt"] ** 2).sum()
+        * (noise["kr"] ** 2).sum()
+        * (noise["kc"] ** 2).sum()
+    )
+    bright = (np.arange(t) // 2) % 2 == 0
+    b_t = np.where(bright, 30.0, 0.3) * gain
+    base = np.repeat(b_t[:, None], rows * cols, 1).astype(np.float32)
+    ones = np.ones_like(base)
+    z = null_movie(
+        base,
+        ones,
+        ones,
+        np.zeros((t, rows, cols), bool),
+        np.arange(rows * cols),
+        noise,
+        seed=8,
+    )
+    inner = z[:, 2:-2, 2:-2]
+    for sel in (bright, ~bright):
+        ratio = inner[sel].var() / (gain * b_t[sel][0])
+        assert abs(ratio - 1) < 0.1

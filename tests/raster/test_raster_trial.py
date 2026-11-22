@@ -22,9 +22,12 @@ def test_discard_frames_around_a_motion_event():
     assert d0[:40].all() and not d0[40:395].any()
 
 
-def test_load_registered_trial(tmp_path):
+@pytest.mark.parametrize("layout", ["one_series", "page_by_page"])
+def test_load_registered_trial(tmp_path, layout):
     """Channels are deinterleaved, pages transposed to MATLAB's rows and
-    columns, discards set to NaN, the variance factor read."""
+    columns, discards set to NaN, the variance factor read. The TIFF may
+    hold one series of all pages (MATLAB's Fast_BigTiff_Write) or one per
+    page (GIAnT-Python's registration writes each page on its own)."""
     tifffile = pytest.importorskip("tifffile")
     n, rows, cols = 400, 6, 9  # MATLAB rows x cols; n > the 4 s median
     rng = np.random.default_rng(0)
@@ -34,9 +37,15 @@ def test_load_registered_trial(tmp_path):
     pages[0::2] = act.transpose(0, 2, 1)
     pages[1::2] = other.transpose(0, 2, 1)
     stem = "E1T1DMD1"
-    tifffile.imwrite(
-        tmp_path / f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif", pages
-    )
+    tif = tmp_path / f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif"
+    if layout == "one_series":
+        tifffile.imwrite(tif, pages)
+    else:  # as giant_python.registration.outputs writes it
+        with tifffile.TiffWriter(tif, bigtiff=True) as tw:
+            for page in pages:
+                tw.write(page, photometric="minisblack")
+        with tifffile.TiffFile(tif) as tf:
+            assert len(tf.series) == 2 * n  # imread would read one page
     rne = -0.5 + 0.01 * rng.standard_normal(n)
     rne[200] += 0.2
     vf = rng.uniform(1, 2, (n, cols, rows)).astype(np.float32)

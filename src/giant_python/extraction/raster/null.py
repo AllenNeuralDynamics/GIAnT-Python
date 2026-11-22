@@ -15,8 +15,8 @@ through the same filters and score:
 * :func:`null_movie` draws filtered compound Poisson noise with that model,
   ``y = b + s (k * (N - lambda))``, ``N ~ Poisson(lambda)`` per voxel and ``k``
   a separable kernel with the measured correlations; its mean is the baseline,
-  its variance ``gain * b * v`` (scaled per pixel where the rate varies across
-  the kernel), and its skew ``q`` times that of filtered
+  its variance ``gain * b * v`` (scaled per voxel where the rate varies across
+  the kernel, in space or time), and its skew ``q`` times that of filtered
   Poisson noise at that gain (larger photon events, as in
   ``slap2_f0.simulate``);
 * :func:`null_calibration` scores the null movies like the trial and returns
@@ -210,29 +210,33 @@ def _fill_unobserved(lam: np.ndarray) -> np.ndarray:
     return out
 
 
-def _mixing_correction(lam, vidx, rows, cols, kr, kc) -> np.ndarray:
-    """Per-pixel factor that gives each pixel the variance ``gain * b * v``.
+def _variance_factor(lam, a, b, h, vidx, rows, cols, kt, kr, kc):
+    """Per-voxel factor (frames a..b-1) that gives each voxel the variance
+    ``gain * b * v``.
 
-    The spatial kernel mixes the neighbours' Poisson fluctuations into a
-    pixel, so where the rate changes across the kernel (next to bright
-    structures) the variance would follow the neighbours' rates. This scales
-    each pixel by ``sqrt(sum(k^2) lam / (k^2 * lam))`` of the time-mean rates
-    (1 where they are uniform).
+    The kernels mix the neighbouring voxels' Poisson fluctuations into a
+    voxel, in space and time, so where the rate changes across the kernel
+    (next to bright structures, or where the baseline changes within a few
+    frames) the variance would follow the neighbours' rates. This scales each
+    voxel by ``sqrt(sum(k^2) lam / (k^2 * lam))`` (1 where the rates are
+    uniform), with zero rates outside the trial as in the draw.
     """
-    from scipy import ndimage
-
-    lam_mean = np.zeros(rows * cols)
-    lam_mean[vidx] = lam.mean(0)
-    mixed = ndimage.correlate1d(
-        lam_mean.reshape(rows, cols), kr**2, axis=0, mode="constant"
-    )
-    mixed = ndimage.correlate1d(mixed, kc**2, axis=1, mode="constant")
-    mixed = mixed.ravel()[vidx]
-    own = float((kr**2).sum() * (kc**2).sum()) * lam_mean[vidx]
+    n_t = lam.shape[0]
+    lo, hi = max(0, a - h), min(n_t, b + h)
+    full = np.zeros((b - a + 2 * h, rows * cols), np.float32)
+    full[lo - (a - h) : hi - (a - h), vidx] = lam[lo:hi]
+    mixed = _filter_rows_cols(full.reshape(-1, rows, cols), kr**2, kc**2)
+    n_out = b - a
+    m = np.zeros((n_out, rows, cols), np.float32)
+    for j, w in enumerate((kt**2)[::-1]):
+        m += np.float32(w) * mixed[j : j + n_out]
+    m = m.reshape(n_out, -1)[:, vidx]
+    w2 = float((kt**2).sum() * (kr**2).sum() * (kc**2).sum())
+    own = np.float32(w2) * lam[a:b].astype(np.float32)
     with np.errstate(invalid="ignore", divide="ignore"):
-        f = np.sqrt(own / mixed)
+        f = np.sqrt(own / m)
     f[~np.isfinite(f) | ~(own > 0)] = 1.0
-    return f.astype(np.float32)
+    return f
 
 
 def null_movie(
@@ -283,7 +287,6 @@ def null_movie(
     # the observation mask is applied after the filters
     lam_all = _fill_unobserved(lam_all)
     lam_all[~(lam_all > 0)] = 0.0
-    gain_z *= _mixing_correction(lam_all, vidx, rows, cols, kr, kc)
     out = np.full(nans.shape, np.nan, dtype=np.float32)
     flat_out = out.reshape(n_t, -1)
     drawn = np.zeros((0, rows * cols), dtype=np.float32)
@@ -314,7 +317,10 @@ def null_movie(
         for j, w in enumerate(kt[::-1]):
             g += np.float32(w) * f[j : j + n_out]
         f = g
-        flat_out[a:b, vidx] = f.reshape(b - a, -1)[:, vidx] * gain_z[a:b]
+        corr = _variance_factor(lam_all, a, b, h, vidx, rows, cols, kt, kr, kc)
+        flat_out[a:b, vidx] = (
+            f.reshape(b - a, -1)[:, vidx] * gain_z[a:b] * corr
+        )
     out[nans] = np.nan
     return out
 
