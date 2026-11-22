@@ -97,3 +97,21 @@ def test_exclusion_mask_and_empty():
     mask[12:19, 12:19] = True
     assert get_act_im_peaks(img, 8, mask).shape[0] == 0
     assert get_act_im_peaks(rng.standard_normal((30, 30)), 8).shape == (0, 4)
+
+
+def test_no_fitted_centre_inside_the_exclusion_mask():
+    """A source whose centre is just inside the mask seeds on its unmasked
+    flank, and its fit moves back into the mask: it is dropped. A source
+    clear of the mask is kept."""
+    rng = np.random.default_rng(2)
+    yy, xx = np.mgrid[:30, :40]
+    img = 0.05 * rng.standard_normal((30, 40))
+    for r, c in ((15.0, 15.2), (15.0, 30.0)):
+        img += 4 * np.exp(-((yy - r) ** 2 + (xx - c) ** 2) / (2 * 1.1**2))
+    mask = np.zeros((30, 40), bool)
+    mask[:, 15:20] = True  # the first source's centre and right flank
+    pk = get_act_im_peaks(img, 8, mask)
+    assert pk.shape[0] == 1
+    np.testing.assert_allclose(pk[0, 1:3], [15.0, 30.0], atol=0.15)
+    unmasked = get_act_im_peaks(img, 8)
+    assert unmasked.shape[0] == 2

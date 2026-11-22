@@ -137,12 +137,16 @@ def noise_model(
         raise ValueError("too few imaged pixels to measure the noise model")
     gain = float(np.median(var[use] / bv_mean[use]))
 
-    # lags in recorded frames: pairs across discarded frames do not count
+    # lags in recorded frames: each measured frame is paired with the one k
+    # frames later if that was measured too, also across discarded frames
     t_idx = np.arange(resid.shape[0])[sel]
+    row_of = np.full(resid.shape[0] + 3, -1)
+    row_of[t_idx] = np.arange(t_idx.size)
     rho = []
     for k in (1, 2):
-        i = np.flatnonzero(t_idx[k:] - t_idx[:-k] == k)
-        rho.append(_pooled_corr(r[i][:, use], r[i + k][:, use]))
+        j = row_of[t_idx + k]
+        i = np.flatnonzero(j >= 0)
+        rho.append(_pooled_corr(r[i][:, use], r[j[i]][:, use]))
     col_of = np.full(shape2d[0] * shape2d[1], -1)
     col_of[vidx[use]] = np.flatnonzero(use)
     col_of = col_of.reshape(shape2d)
@@ -183,6 +187,23 @@ def _filter_rows_cols(d: np.ndarray, kr: np.ndarray, kc: np.ndarray):
 
     out = ndimage.correlate1d(d, kr, axis=1, mode="constant", cval=0.0)
     return ndimage.correlate1d(out, kc, axis=2, mode="constant", cval=0.0)
+
+
+def _fill_unobserved(lam: np.ndarray) -> np.ndarray:
+    """Rates at non-finite voxels from the nearest earlier observed frame of
+    the same pixel (the next later one before the first); 0 if never."""
+    ok = np.isfinite(lam)
+    if ok.all():
+        return lam
+    n_t = lam.shape[0]
+    t = np.arange(n_t, dtype=np.int32)[:, None]
+    src = np.maximum.accumulate(np.where(ok, t, -1), axis=0)
+    nxt = np.minimum.accumulate(np.where(ok, t, n_t)[::-1], axis=0)[::-1]
+    src = np.where(src >= 0, src, nxt)
+    never = src >= n_t
+    out = np.take_along_axis(lam, np.minimum(src, n_t - 1), axis=0)
+    out[never] = 0.0
+    return out
 
 
 def _mixing_correction(lam, vidx, rows, cols, kr, kc) -> np.ndarray:
@@ -253,7 +274,11 @@ def null_movie(
     with np.errstate(invalid="ignore", divide="ignore"):
         lam_all = baseline.astype(np.float64) * lam_scale / var_factor
         gain_z = (s * var_factor / std).astype(np.float32)
-    lam_all[~(lam_all > 0) | ~np.isfinite(lam_all)] = 0.0
+    # unobserved voxels (discarded frames) keep their latent noise, which
+    # reaches the observed frames next to them through the temporal kernel;
+    # the observation mask is applied after the filters
+    lam_all = _fill_unobserved(lam_all)
+    lam_all[~(lam_all > 0)] = 0.0
     gain_z *= _mixing_correction(lam_all, vidx, rows, cols, kr, kc)
     out = np.full(nans.shape, np.nan, dtype=np.float32)
     flat_out = out.reshape(n_t, -1)

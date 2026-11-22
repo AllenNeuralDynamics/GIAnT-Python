@@ -203,7 +203,8 @@ def get_act_im_peaks(  # noqa: C901
     peak_th : float
         Threshold in robust SDs (MAD over all finite pixels) above the median.
     exclusion_mask : ndarray of bool, optional
-        Pixels where no peak may be placed (e.g. somata).
+        Pixels where no peak may be placed (e.g. somata). Unlike MATLAB, a
+        peak whose fitted centre ends up in the mask is also dropped.
     min_peak_distance : int
         Minimum Chebyshev distance between a residual peak and fitted peaks.
 
@@ -330,6 +331,10 @@ def get_act_im_peaks(  # noqa: C901
         np.pi / 2 * s**2 * erf(1.0 / (_SQRT2 * s)) ** 2
     )
     theta = theta[~(theta[:, 0] < adj_thresh)]
+    if exclusion_mask is not None and theta.shape[0]:
+        # a fit may move a centre up to 1.5 px into the mask (not in MATLAB)
+        iy, ix = _rounded_index(theta, shape)
+        theta = theta[~excl[iy, ix]]
     out = theta.copy()
     out[:, 1:3] -= 1.0
     return out

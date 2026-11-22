@@ -1,6 +1,7 @@
 """Tests of the bootstrap null of the raster SiLo activity image."""
 
 import numpy as np
+import pytest
 
 from giant_python.extraction.raster.localization import (
     RasterLocalizationParams,
@@ -126,20 +127,68 @@ def test_bootstrap_calibrates_dim_and_bright_pixels():
     assert info["s0"][0] > 1.3 * info["s0"][-1]
 
 
-def test_lag_correlations_skip_discarded_frames():
-    """Lags are counted in recorded frames: pairs across discarded frames
-    (here 3 of every 6) are not taken as lag-1 or lag-2 pairs."""
-    rng = np.random.default_rng(4)
-    t, n = 3000, 400
+def _ar1(rng, t, n, rho=0.6):
+    """Independent AR(1) series (one per column) with lag-1 correlation."""
     e = rng.standard_normal((t, n))
     r = np.empty((t, n))
     r[0] = e[0]
-    for k in range(1, t):  # AR(1), correlation 0.6 at lag 1
-        r[k] = 0.6 * r[k - 1] + 0.8 * e[k]
+    for k in range(1, t):
+        r[k] = rho * r[k - 1] + np.sqrt(1 - rho**2) * e[k]
+    return r
+
+
+@pytest.mark.parametrize(
+    "kept",
+    [
+        lambda t: (t // 3) % 2 == 0,  # blocks of 3 kept, 3 discarded
+        lambda t: t % 3 != 2,  # 0, 1, 3, 4, 6, 7...: lag 2 spans a gap
+    ],
+)
+def test_lag_correlations_use_recorded_frame_indices(kept):
+    """Lags are counted in recorded frames: pairs are matched by their
+    original indices, also across a discarded frame between them, and
+    never across a gap that changes the lag."""
+    rng = np.random.default_rng(4)
+    t, n = 3000, 400
+    r = _ar1(rng, t, n)
     base = np.full((t, n), 4.0)
-    frames = np.flatnonzero((np.arange(t) // 3) % 2 == 0)
+    frames = np.flatnonzero(kept(np.arange(t)))
     m = noise_model(r, base, np.ones_like(r), np.arange(n), (20, 20), frames)
     np.testing.assert_allclose(m["rho"][:2], [0.6, 0.36], atol=0.03)
+
+
+def test_null_variance_around_discarded_frames():
+    """Discarded frames (NaN baseline, as an external baseline gives) keep
+    their latent noise: the frames next to them get the full variance."""
+    t, rows, cols, gain = 4000, 20, 20, 8.0
+    noise = dict(
+        gain=gain,
+        kt=temporal_kernel(0.6, 0.25),
+        kr=spatial_kernel(0.23),
+        kc=spatial_kernel(0.37),
+        q=1.0,
+    )
+    noise["W2"] = float(
+        (noise["kt"] ** 2).sum()
+        * (noise["kr"] ** 2).sum()
+        * (noise["kc"] ** 2).sum()
+    )
+    disc = np.arange(t) % 8 == 0
+    base = np.full((t, rows * cols), 2.0 * gain, np.float32)
+    base[disc] = np.nan
+    ones = np.ones_like(base)
+    nans = np.zeros((t, rows, cols), bool)
+    nans[disc] = True
+    z = null_movie(
+        base, ones, ones, nans, np.arange(rows * cols), noise, seed=7
+    )
+    assert np.isnan(z[disc]).all()
+    inner = z[:, 2:-2, 2:-2]
+    phase = np.arange(t) % 8
+    var_next = inner[(phase == 1) | (phase == 7)].var()
+    var_far = inner[(phase >= 3) & (phase <= 5)].var()
+    assert abs(var_next / var_far - 1) < 0.03
+    assert abs(var_far / (gain * 2.0 * gain) - 1) < 0.05  # gain x b
 
 
 def test_null_variance_next_to_bright_structures():
