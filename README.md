@@ -39,7 +39,7 @@ register_multiroi(
 )
 ```
 
-or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run in `max_workers` parallel processes; on a GPU, one at a time. The command lists trials flagged `registrationFailed` and exits with status 1 if the registration of any trial raised (those trials get no outputs and empty filenames).
+or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run in `max_workers` parallel processes; on a GPU, one at a time. The command lists trials flagged `registrationFailed` and exits with status 1 if the registration of any trial raised (those trials get no outputs and empty filenames). Cells of a ragged trial table without a recording are skipped: their filenames stay empty and they are flagged `registration_failed`.
 
 - By default frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding. `schedule="grow"` instead matches frames in batches, growing outward from seed frames spread over the trial (see `giant_python.registration.growth`); it is experimental and gives slightly different motion.
 - `compensate_online=True` (`--compensate-online`) undoes the online motion correction line by line, as MATLAB's `compensateOnline` does. The alignment file then records each frame's reference offset (`slap2/onlineCompensation`).
