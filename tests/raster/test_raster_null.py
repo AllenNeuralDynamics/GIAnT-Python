@@ -8,6 +8,7 @@ from giant_python.extraction.raster.localization import (
     localize_sources,
 )
 from giant_python.extraction.raster.null import (
+    _calibration_maps,
     noise_model,
     null_movie,
     spatial_kernel,
@@ -286,3 +287,14 @@ def test_null_variance_follows_a_fast_changing_baseline():
     for sel in (bright, ~bright):
         ratio = inner[sel].var() / (gain * b_t[sel][0])
         assert abs(ratio - 1) < 0.1
+
+
+def test_calibration_of_zero_brightness_is_the_dimmest_bin():
+    """Pixels with zero or negative baseline take the dimmest bin's centre
+    and scale (not the middle bin's); NaN brightness takes the middle."""
+    centre = np.log([0.1, 1.0, 10.0])
+    m0, s0 = np.array([1.0, 2.0, 3.0]), np.array([10.0, 20.0, 30.0])
+    photons = np.array([0.0, -1.0, np.nan, 0.01, 1.0, 100.0])
+    m, s = _calibration_maps(photons, centre, m0, s0)
+    np.testing.assert_array_equal(m, [1, 1, 2, 1, 2, 3])
+    np.testing.assert_array_equal(s, [10, 10, 20, 10, 20, 30])

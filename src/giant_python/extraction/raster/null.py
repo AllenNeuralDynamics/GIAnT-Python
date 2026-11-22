@@ -325,6 +325,22 @@ def null_movie(
     return out
 
 
+def _calibration_maps(photons, centre, m0, s0):
+    """Per-pixel null centre and scale: linear in log photons between the
+    bins' centres, constant beyond the outer ones. Zero or negative
+    brightness takes the dimmest bin; undefined (NaN) the middle one."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lp = np.log(photons)
+    m_map = np.interp(lp, centre, m0)
+    s_map = np.interp(lp, centre, s0)
+    mid = (centre.size - 1) // 2
+    nan = np.isnan(photons)
+    m_map[nan], s_map[nan] = m0[mid], s0[mid]
+    dark = ~nan & ~(photons > 0)
+    m_map[dark], s_map[dark] = m0[0], s0[0]
+    return m_map, s_map
+
+
 def null_calibration(
     act_im: np.ndarray,
     baseline: np.ndarray,
@@ -411,13 +427,7 @@ def null_calibration(
     if not centre:
         raise ValueError("the null activity image has no spread")
     centre, m0, s0 = np.array(centre), np.array(m0), np.array(s0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        lp_all = np.log(photons)
-    mid = (centre.size - 1) // 2
-    m_map = np.interp(lp_all, centre, m0)
-    s_map = np.interp(lp_all, centre, s0)
-    bad = ~np.isfinite(lp_all)
-    m_map[bad], s_map[bad] = m0[mid], s0[mid]
+    m_map, s_map = _calibration_maps(photons, centre, m0, s0)
     out = (act_im - m_map) / s_map
     info = dict(
         noise=noise,
