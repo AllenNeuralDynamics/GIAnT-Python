@@ -406,12 +406,12 @@ Trial table fields
      - nPaths x total trials
      - string
      - Registered and downsampled TIFF filename (empty where Python
-       registration raised).
+       registration raised or the cell has no recording).
    * - ``motion_correction/fn_adata``
      - nPaths x total trials
      - string
      - Alignment metadata ``_ALIGNMENTDATA.h5`` filename (empty where
-       Python registration raised).
+       Python registration raised or the cell has no recording).
    * - ``motion_correction/fn_raw``
      - nPaths x total trials
      - string
@@ -419,7 +419,8 @@ Trial table fields
    * - ``motion_correction/registration_failed``
      - nPaths x total trials
      - bool
-     - Whether registration failed.
+     - Whether registration failed (true for cells of a ragged table
+       without a recording, which Python registration skips).
    * - ``motion_correction/first_line_original``
      - nPaths x total trials
      - integer
