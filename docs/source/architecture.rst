@@ -60,6 +60,12 @@ All module names below are relative to ``giant_python``.
      - Trace extraction and fixed-profile temporal optimization.
    * - ``extraction.band.summary_images`` / ``extraction.band.trial_data``
      - Image assembly and superpixel data reduction.
+   * - ``extraction.raster.trial`` / ``extraction.raster.localization`` /
+       ``extraction.raster.peaks`` / ``extraction.raster.null``
+     - Multi-ROI (raster) SILo localization of one trial, ported from
+       GIAnT-MATLAB (``loadAndProcessTrialAsync``, ``localizeSources_vIM``,
+       ``getActImPeaks``), with optional detection changes and the bootstrap
+       null.
    * - ``numerics.baseline`` / ``numerics.peaks`` /
        ``numerics.interpolation`` / ``numerics.morphology``
      - Acquisition-independent numerical kernels and helpers.
