@@ -17,6 +17,7 @@ Arrays are ``(frames, rows, cols)`` in MATLAB's row and column orientation
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -103,6 +104,25 @@ class RegisteredTrial:
     align_hz: float
 
 
+def _check_channels(num_channels, activity_channel) -> None:
+    """Reject channel arguments that would deinterleave or select wrongly."""
+    for name, v in (
+        ("num_channels", num_channels),
+        ("activity_channel", activity_channel),
+    ):
+        if isinstance(v, bool) or not isinstance(v, (int, np.integer)):
+            raise ValueError(f"{name} must be an integer, not {v!r}")
+    if num_channels < 1:
+        raise ValueError(
+            f"num_channels must be at least 1, not {num_channels}"
+        )
+    if not 1 <= activity_channel <= num_channels:
+        raise ValueError(
+            f"activity_channel {activity_channel} is not one of the "
+            f"{num_channels} channels (1-based)"
+        )
+
+
 def _read_tiff_pages(path) -> np.ndarray:
     """All pages of a registered TIFF as one ``(pages, rows, cols)`` array.
 
@@ -152,7 +172,20 @@ def load_registered_trial(
     Returns
     -------
     RegisteredTrial
+
+    Raises
+    ------
+    ValueError
+        If ``num_channels`` is not a positive integer or ``activity_channel``
+        not one of its 1-based channels (0 would select the last one).
+
+    Warns
+    -----
+    UserWarning
+        If the page count is not a multiple of ``num_channels`` (the pages
+        after the last full frame are left out).
     """
+    _check_channels(num_channels, activity_channel)
     moco_dir = Path(moco_dir)
     path = moco_dir / fn
     if path.suffix == ".h5":
@@ -165,6 +198,12 @@ def load_registered_trial(
         raw = _read_tiff_pages(path)  # (pages, MATLAB col, MATLAB row)
     raw = np.asarray(raw, dtype=np.float32).transpose(0, 2, 1)
     n_frames = raw.shape[0] // num_channels
+    if raw.shape[0] != n_frames * num_channels:
+        warnings.warn(
+            f"{fn}: {raw.shape[0]} pages are not a multiple of "
+            f"{num_channels} channels; the last "
+            f"{raw.shape[0] - n_frames * num_channels} are left out"
+        )
     stack = raw[: n_frames * num_channels].reshape(
         n_frames, num_channels, raw.shape[1], raw.shape[2]
     )

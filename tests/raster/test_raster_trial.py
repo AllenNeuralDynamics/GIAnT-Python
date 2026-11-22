@@ -95,3 +95,40 @@ def test_localize_trial_retries_numerical_failures(monkeypatch):
     with pytest.raises(ValueError, match="external baseline"):
         trial_mod.localize_trial("dir", "x_REGISTERED.tif", 1, p)
     assert seen == []
+
+
+@pytest.mark.parametrize(
+    "num_channels, activity_channel",
+    [(2, 0), (2, 3), (0, 1), (2.0, 1), (2, True), (1, -1)],
+)
+def test_channel_arguments_checked(tmp_path, num_channels, activity_channel):
+    """Channel arguments outside 1..num_channels (0 would select the last
+    channel), or not integers, raise before anything is read."""
+    with pytest.raises(ValueError, match="channel"):
+        load_registered_trial(
+            tmp_path,
+            "E1T1DMD1_REGISTERED_DOWNSAMPLED-80Hz.tif",
+            num_channels,
+            activity_channel,
+        )
+
+
+def test_page_count_not_a_multiple_of_channels(tmp_path):
+    """An incomplete last frame is left out, with a warning."""
+    tifffile = pytest.importorskip("tifffile")
+    n, rows, cols = 400, 4, 5
+    pages = np.ones((2 * n + 1, cols, rows), np.float32)
+    stem = "E1T1DMD1"
+    tifffile.imwrite(
+        tmp_path / f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif",
+        pages,
+        photometric="minisblack",
+    )
+    with h5py.File(tmp_path / f"{stem}_ALIGNMENTDATA.h5", "w") as f:
+        f["alignHz"] = np.array([[80.0]])
+        f["recNegErr"] = np.full((1, n), -0.5)
+    with pytest.warns(UserWarning, match="not a multiple"):
+        tr = load_registered_trial(
+            tmp_path, f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif", 2
+        )
+    assert tr.movie.shape == (n, rows, cols)
