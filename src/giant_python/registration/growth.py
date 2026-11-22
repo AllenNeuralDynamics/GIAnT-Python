@@ -379,6 +379,7 @@ class Grower:
             for i, (k, *_rest) in enumerate(items)
             if not edge[i]
             and np.isfinite(peak[i])
+            and np.isfinite(motion[i]).all()
             and peak[i] >= r_min
             and (not np.isfinite(margin[i]) or margin[i] >= m_min)
             and self._plausible(k, motion[i])
@@ -556,7 +557,7 @@ class Grower:
             s = self.p.clip_shift
             while True:
                 mot, pk, mg, edge = self._match([(int(f), r, c, s)])
-                if not edge[0] or s >= self.m:
+                if not edge[0] or s >= self.m or not np.isfinite(mot[0]).all():
                     break
                 r, c = self._init_of(mot[0])
                 s = min(self.m, 2 * s)

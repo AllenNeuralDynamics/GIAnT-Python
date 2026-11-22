@@ -8,8 +8,10 @@ import torch
 
 from giant_python.registration.interpolation import interp_frame
 from giant_python.registration.matching import (
+    RegistrationError,
     correlation_map,
     match,
+    match_maps,
     shift_tables,
 )
 from giant_python.registration.multiroi import matlab_colon
@@ -133,6 +135,37 @@ def test_match_recovers_shift_with_subpixel_sign():
     )
     np.testing.assert_allclose(mot[0].numpy(), [-1, 2], atol=0.05)
     assert peak[0] > 0.9
+
+
+def test_frame_without_valid_samples_has_nan_motion():
+    """An undefined correlation map gives NaN motion, not a search edge.
+
+    The other frame of the batch is unaffected, and ``match`` raises.
+    """
+    rng = np.random.default_rng(1)
+    _, _, template = random_frame(rng, frac=0.0)
+    good = np.roll(template, (-1, 2), (0, 1))
+    good[np.isnan(good)] = 5.0
+    rows, cols = np.nonzero(~np.isnan(good))
+    frames = torch.from_numpy(np.stack([good[rows, cols]] * 2))
+    weights = torch.ones(2, rows.size, dtype=torch.float64)
+    frames[1] = float("nan")  # no valid samples
+    weights[1] = 0
+    args = (
+        torch.from_numpy(template),
+        torch.from_numpy(rows),
+        torch.from_numpy(cols),
+        4,
+        torch.float64,
+    )
+    mot, peak, corr = match_maps(frames, weights, *args)
+    assert torch.isnan(corr[1]).all()
+    assert torch.isnan(peak[1]) and torch.isnan(mot[1]).all()
+    want, want_peak = match(frames[:1], weights[:1], *args)
+    np.testing.assert_allclose(mot[0].numpy(), want[0].numpy(), rtol=1e-12)
+    np.testing.assert_allclose(peak[0].item(), want_peak[0].item())
+    with pytest.raises(RegistrationError):
+        match(frames, weights, *args)
 
 
 @pytest.mark.parametrize(

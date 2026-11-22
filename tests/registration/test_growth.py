@@ -177,3 +177,35 @@ def test_junction_regrows_a_wrong_island(plain_recording, monkeypatch):
     assert np.all(grower.qc.kind[bad] == REGROWN)
     err = np.hypot(*(grower.motion[bad] - good[bad]).T)
     assert err.max() < 0.2
+
+
+def test_growth_handles_a_frame_without_valid_samples(
+    plain_recording, monkeypatch
+):
+    """A frame with an undefined correlation keeps its anchor's motion."""
+    from giant_python.registration.growth import FrameCache, Grower
+    from giant_python.registration.multiroi import build_template, open_trial
+    from giant_python.registration.sources import make_source
+
+    layout, _ = plain_recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6, schedule="grow")
+    lay, former, init, ds, dt = open_trial(
+        layout.files[0], 1, 9000, params, torch.device("cpu")
+    )
+    source = make_source(lay, former, 1, 9000, init, ds, dt, False)
+    state, cons = build_template(source, init, params, torch.float32)
+    seeds, cands, indep = seeds_from_consensus(cons, init, ds)
+    taken = {k for k, _, _ in seeds} | set(cands)
+    k = next(i for i in range(200, ds.size) if i not in taken)
+    cache = FrameCache(source, ds)
+    cache.values[:, k] = float("nan")
+    cache.freshness[k] = 0
+    grower = Grower(cache, state, params, seeds, cands, independent=indep)
+    motion, qc = grower.run()
+    assert grower.aligned.all() and np.all(np.isfinite(motion))
+    assert np.isnan(qc.peak[k]) and qc.anchor[k] >= 0
+    np.testing.assert_array_equal(motion[k], motion[qc.anchor[k]])
+    chain, peak, _ = grower._chain([k], motion[k - 1])
+    np.testing.assert_array_equal(chain[0], motion[k - 1])
+    assert np.isnan(peak[0])
