@@ -9,6 +9,7 @@ execution and annotation options. GUI imports occur only when needed.
 from __future__ import annotations
 
 import argparse
+import sys
 from typing import Optional, Sequence
 
 from .models.params import (
@@ -258,7 +259,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
-    register_multiroi(
+    fields = register_multiroi(
         args.trial_table,
         MultiRoiRegistrationParams(
             align_hz=args.align_hz,
@@ -276,6 +277,46 @@ def _cmd_register(args: argparse.Namespace) -> int:
             device=args.device,
         ),
     )
+    return _report_registration(fields)
+
+
+def _report_registration(fields: dict) -> int:
+    """Summarize ``register_multiroi``'s outcome; nonzero if a trial raised.
+
+    Trials flagged ``registrationFailed`` (too much motion, or too few
+    frames with samples) have outputs and are listed; SILo skips them.
+    Trials whose registration raised have no outputs (empty filenames).
+
+    Returns
+    -------
+    int
+        Exit code: 1 if any trial raised, else 0.
+    """
+    import numpy as np
+
+    failed = np.asarray(fields["registration_failed"], dtype=bool)
+    raised = np.asarray(fields["fn_adata"], dtype=object) == ""
+    flagged = failed & ~raised
+
+    def trials(mask):
+        """``trial t (path d)`` for each selected trial."""
+        return ", ".join(
+            f"trial {t + 1} (path {d + 1})" for d, t in zip(*np.nonzero(mask))
+        )
+
+    print(
+        f"giant register: {failed.size - raised.sum()} of {failed.size} "
+        "trials registered."
+    )
+    if flagged.any():
+        print(f"registrationFailed (excluded by SILo): {trials(flagged)}")
+    if raised.any():
+        print(
+            f"Registration raised, no outputs (see the log): "
+            f"{trials(raised)}",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
