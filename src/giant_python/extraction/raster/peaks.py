@@ -186,10 +186,16 @@ def _find_f(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return r + 1.0, c + 1.0
 
 
+def _round(x):
+    """MATLAB's ``round`` (halves away from zero; numpy's go to even)."""
+    x = np.asarray(x, dtype=float)
+    return np.sign(x) * np.floor(np.abs(x) + 0.5)
+
+
 def _rounded_index(theta: np.ndarray, shape) -> tuple[np.ndarray, np.ndarray]:
     """0-based pixel of each fitted peak (rounded and clamped)."""
-    iy = np.clip(np.round(theta[:, 1]), 1, shape[0]).astype(int) - 1
-    ix = np.clip(np.round(theta[:, 2]), 1, shape[1]).astype(int) - 1
+    iy = np.clip(_round(theta[:, 1]), 1, shape[0]).astype(int) - 1
+    ix = np.clip(_round(theta[:, 2]), 1, shape[1]).astype(int) - 1
     return iy, ix
 
 
@@ -317,8 +323,8 @@ def get_act_im_peaks(  # noqa: C901
 
         my_new, mx_new = theta[new_idx, 1], theta[new_idx, 2]
         if (
-            abs(my_new - np.round(my_new)) < 1e-3
-            and abs(mx_new - np.round(mx_new)) < 1e-3
+            abs(my_new - _round(my_new)) < 1e-3
+            and abs(mx_new - _round(mx_new)) < 1e-3
         ):
             # the new peak did not move: refit the others without it, reject
             others = to_fit.copy()

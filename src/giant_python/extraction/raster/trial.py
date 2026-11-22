@@ -69,7 +69,7 @@ def discard_frames(
     first ``discard_initial_s``.
     """
     rne = np.asarray(rec_neg_err, dtype=np.float64).ravel()
-    tmp = rne - _medfilt1_zeropad(rne, round(4 * align_hz))
+    tmp = rne - _medfilt1_zeropad(rne, int(math.floor(4 * align_hz + 0.5)))
     tmp = -tmp / min(-0.005, matlab_prctile(tmp, 5))
     window = 2 * math.ceil(0.025 * align_hz) + 1
     over = _dilate(tmp > motion_thresh, window) & (tmp > motion_thresh / 2)

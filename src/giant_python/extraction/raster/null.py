@@ -22,8 +22,9 @@ through the same filters and score:
 * :func:`null_calibration` scores the null movies like the trial and returns
   ``(act_im - m0) / s0``, with ``m0`` and ``s0`` the null image's centre and
   scale among pixels of similar brightness (12 equal-count bins of log photons
-  per frame). By default (``null_scale="tail"``) they are the median and the
-  distance from it to the 99.5th percentile in Gaussian units, so every
+  per frame, fewer if a bin would hold under 500 null values). By default
+  (``null_scale="tail"``) they are the median and the distance from it to
+  the 99.5th percentile in Gaussian units, so every
   brightness has the same upper tail: at 0.03-0.3 photons the null image is
   so heavy-tailed that a bin's SD hangs on a few pixels. ``"sd"`` uses the
   mean and SD.
@@ -36,6 +37,7 @@ import time
 import numpy as np
 
 _N_BINS = 12
+_MIN_BIN_VALUES = 500  # null values per brightness bin, at least
 _TAIL_Q = 0.995
 _TAIL_Z = 2.5758293035489004  # standard normal quantile at 0.995
 
@@ -363,7 +365,8 @@ def null_calibration(
     trial's activity score (with the trial's ``sd_u``) and returns
     ``(act_im - m0) / s0``: ``m0`` and ``s0`` are the null image's centre and
     scale among pixels of similar brightness (12 equal-count bins of the log
-    mean photons per frame, linear in between, constant beyond the outer bins'
+    mean photons per frame, fewer if a bin would hold under 500 null values;
+    linear in between, constant beyond the outer bins'
     centres): with ``params.null_scale`` "tail" the median and
     ``(q99.5 - median) / 2.576``, with "sd" the mean and SD. Also returns
     the noise model, bin brightness (photons per frame), ``m0``, ``s0`` and
@@ -407,7 +410,12 @@ def null_calibration(
     if ok.sum() < 2:
         raise ValueError("too few imaged pixels for the null calibration")
     lp = np.log(photons[ok])
-    edges = np.unique(np.quantile(lp, np.linspace(0, 1, _N_BINS + 1)))
+    # each bin needs enough null values for its 99.5th percentile (with a few
+    # dozen it is the maximum, and the scale comes out too small)
+    n_bins = int(
+        np.clip(ok.sum() * params.null_draws // _MIN_BIN_VALUES, 1, _N_BINS)
+    )
+    edges = np.unique(np.quantile(lp, np.linspace(0, 1, n_bins + 1)))
     if edges.size == 1:  # a single brightness: one bin
         edges = np.repeat(edges, 2)
     bins = np.clip(np.searchsorted(edges, lp, side="right") - 1, 0, None)

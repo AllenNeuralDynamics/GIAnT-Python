@@ -334,3 +334,50 @@ def test_null_has_no_noise_at_zero_baselines():
     assert np.all(var[:, photons == 0] == 0)
     bright = var[2:-2][:, photons > 0][:, 1:-1] / (gain * 20.0 * gain)
     np.testing.assert_allclose(bright.mean(), 1, rtol=0.1)
+
+
+def test_bootstrap_uses_the_per_frame_variance_factor(monkeypatch):
+    """The data's variance follows the per-frame variance factor, so the
+    noise model and the null movies get it unsmoothed (the Z-score keeps
+    MATLAB's smoothed one)."""
+    import giant_python.extraction.raster.null as null_mod
+
+    rng = np.random.default_rng(10)
+    t, rows, cols = 800, 24, 24
+    vf = np.where(np.arange(t) % 2 == 0, 1.0, 3.0)[:, None, None]
+    vf = np.broadcast_to(vf, (t, rows, cols)).astype(np.float32)
+    base = np.full((t, rows, cols), 40.0, np.float32)
+    movie = base + np.sqrt(4 * base * vf) * rng.standard_normal(base.shape)
+    seen = {}
+    real_model, real_movie = null_mod.noise_model, null_mod.null_movie
+
+    def spy_model(resid, baseline, var_factor, *a, **k):
+        """Record the variance factor given to the noise model."""
+        seen["model"] = np.array(var_factor)
+        return real_model(resid, baseline, var_factor, *a, **k)
+
+    def spy_movie(baseline, var_factor, *a, **k):
+        """Record the variance factor given to the null movie."""
+        seen["movie"] = np.array(var_factor)
+        return real_movie(baseline, var_factor, *a, **k)
+
+    monkeypatch.setattr(null_mod, "noise_model", spy_model)
+    monkeypatch.setattr(null_mod, "null_movie", spy_movie)
+    p = RasterLocalizationParams(null="bootstrap")
+    localize_sources(movie.astype(np.float32), vf, p, base, find_peaks=False)
+    for key in ("model", "movie"):
+        got = seen[key]
+        assert set(np.unique(got[np.isfinite(got)])) == {1.0, 3.0}
+
+
+def test_bins_hold_enough_null_values():
+    """A small field of view gets fewer brightness bins, so no bin's 99.5th
+    percentile rests on a few dozen values."""
+    rng = np.random.default_rng(11)
+    movie, base, _, _ = _gradient_movie(rng, t=1200, rows=12, cols=30)
+    p = RasterLocalizationParams(
+        variance_floor=False, null="bootstrap", null_draws=1
+    )
+    loc = localize_sources(movie, None, p, base, find_peaks=False)
+    n_ok = 8 * 26  # pixels away from the edges, at most
+    assert loc.info["null"]["m0"].size <= max(1, n_ok // 500)

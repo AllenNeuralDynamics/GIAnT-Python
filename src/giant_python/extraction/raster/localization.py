@@ -494,6 +494,9 @@ def localize_sources(  # noqa: C901
     # the variance model
     w = math.ceil(denoise_window / 2)
     ims = movmean_nan(y / vf, w)
+    # the bootstrap's noise follows the data's per-frame variance factor; the
+    # Z-score uses the smoothed one, as MATLAB
+    vf_raw = vf if p.null == "bootstrap" else None
     vf = (1.0 / movmean_nan(1.0 / vf, w)).astype(np.float32)
     ims *= vf
 
@@ -536,7 +539,7 @@ def localize_sources(  # noqa: C901
         from .null import noise_model
 
         noise_frames = np.flatnonzero((~nans).any(axis=(1, 2)))[:1000]
-        noise = noise_model(y, imb, vf, vidx, shape[1:], noise_frames)
+        noise = noise_model(y, imb, vf_raw, vidx, shape[1:], noise_frames)
 
     with np.errstate(invalid="ignore"):
         std = np.sqrt(
@@ -561,9 +564,9 @@ def localize_sources(  # noqa: C901
         from .null import null_calibration
 
         sk, info["null"] = null_calibration(
-            sk, imb, vf, std, nans, valid, vidx, noise, p, sd_u
+            sk, imb, vf_raw, std, nans, valid, vidx, noise, p, sd_u
         )
-        del imb, vf, std
+        del imb, vf, vf_raw, std
 
     summary = summary_image(sk, valid)
     sk[~valid] = np.nan

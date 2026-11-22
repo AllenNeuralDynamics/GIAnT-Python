@@ -129,3 +129,14 @@ def test_eval_budget_matches_matlab_iterations():
         assert _eval_budget(n) - 1 == (5000 - 1) // (n + 1)
     assert _eval_budget(2500) == 2  # one step (was 1: none)
     assert _eval_budget(5000) == 1  # MATLAB cannot take a step either
+
+
+def test_rounding_is_matlabs():
+    """Halves round away from zero as in MATLAB (numpy rounds them to even),
+    so a centre at exactly k + 0.5 lands on MATLAB's pixel."""
+    from giant_python.extraction.raster.peaks import _rounded_index
+
+    theta = np.array([[1.0, 4.5, 2.5, 0.35], [1.0, 3.5, 7.49, 0.35]])
+    iy, ix = _rounded_index(theta, (10, 10))  # 1-based in, 0-based out
+    np.testing.assert_array_equal(iy, [4, 3])  # MATLAB 5 and 4
+    np.testing.assert_array_equal(ix, [2, 6])  # MATLAB 3 and 7
