@@ -26,9 +26,10 @@ the optional temporal datasets remain readable; rewriting missing optional
 data emits NaNs, not fabricated fits.
 
 ``per_trial_summary.h5`` is an **unsupported, external-reference format**;
-Python BandSILo does not emit it. Registration products and the band lookup
-table are **external inputs**, not Python-generated outputs. Python loads
-existing trial tables but does not write them.
+Python BandSILo does not emit it. Band registration products and the band
+lookup table are **external inputs**, not Python-generated outputs. Python
+loads existing trial tables; raster registration rewrites only their
+``motion_correction`` group, in MATLAB layout.
 
 .. warning::
 
@@ -151,10 +152,25 @@ it does not create/save the model or append reference stage groups.
 Alignment data: external registration input
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-External motion correction saves one alignment HDF5 file per trial. Python
-reads the band fields through
-``giant_python.io.slap2.load_alignment_data_h5``; Python registration is not
-implemented. The tree includes external fields not consumed by BandSILo::
+Motion correction saves one alignment HDF5 file per trial. Python reads the
+band fields through ``giant_python.io.slap2.load_alignment_data_h5``. Python
+registration stores ``slap2/varFacDS`` chunked (one frame per chunk) and
+deflate-compressed by default (``var_factor_deflate``); readers that use the
+HDF5 library, MATLAB's ``h5read`` included, see the same values. Raster
+recordings can be registered in Python (``giant_python.registration``,
+``giant register``), which writes the MultiRoiRegistration fields below in
+MATLAB layout (``row_major = 0``); band registration is external. Python
+registration also saves the settings it used as a JSON string attribute
+``align_params`` of the root group (the trial table's ``align_params``
+fields except ``overwriteExisting``); struct readers ignore it, and
+``register_multiroi`` keeps existing outputs only if it matches the
+requested settings. Frames without valid samples get NaN ``motionDSr`` and
+``motionDSc`` and an all-NaN movie frame (MATLAB gives them an arbitrary
+finite motion); ``interp1(..., 'pchip')``, which SILo uses to upsample the
+motion, skips NaN samples but needs two finite ones: a trial of several
+frames with fewer than two frames with samples is saved with
+``registrationFailed`` set, so that SILo skips it. The tree includes fields
+not consumed by BandSILo::
 
    <trial_stem>_ALIGNMENTDATA.h5
    ├── row_major
@@ -389,11 +405,13 @@ Trial table fields
    * - ``motion_correction/fn_reg_ds``
      - nPaths x total trials
      - string
-     - Registered and downsampled TIFF filename.
+     - Registered and downsampled TIFF filename (empty where Python
+       registration raised).
    * - ``motion_correction/fn_adata``
      - nPaths x total trials
      - string
-     - Alignment metadata ``_ALIGNMENTDATA.h5`` filename.
+     - Alignment metadata ``_ALIGNMENTDATA.h5`` filename (empty where
+       Python registration raised).
    * - ``motion_correction/fn_raw``
      - nPaths x total trials
      - string

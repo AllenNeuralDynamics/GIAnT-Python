@@ -59,19 +59,35 @@ class Slap2Reader(Protocol):
         """Read a batch using the vendor reader's unchanged contract."""
 
 
+def is_cycle_split(path: Union[str, Path]) -> bool:
+    """Whether a ``.dat`` file name marks one file of a CYCLE-split recording.
+
+    SLAP2 writes long recordings as ``<name>-CYCLE-<first cycle>.dat`` files.
+    The hyphen after ``CYCLE`` is optional, as in the ``-CYCLE-?[0-9]+$``
+    suffix that ``MultiDataFiles`` (MATLAB and slap2_utils) strips to find
+    the other files.
+    """
+    import re
+
+    return (
+        re.search(r"CYCLE-?\d+$", Path(path).stem, re.IGNORECASE) is not None
+    )
+
+
 def open_slap2_file(path: Union[str, Path]) -> Slap2Reader:
     """Lazily open DataFile/MultiDataFiles; return ownership to the caller.
 
-    Retains the original CYCLE detection and module reload. No reads, close,
-    copying, or early resource disposal are performed here.
+    A file of a CYCLE-split recording opens the whole recording (all its
+    files), so line and cycle indexes run over the recording, as in
+    GIAnT-MATLAB. Keeps the module reload. No reads, close, copying, or early
+    resource disposal are performed here.
     """
     import importlib
-    import re
 
     import slap2_utils
 
     importlib.reload(slap2_utils)
     path = str(path)
-    if re.search(r"CYCLE\d+", path):
+    if is_cycle_split(path):
         return slap2_utils.MultiDataFiles(path)
     return slap2_utils.DataFile(path)
