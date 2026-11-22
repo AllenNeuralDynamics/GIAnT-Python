@@ -8,6 +8,7 @@ from giant_python.extraction.raster.localization import (
     localize_sources,
 )
 from giant_python.extraction.raster.null import (
+    _brightness_bins,
     _calibration_maps,
     noise_model,
     null_movie,
@@ -16,11 +17,15 @@ from giant_python.extraction.raster.null import (
 )
 
 
-def _gradient_movie(rng, t=1500, rows=40, cols=90, gain=8.0, margin=0):
-    """Pure photon noise with brightness 0.03-30 photons across the columns,
-    filtered as image formation does (correlations in time and space); with a
-    margin of unimaged (NaN) pixels around it, as SLAP2 frames have."""
-    photons = np.exp(np.linspace(np.log(0.03), np.log(30), cols))
+def _gradient_movie(
+    rng, t=1500, rows=40, cols=90, gain=8.0, margin=0, photons=None
+):
+    """Pure photon noise with brightness 0.03-30 photons across the columns
+    (or the given photons per column), filtered as image formation does
+    (correlations in time and space); with a margin of unimaged (NaN) pixels
+    around it, as SLAP2 frames have."""
+    if photons is None:
+        photons = np.exp(np.linspace(np.log(0.03), np.log(30), cols))
     b = np.broadcast_to(photons[None, :] * gain, (rows, cols))
     base = np.broadcast_to(b[None], (t, rows, cols)).astype(np.float32)
     noise = dict(
@@ -381,3 +386,46 @@ def test_bins_hold_enough_null_values():
     loc = localize_sources(movie, None, p, base, find_peaks=False)
     n_ok = 8 * 26  # pixels away from the edges, at most
     assert loc.info["null"]["m0"].size <= max(1, n_ok // 500)
+
+
+def test_bins_keep_the_minimum_with_tied_brightness():
+    """Ties collapse equal-count edges; a few pixels below a tied block
+    would form a bin of their own. Bins merge until each holds 500 null
+    values, and tied pixels are never split."""
+    rng = np.random.default_rng(12)
+    lp = np.concatenate(
+        [
+            np.full(3, -3.0),  # a few darker pixels
+            np.zeros(2000),  # half the pixels at one brightness
+            rng.uniform(0.1, 3.0, 2000),
+        ]
+    )
+    bins, counts = _brightness_bins(lp, draws=1)
+    assert counts.size > 1 and counts.min() >= 500
+    np.testing.assert_array_equal(counts, np.bincount(bins))
+    for k in range(counts.size - 1):  # contiguous in brightness, no split
+        assert lp[bins == k].max() < lp[bins == k + 1].min()
+    assert bins[0] == bins[3]  # the darker pixels joined the tied block
+    bins2, counts2 = _brightness_bins(lp, draws=2)  # counts are values
+    assert counts2.min() >= 500 and counts2.size >= counts.size
+
+
+def test_tied_brightness_end_to_end():
+    """Half the columns at one brightness and two darker ones: every bin of
+    the calibration has at least 500 null values, so the dimmest bin's 99.5th
+    percentile is not set by a single maximum."""
+    rng = np.random.default_rng(13)
+    cols = 60
+    photons = np.r_[
+        [0.05, 0.05], np.full(30, 0.5), np.linspace(1, 30, cols - 32)
+    ]
+    movie, base, _, _ = _gradient_movie(
+        rng, t=1200, rows=40, cols=cols, photons=photons
+    )
+    p = RasterLocalizationParams(
+        variance_floor=False, null="bootstrap", null_draws=1
+    )
+    info = localize_sources(movie, None, p, base, find_peaks=False).info
+    counts = info["null"]["counts"]
+    assert counts.size >= 2 and counts.min() >= 500
+    assert counts[0] * (1 - 0.995) >= 2.5  # several values above the q99.5

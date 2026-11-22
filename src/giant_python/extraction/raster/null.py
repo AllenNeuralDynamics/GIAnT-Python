@@ -331,6 +331,39 @@ def null_movie(
     return out
 
 
+def _brightness_bins(lp: np.ndarray, draws: int):
+    """Bins of log brightness, each holding at least ``_MIN_BIN_VALUES``
+    null values (pixels x draws) when there are that many in all.
+
+    Up to ``_N_BINS`` equal-count bins by value, so tied pixels stay
+    together; a bin left under the minimum (ties collapse edges, or a few
+    pixels sit below a tied block) is merged with its smaller neighbour until
+    none is. With few values, a bin's 99.5th percentile would be its maximum.
+
+    Returns each pixel's bin and the null values per bin.
+    """
+    n0 = int(np.clip(lp.size * draws // _MIN_BIN_VALUES, 1, _N_BINS))
+    edges = np.unique(np.quantile(lp, np.linspace(0, 1, n0 + 1)))
+    if edges.size == 1:  # a single brightness: one bin
+        edges = np.repeat(edges, 2)
+
+    def assign(edges):
+        """Bin of each pixel and values per bin; the top value goes last."""
+        b = np.clip(np.searchsorted(edges, lp, side="right") - 1, 0, None)
+        b = np.minimum(b, edges.size - 2)
+        return b, np.bincount(b, minlength=edges.size - 1) * draws
+
+    bins, counts = assign(edges)
+    while counts.size > 1 and counts.min() < _MIN_BIN_VALUES:
+        k = int(np.argmin(counts))
+        if k == 0 or (k < counts.size - 1 and counts[k + 1] < counts[k - 1]):
+            edges = np.delete(edges, k + 1)  # merge with the next bin
+        else:
+            edges = np.delete(edges, k)  # merge with the previous bin
+        bins, counts = assign(edges)
+    return bins, counts
+
+
 def _calibration_maps(photons, centre, m0, s0):
     """Per-pixel null centre and scale: linear in log photons between the
     bins' centres, constant beyond the outer ones. Zero or negative
@@ -410,19 +443,10 @@ def null_calibration(
     if ok.sum() < 2:
         raise ValueError("too few imaged pixels for the null calibration")
     lp = np.log(photons[ok])
-    # each bin needs enough null values for its 99.5th percentile (with a few
-    # dozen it is the maximum, and the scale comes out too small)
-    n_bins = int(
-        np.clip(ok.sum() * params.null_draws // _MIN_BIN_VALUES, 1, _N_BINS)
-    )
-    edges = np.unique(np.quantile(lp, np.linspace(0, 1, n_bins + 1)))
-    if edges.size == 1:  # a single brightness: one bin
-        edges = np.repeat(edges, 2)
-    bins = np.clip(np.searchsorted(edges, lp, side="right") - 1, 0, None)
-    bins = np.minimum(bins, edges.size - 2)
+    bins, counts = _brightness_bins(lp, params.null_draws)
     vals = null_ims[:, ok]
-    centre, m0, s0 = [], [], []
-    for k in range(edges.size - 1):
+    centre, m0, s0, used = [], [], [], []
+    for k in range(counts.size):
         in_bin = bins == k
         x = vals[:, in_bin].ravel()
         if x.size < 2:
@@ -436,6 +460,7 @@ def null_calibration(
             centre.append(float(np.median(lp[in_bin])))
             m0.append(mid_x)
             s0.append(sd)
+            used.append(int(counts[k]))
     if not centre:
         raise ValueError("the null activity image has no spread")
     centre, m0, s0 = np.array(centre), np.array(m0), np.array(s0)
@@ -446,6 +471,7 @@ def null_calibration(
         photons=np.exp(centre),
         m0=m0,
         s0=s0,
+        counts=np.array(used),
         draws=params.null_draws,
         seconds=time.time() - t0,
     )
