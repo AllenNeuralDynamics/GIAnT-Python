@@ -552,6 +552,53 @@ def test_rejected_request_writes_nothing(
     assert sorted(moco.iterdir()) == sorted(old)
 
 
+def test_ragged_table_skips_empty_cells(recording, tmp_path, monkeypatch):
+    """A cell without a recording (one path has fewer trials) is skipped
+    and flagged, with empty output names; the other cells register."""
+    from giant_python.pipeline.register import register_multiroi
+
+    layout, _ = recording
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    dat = Path(layout.files[0])
+    table = tmp_path / "trial_table.h5"
+    save_struct_h5(
+        table,
+        {
+            "datadr": str(dat.parent),
+            "savedr": str(tmp_path),
+            "filename": np.array(
+                [[dat.name, dat.name], [dat.name, ""]], dtype=object
+            ),
+            "epoch": np.array([[3.0, 3.0], [3.0, np.nan]]),
+            "true_trial_ix": np.array([[1.0, 2.0]]),
+            "slap2_info": {
+                "first_line": np.array([[1.0, 3001.0], [1.0, np.nan]]),
+                "last_line": np.array([[3000.0, 6000.0], [3000.0, np.nan]]),
+            },
+        },
+    )
+    fields = register_multiroi(
+        table,
+        {"maxshift": 5, "save_tif": False},
+        execution={"device": "cpu", "max_workers": 1},
+    )
+    assert fields["fn_reg_ds"][1, 1] == fields["fn_adata"][1, 1] == ""
+    np.testing.assert_array_equal(
+        fields["registration_failed"], [[False, False], [False, True]]
+    )
+    names = [
+        fields[k][d, t]
+        for k in ("fn_reg_ds", "fn_adata")
+        for d, t in ((0, 0), (0, 1), (1, 0))
+    ]
+    assert all(names)
+    moco = tmp_path / "motion_correction"
+    assert sorted(p.name for p in moco.iterdir()) == sorted(names)
+    mc = read_trial_table(table).motion_correction
+    assert mc["fn_reg_ds"][1, 1] == mc["fn_adata"][1, 1] == ""
+    assert mc["registration_failed"][1, 1] == 1
+
+
 def test_trial_table_update_keeps_other_entries(tmp_path, monkeypatch):
     """Only the registration fields are replaced, once all are written.
 

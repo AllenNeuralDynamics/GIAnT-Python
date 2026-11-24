@@ -5,11 +5,11 @@
 
 GIAnT-Python is a Python package for processing glutamate imaging data, with advanced capabilities for SLAP2 recordings.
 
-Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's MultiRoiRegistration, on the CPU or a CUDA GPU) and **SLAP2 Band Scan processing**: **BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
+Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's MultiRoiRegistration, on the CPU or a CUDA GPU), the per-trial **localization of SILo for raster (multi-ROI) recordings**, and **SLAP2 Band Scan processing**: **BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
 
 ## Requirements and scope
 
-Provide an existing trial table, raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. Standard SILo, standalone deconvolution, general trial-table writing, config-file loading, and checkpoint/resume are not supported.
+Provide an existing trial table, raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. Standard SILo (apart from its per-trial raster localization, below), standalone deconvolution, general trial-table writing, config-file loading, and checkpoint/resume are not supported.
 
 Analysis trials come from the supplied table; Python does not split or merge them.
 
@@ -39,7 +39,7 @@ register_multiroi(
 )
 ```
 
-or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run in `max_workers` parallel processes; on a GPU, one at a time. The command lists trials flagged `registrationFailed` and exits with status 1 if the registration of any trial raised (those trials get no outputs and empty filenames).
+or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run in `max_workers` parallel processes; on a GPU, one at a time. The command lists trials flagged `registrationFailed` and exits with status 1 if the registration of any trial raised (those trials get no outputs and empty filenames). Cells of a ragged trial table without a recording are skipped: their filenames stay empty and they are flagged `registration_failed`.
 
 - By default frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding. `schedule="grow"` instead matches frames in batches, growing outward from seed frames spread over the trial (see `giant_python.registration.growth`); it is experimental and gives slightly different motion.
 - `compensate_online=True` (`--compensate-online`) undoes the online motion correction line by line, as MATLAB's `compensateOnline` does. The alignment file then records each frame's reference offset (`slap2/onlineCompensation`).
@@ -71,6 +71,28 @@ Annotations are disabled by default. Use `BandSiloParams` for scientific setting
 - The CLI provides `giant annotate` and `giant extract`, each taking a trial-table filename. For extraction with existing ROIs and no GUI, select `--draw-user-rois --headless`.
 
 Annotations are stored beneath the table's `savedr` in `annotations/annotations.h5`.
+
+## Raster SILo localization (multi-ROI)
+
+`giant_python.extraction.raster` ports the per-trial localization of GIAnT-MATLAB's SILo for SLAP2 raster (multi-ROI) recordings: `loadAndProcessTrialAsync`, `localizeSources_vIM` and `getActImPeaks`. Extraction (NMF, traces) is not ported. It reads GIAnT-MATLAB's registered 80 Hz movies and returns each trial's activity image, the summary image that is seeded, and the seeds:
+
+```python
+from giant_python.extraction.raster.localization import RasterLocalizationParams
+from giant_python.extraction.raster.trial import localize_trial
+
+loc, trial = localize_trial(
+    "path/to/motion_correction",
+    "E1T1DMD1_REGISTERED_DOWNSAMPLED-80Hz.tif",
+    num_channels=2,
+    baseline_dir="path/to/baselines",  # optional: slap2-f0 predict-registered
+)
+loc.peaks  # [amplitude, row, col, sigma], 0-based
+```
+
+With the defaults the activity image agrees with MATLAB to float32 rounding, and seeds agree at the default threshold. Three detection options, all off by default, are meant for an unbiased baseline such as the F0 network's (`baseline_dir`):
+- `surround=False`: no difference-of-Gaussians surround in the spatial filter.
+- `null="bootstrap"`: each trial's activity image is calibrated per pixel brightness against noise movies with the trial's baseline, gain, noise correlations and skew. `variance_floor=False` drops the `Vb` floor of the Z-score with it.
+- `score="soft_threshold"`: at each local maximum, `max(0, u - soft_th)^2` replaces the squared value.
 
 ## Results and cautions
 

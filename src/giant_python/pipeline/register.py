@@ -9,6 +9,12 @@ kept), as ``MultiRoiRegistration.m`` does. The table must be MATLAB-written
 A request is validated before anything is written: the table's layout, the
 device, and every recording that will be registered. A rejected request
 leaves the outputs and the table as they were.
+
+Cells of a ragged table without a recording (empty filename) are skipped:
+their output names stay empty and they are marked ``registration_failed``,
+as SILo's ``verifyFiles`` treats missing trials. (MATLAB's
+MultiRoiRegistration does not skip them; their missing data file aborts the
+whole run.)
 """
 
 from __future__ import annotations
@@ -39,6 +45,30 @@ log = logging.getLogger(__name__)
 def _now() -> str:
     """Local time as MATLAB's ``yyyy-MM-dd'T'HH:mm:ss.SSSZZZZZ``."""
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+def recorded_cells(filenames) -> np.ndarray:
+    """Which cells of a trial table's ``filename`` grid name a recording.
+
+    Parameters
+    ----------
+    filenames : array_like
+        The grid (paths x trials); ragged tables leave cells empty.
+
+    Returns
+    -------
+    ndarray of bool
+        Same shape (rank two).
+    """
+
+    def named(x) -> bool:
+        """Whether a cell holds a filename."""
+        if x is None or (isinstance(x, float) and np.isnan(x)):
+            return False
+        return bool(str(x).strip())
+
+    grid = np.atleast_2d(np.asarray(filenames, dtype=object))
+    return np.vectorize(named, otypes=[bool])(grid).reshape(grid.shape)
 
 
 def output_names(
@@ -246,7 +276,8 @@ def register_multiroi(
     dict
         The ``motion_correction`` fields written: ``fn_reg_ds``,
         ``fn_adata``, ``registration_failed`` and ``align_params``. Trials
-        whose registration raised are failed and have empty filenames.
+        whose registration raised, and cells without a recording, are
+        failed and have empty filenames.
 
     Raises
     ------
@@ -278,12 +309,15 @@ def register_multiroi(
     moco = Path(tt.savedr) / "motion_correction"
     device = resolve_device(execution.device)
     settings = settings_record(params)
-    fn_reg = np.empty((n_dmd, n_trials), dtype=object)
-    fn_adata = np.empty((n_dmd, n_trials), dtype=object)
-    failed = np.zeros((n_dmd, n_trials), dtype=bool)
+    fn_reg = np.full((n_dmd, n_trials), "", dtype=object)
+    fn_adata = np.full((n_dmd, n_trials), "", dtype=object)
+    present = recorded_cells(files)
+    failed = ~present  # cells without a recording, as verifyFiles does
     jobs, where = [], []
     for d in range(n_dmd):
         for t in range(n_trials):
+            if not present[d, t]:
+                continue
             movie, adata = output_names(epoch[d, t], t + 1, d + 1, params)
             fn_reg[d, t], fn_adata[d, t] = movie, adata
             if not params.overwrite_existing:

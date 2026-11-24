@@ -265,7 +265,8 @@ def _cmd_register(args: argparse.Namespace) -> int:
     """Handle ``giant register`` (MultiRoiRegistration)."""
     import logging
 
-    from .pipeline.register import register_multiroi
+    from .io.trial_table import read_trial_table
+    from .pipeline.register import recorded_cells, register_multiroi
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
@@ -287,15 +288,24 @@ def _cmd_register(args: argparse.Namespace) -> int:
             device=args.device,
         ),
     )
-    return _report_registration(fields)
+    present = recorded_cells(read_trial_table(args.trial_table).filename)
+    return _report_registration(fields, present)
 
 
-def _report_registration(fields: dict) -> int:
+def _report_registration(fields: dict, present) -> int:
     """Summarize ``register_multiroi``'s outcome; nonzero if a trial raised.
 
     Trials flagged ``registrationFailed`` (too much motion, or too few
     frames with samples) have outputs and are listed; SILo skips them.
     Trials whose registration raised have no outputs (empty filenames).
+    Cells of a ragged table without a recording are listed apart.
+
+    Parameters
+    ----------
+    fields : dict
+        What ``register_multiroi`` returned.
+    present : ndarray of bool
+        Which cells of the table name a recording.
 
     Returns
     -------
@@ -305,8 +315,10 @@ def _report_registration(fields: dict) -> int:
     import numpy as np
 
     failed = np.asarray(fields["registration_failed"], dtype=bool)
-    raised = np.asarray(fields["fn_adata"], dtype=object) == ""
-    flagged = failed & ~raised
+    present = np.asarray(present, dtype=bool)
+    unnamed = np.asarray(fields["fn_adata"], dtype=object) == ""
+    raised = unnamed & present
+    flagged = failed & ~unnamed
 
     def trials(mask):
         """``trial t (path d)`` for each selected trial."""
@@ -315,9 +327,11 @@ def _report_registration(fields: dict) -> int:
         )
 
     print(
-        f"giant register: {failed.size - raised.sum()} of {failed.size} "
+        f"giant register: {(~unnamed).sum()} of {present.sum()} "
         "trials registered."
     )
+    if not present.all():
+        print(f"No recording (skipped): {trials(~present)}")
     if flagged.any():
         print(f"registrationFailed (excluded by SILo): {trials(flagged)}")
     if raised.any():
