@@ -9,7 +9,7 @@ Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's M
 
 ## Requirements and scope
 
-Provide an existing trial table, raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. Standard SILo (apart from its per-trial raster localization, below), standalone deconvolution, general trial-table writing, config-file loading, and checkpoint/resume are not supported.
+Provide a trial table (SLAP2 trial tables can be built in Python, below), raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. Standard SILo (apart from its per-trial raster localization, below), standalone deconvolution, general trial-table writing, config-file loading, and checkpoint/resume are not supported.
 
 Analysis trials come from the supplied table; Python does not split or merge them.
 
@@ -24,6 +24,18 @@ pip install -e .
 Installation requires Git/network access for the `slap2_utils` dependency. Interactive ROI drawing uses OpenCV and tkinter; tkinter must be available in the Python installation. Headless extraction does not need a display.
 
 For development setup and documentation builds, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Build SLAP2 trial tables
+
+`build_trial_table_slap2` writes a SLAP2 session's `trial_table.h5` as GIAnT-MATLAB's `buildTrialTableSLAP2(dr, savedr, true)` does: every `.dat` file of the folder in one epoch, triggered recordings lined up across the two paths (including the Feb 2024 trial-numbering bug), continuous (`-CYCLE-`) recordings cut into trials of at most 200000 lines, reference stacks found below the folder, and trial times from the FPGA line clock in the `.meta` file (else from file times). MATLAB and Python registration and SILo read it unchanged.
+
+```python
+from giant_python.pipeline import build_trial_table_slap2
+
+build_trial_table_slap2("path/to/session", save_dir="path/to/output", max_duration_s=180)
+```
+
+or `giant trial-table path/to/session --save-dir path/to/output --max-duration-s 180`. `max_duration_s` keeps only the first seconds of the session, as the integration-test capsule's `trimTrialTableSLAP2` does; the whole table is then also written as `trial_table_untrimmed.h5`.
 
 ## Register raster recordings
 
