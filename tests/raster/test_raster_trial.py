@@ -65,6 +65,37 @@ def test_load_registered_trial(tmp_path, layout):
     np.testing.assert_allclose(tr.var_factor, vf.transpose(0, 2, 1))
 
 
+@pytest.mark.parametrize("save_tif", [False, True])
+def test_load_registration_movie(tmp_path, save_tif):
+    """Movies written by GIAnT-Python's registration, HDF5 (the default) or
+    TIFF, load as the same frames in MATLAB's rows and columns."""
+    if save_tif:
+        pytest.importorskip("tifffile")
+    from giant_python.registration.outputs import MovieWriter
+
+    n, rows, cols = 50, 6, 9
+    rng = np.random.default_rng(1)
+    act = rng.poisson(5, (n, rows, cols)).astype(np.float32)
+    act[3, 2, 4] = np.nan
+    other = np.full((n, rows, cols), 100, np.float32)
+    stem = "E1T1DMD1"
+    name = f"{stem}_REGISTERED_DOWNSAMPLED-80Hz" + (
+        ".tif" if save_tif else ".h5"
+    )
+    movie = MovieWriter(tmp_path / name, (rows, cols), 2 * n, save_tif)
+    for a, o in zip(act, other):
+        movie.write(a)
+        movie.write(o)
+    movie.close()
+    movie.tmp.rename(movie.path)
+    with h5py.File(tmp_path / f"{stem}_ALIGNMENTDATA.h5", "w") as f:
+        f["alignHz"] = np.array([[80.0]])
+        f["recNegErr"] = np.full((1, n), -0.5)
+    tr = load_registered_trial(tmp_path, name, 2)
+    np.testing.assert_array_equal(tr.movie, act)
+    np.testing.assert_allclose(tr.mean_im[..., 1], 100)
+
+
 def test_localize_trial_retries_numerical_failures(monkeypatch):
     """Any failure of the localization itself is retried with the outer
     rows and columns NaN (MATLAB's catch); invalid inputs are not."""

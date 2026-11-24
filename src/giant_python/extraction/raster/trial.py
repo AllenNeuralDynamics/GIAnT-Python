@@ -1,14 +1,14 @@
 """Load and localize one registered SLAP2 trial as SiLo does.
 
 Port of GIAnT-MATLAB's ``loadAndProcessTrialAsync.m``: the registered 80 Hz
-movie (``*_REGISTERED_DOWNSAMPLED-80Hz.tif``, channels interleaved by frame)
-and its ``*_ALIGNMENTDATA.h5`` give the activity channel, NaN at the frames
-discarded for motion (from ``recNegErr``) and at the first
-``discardInitial_s``, the variance factor ``slap2.varFacDS`` and the trial's
-mean image; :func:`localize_trial` then runs
+movie (``*_REGISTERED_DOWNSAMPLED-80Hz.h5`` or ``.tif``, channels
+interleaved by frame) and its ``*_ALIGNMENTDATA.h5`` give the activity
+channel, NaN at the frames discarded for motion (from ``recNegErr``) and at
+the first ``discardInitial_s``, the variance factor ``slap2.varFacDS`` and
+the trial's mean image; :func:`localize_trial` then runs
 :func:`~giant_python.extraction.raster.localization.localize_sources`, with
-the F0 network's ``<trial>_BASELINE-80Hz.h5`` when a baseline folder is given
-(GIAnT-MATLAB branch ``localization-network-baseline``).
+the F0 network's ``<trial>_BASELINE-80Hz.h5`` when a baseline folder is
+given (GIAnT-MATLAB branch ``localization-network-baseline``).
 
 Arrays are ``(frames, rows, cols)`` in MATLAB's row and column orientation
 (the TIFF pages are transposed, as MATLAB's reader returns them).

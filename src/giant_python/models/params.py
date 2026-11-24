@@ -163,7 +163,9 @@ class MultiRoiRegistrationParams:
         are kept if they were made with the same settings (all fields but
         this one), and registered again if not.
     save_tif : bool
-        Save the registered movie as TIFF (else HDF5 ``/data``).
+        Save the registered movie as TIFF, as GIAnT-MATLAB does by default.
+        Otherwise (the default) it is a deflated HDF5 ``/data``, about 7x
+        smaller, which GIAnT-MATLAB SILo also reads.
     ref_stack_template, is_revolt, include_integration_rois : bool
         MATLAB options not yet ported; must be False.
     compensate_online : bool
@@ -199,8 +201,8 @@ class MultiRoiRegistrationParams:
         it uncompressed, as MATLAB does. MATLAB's ``h5read`` decompresses
         transparently.
     movie_deflate : int
-        Deflate level (0-9) of HDF5 movies (``save_tif=False``); MATLAB
-        writes 4.
+        Deflate level (0-9) of HDF5 movies (``save_tif=False``, the
+        default); MATLAB writes 4.
     """
 
     align_hz: float = 80.0
@@ -208,7 +210,7 @@ class MultiRoiRegistrationParams:
     clip_shift: int = 5
     alpha: float = 0.005
     overwrite_existing: bool = False
-    save_tif: bool = True
+    save_tif: bool = False
     ref_stack_template: bool = False
     is_revolt: bool = False
     include_integration_rois: bool = False

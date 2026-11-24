@@ -27,7 +27,7 @@ For development setup and documentation builds, see [CONTRIBUTING.md](CONTRIBUTI
 
 ## Register raster recordings
 
-`register_multiroi` registers every trial and DMD path of a MATLAB-written trial table, as GIAnT-MATLAB's `MultiRoiRegistration` does, and writes the same files: `E<epoch>T<trial>DMD<path>_REGISTERED_DOWNSAMPLED-80Hz.tif` (or `.h5`) and `..._ALIGNMENTDATA.h5` under `<savedr>/motion_correction`. It then rewrites the table's `motion_correction` group in MATLAB's layout, so GIAnT-MATLAB SILo can use the results unchanged.
+`register_multiroi` registers every trial and DMD path of a MATLAB-written trial table, as GIAnT-MATLAB's `MultiRoiRegistration` does, and writes the same files: `E<epoch>T<trial>DMD<path>_REGISTERED_DOWNSAMPLED-80Hz.h5` (or `.tif`) and `..._ALIGNMENTDATA.h5` under `<savedr>/motion_correction`. It then rewrites the table's `motion_correction` group in MATLAB's layout, so GIAnT-MATLAB SILo can use the results unchanged.
 
 ```python
 from giant_python import ExecutionOptions, register_multiroi
@@ -43,7 +43,7 @@ or `giant register path/to/trial_table.h5 --device cuda`. On the CPU, trials run
 
 - By default frames are registered sequentially, in MATLAB's order, so results match GIAnT-MATLAB within single-precision rounding. `schedule="grow"` instead matches frames in batches, growing outward from seed frames spread over the trial (see `giant_python.registration.growth`); it is experimental and gives slightly different motion.
 - `compensate_online=True` (`--compensate-online`) undoes the online motion correction line by line, as MATLAB's `compensateOnline` does. The alignment file then records each frame's reference offset (`slap2/onlineCompensation`).
-- `varFacDS` is stored deflate-compressed (`var_factor_deflate=1`, about 16x smaller, identical values; MATLAB's `h5read` decompresses transparently). Set it to 0 for MATLAB's uncompressed layout. Registered movies stay TIFF by default; `save_tif=False` (`--h5`) writes a deflated HDF5 movie (`movie_deflate=1`, about 7x smaller), which MATLAB SILo also reads.
+- `varFacDS` is stored deflate-compressed (`var_factor_deflate=1`, about 16x smaller, identical values; MATLAB's `h5read` decompresses transparently). Set it to 0 for MATLAB's uncompressed layout. Registered movies are deflated HDF5 by default (`movie_deflate=1`, about 7x smaller than TIFF), which MATLAB SILo also reads. `save_tif=True` (`--tif`) writes MATLAB's default BigTIFF instead.
 - Not yet ported: `refStackTemplate`, `isReVolt` and integration ROIs. Setting any of them raises `NotImplementedError`.
 - Only single-plane recordings with one or two channels are supported.
 
