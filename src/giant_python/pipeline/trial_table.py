@@ -104,9 +104,14 @@ def read_dat_info(path: Union[str, Path]) -> DatInfo:
     except (OSError, ValueError):
         ticks = 0
     clock_hz = float(first.header.get("fpgaSystemClock_Hz", 0) or 0)
-    ref_ms = read_mat_datetime_ms(first.metaDataFileName, "fpgaTimeReference")
-    if ref_ms is not None and ticks > 0 and clock_hz > 0:
-        t = _DATENUM_1970 + (ref_ms + 1000.0 * ticks / clock_hz) / _MS_PER_DAY
+    if ticks > 0 and clock_hz > 0:
+        wall_ms = read_mat_datetime_ms(
+            first.metaDataFileName,
+            "fpgaTimeReference",
+            offset_ms=1000.0 * ticks / clock_hz,
+        )
+        if wall_ms is not None:
+            t = _DATENUM_1970 + wall_ms / _MS_PER_DAY
     return DatInfo(num_lines, t, line_period_s)
 
 

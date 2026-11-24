@@ -189,7 +189,9 @@ def _text(value) -> str:
     return str(value)
 
 
-def read_mat_datetime_ms(path: Union[str, Path], name: str):
+def read_mat_datetime_ms(
+    path: Union[str, Path], name: str, offset_ms: float = 0.0
+):
     """A MATLAB ``datetime`` saved in a v7.3 MAT file, as wall-clock ms.
 
     MATLAB stores a ``datetime`` as an MCOS object whose ``data`` property is
@@ -203,13 +205,19 @@ def read_mat_datetime_ms(path: Union[str, Path], name: str):
         The MAT (v7.3, HDF5) file, e.g. a SLAP2 ``.meta`` file.
     name : str
         Top-level variable name, e.g. ``"fpgaTimeReference"``.
+    offset_ms : float
+        Elapsed milliseconds to add first. For a zoned value they are added
+        in UTC, before the conversion to wall-clock time, so an offset that
+        crosses a daylight-saving change is exact, as MATLAB's
+        ``datetime + seconds(...)`` is.
 
     Returns
     -------
     float or None
         Milliseconds since 1970-01-01 of the local (wall-clock) time, which
         MATLAB's ``datenum`` of the value uses; None when the value is
-        missing or not a ``datetime`` this reader understands.
+        missing, not a scalar, or not a ``datetime`` this reader
+        understands.
     """
     import struct
 
@@ -229,7 +237,10 @@ def read_mat_datetime_ms(path: Union[str, Path], name: str):
         return None
     if not isinstance(props.get("data"), np.ndarray):
         return None
-    data = props["data"].ravel()[0]
+    data = props["data"].ravel()
+    if data.size != 1:  # MATLAB's builder needs one reference time
+        return None
+    data = data[0]
     if data.dtype.names:
         ms = float(data["real"]) + float(data["imag"])
     else:
@@ -237,6 +248,7 @@ def read_mat_datetime_ms(path: Union[str, Path], name: str):
     tz = _text(props.get("tz", ""))
     if not np.isfinite(ms):
         return None
+    ms += offset_ms
     return _wall_clock_ms(ms, tz) if tz else ms
 
 

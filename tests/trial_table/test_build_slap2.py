@@ -123,11 +123,12 @@ def test_triggered_trials(session, tmp_path):
     np.testing.assert_array_equal(s2["last_line"], np.tile(lines, (2, 1)))
     ends = session.mtimes(dmd1)
     np.testing.assert_allclose(
-        s2["trial_end_time_from_pc"].ravel(), ends, atol=1e-9
+        s2["trial_end_time_from_pc"].ravel(), ends, rtol=0, atol=1e-9
     )
     np.testing.assert_allclose(
         s2["trial_start_time_inferred"].ravel(),
         ends - np.array(lines) * LINE_PERIOD_S / 86400,
+        rtol=0,
         atol=1e-9,
     )
 
@@ -150,6 +151,7 @@ def test_triggered_trial_line_mismatch(session, tmp_path):
     np.testing.assert_allclose(
         s2["trial_end_time_from_pc"].ravel(),
         [dn1[0], dn2[1], dn1[1]],
+        rtol=0,
         atol=1e-9,
     )
 
@@ -184,6 +186,7 @@ def test_order_from_file_names_not_mod_times(session, tmp_path):
     np.testing.assert_allclose(
         t["slap2_info"]["trial_end_time_from_pc"].ravel(),
         session.mtimes(dmd1),
+        rtol=0,
         atol=1e-9,
     )
 
@@ -228,11 +231,12 @@ def test_trial_times_from_line_clock(session, tmp_path):
     days = np.array([datenum(s) for s in starts])
     s2 = t["slap2_info"]
     np.testing.assert_allclose(
-        s2["trial_start_time_inferred"].ravel(), days, atol=1e-9
+        s2["trial_start_time_inferred"].ravel(), days, rtol=0, atol=1e-9
     )
     np.testing.assert_allclose(
         s2["trial_end_time_from_pc"].ravel(),
         days + np.array([100000, 100000, 120000]) * LINE_PERIOD_S / 86400,
+        rtol=0,
         atol=1e-9,
     )
 
@@ -255,10 +259,10 @@ def test_multicycle_trials_and_times(session, tmp_path):
     np.testing.assert_array_equal(s2["last_line"], np.tile(edges[1:], (2, 1)))
     days = datenum(t0) + (edges - 1) * LINE_PERIOD_S / 86400
     np.testing.assert_allclose(
-        s2["trial_start_time_inferred"].ravel(), days[:3], atol=1e-9
+        s2["trial_start_time_inferred"].ravel(), days[:3], rtol=0, atol=1e-9
     )
     np.testing.assert_allclose(
-        s2["trial_end_time_from_pc"].ravel(), days[1:], atol=1e-9
+        s2["trial_end_time_from_pc"].ravel(), days[1:], rtol=0, atol=1e-9
     )
 
 
@@ -275,11 +279,13 @@ def test_multicycle_times_from_mtime(session, tmp_path):
     np.testing.assert_allclose(
         s2["trial_end_time_from_pc"].ravel(),
         dn - (lines - edges[1:]) * to_days,
+        rtol=0,
         atol=1e-9,
     )
     np.testing.assert_allclose(
         s2["trial_start_time_inferred"].ravel(),
         dn - (lines - edges[:3]) * to_days,
+        rtol=0,
         atol=1e-9,
     )
 
@@ -298,12 +304,18 @@ def test_multicycle_times_from_last_file_mtime(session, tmp_path):
     session.references()
     s2 = session.build(tmp_path / "out")["slap2_info"]
     last = session.mtimes(["acq_DMD1-CYCLE-000001.dat"])[0]
+    edges = np.array([1, 150001, 300001, 450001], dtype=float)
+    to_days = LINE_PERIOD_S / 86400
     np.testing.assert_allclose(
-        s2["trial_end_time_from_pc"].ravel()[-1], last, atol=1e-9
+        s2["trial_end_time_from_pc"].ravel(),
+        last - (lines - edges[1:]) * to_days,
+        rtol=0,
+        atol=1e-9,
     )
     np.testing.assert_allclose(
-        s2["trial_start_time_inferred"].ravel()[0],
-        last - lines * LINE_PERIOD_S / 86400,
+        s2["trial_start_time_inferred"].ravel(),
+        last - (lines - edges[:3]) * to_days,
+        rtol=0,
         atol=1e-9,
     )
 
@@ -543,6 +555,37 @@ def test_read_mat_datetime(tmp_path):
     assert read_mat_datetime_ms(p, "fpgaTimeReference") == pytest.approx(
         ms - 7 * 3600e3
     )
+
+
+def test_read_mat_datetime_offset_across_dst(tmp_path):
+    """The offset is elapsed time: 01:30 PST plus two hours on the day DST
+    starts is 04:30 PDT (MATLAB: datetime + seconds)."""
+    utc = datetime.datetime(2025, 3, 9, 9, 30)  # 01:30 in Los Angeles (PST)
+    ms = (utc - datetime.datetime(1970, 1, 1)).total_seconds() * 1000
+    p = tmp_path / "a.meta"
+    _write_mat_datetime(p, complex(ms, 0), tz="America/Los_Angeles")
+    wall = read_mat_datetime_ms(p, "fpgaTimeReference", offset_ms=2 * 3600e3)
+    expected = datetime.datetime(2025, 3, 9, 4, 30) - datetime.datetime(
+        1970, 1, 1
+    )
+    assert wall == pytest.approx(expected.total_seconds() * 1000, abs=1e-6)
+
+
+@pytest.mark.parametrize("n", [0, 2])
+def test_read_mat_datetime_needs_one_value(tmp_path, n):
+    """An empty or multi-element reference gives None (file times are used
+    instead), not an error or the first value."""
+    p = tmp_path / "a.meta"
+    _write_mat_datetime(p, complex(1.7e12, 0))
+    with h5py.File(p, "r+") as h:
+        del h["#refs#/c"]
+        h["#refs#"].create_dataset(
+            "c", data=np.zeros((1, n), [("real", "<f8"), ("imag", "<f8")])
+        )
+        cells = h["#subsystem#/MCOS"][()]
+        cells[0, 2] = h["#refs#/c"].ref
+        h["#subsystem#/MCOS"][...] = cells
+    assert read_mat_datetime_ms(p, "fpgaTimeReference") is None
 
 
 def test_first_line_timestamp(tmp_path):
