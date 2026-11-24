@@ -1,5 +1,6 @@
 """CLI for SLAP2 registration, annotation and band extraction.
 
+``giant trial-table`` builds a SLAP2 session's trial table;
 ``giant register`` registers raster recordings (MultiRoiRegistration);
 ``giant annotate`` loads or draws ROIs; ``giant extract`` runs BandSILo.
 All delegate to the public workflow services with separate scientific,
@@ -190,12 +191,30 @@ def build_parser() -> argparse.ArgumentParser:
     Returns
     -------
     argparse.ArgumentParser
-        Parser with ``register``, ``annotate`` and ``extract``
-        subcommands. Each subcommand stores its ``command`` name in the
-        parsed namespace.
+        Parser with ``trial-table``, ``register``, ``annotate`` and
+        ``extract`` subcommands. Each subcommand stores its ``command``
+        name in the parsed namespace.
     """
     parser = argparse.ArgumentParser(prog="giant")
     subparsers = parser.add_subparsers(dest="command")
+
+    table = subparsers.add_parser(
+        "trial-table", help="Build a SLAP2 session's trial_table.h5."
+    )
+    table.add_argument(
+        "dat_dir", help="Folder with the session's .dat and .meta files."
+    )
+    table.add_argument(
+        "--save-dir",
+        default=None,
+        help="Where trial_table.h5 is written (default: dat_dir).",
+    )
+    table.add_argument(
+        "--max-duration-s",
+        type=float,
+        default=None,
+        help="Keep only the first seconds of the session.",
+    )
 
     register = subparsers.add_parser(
         "register", help="Register SLAP2 raster recordings."
@@ -257,6 +276,16 @@ def _cmd_annotate(
         scan_mode=args.scan_mode,
         execution=execution,
         annotations=annotations,
+    )
+    return 0
+
+
+def _cmd_trial_table(args: argparse.Namespace) -> int:
+    """Handle ``giant trial-table`` (buildTrialTableSLAP2)."""
+    from .pipeline.trial_table import build_trial_table_slap2
+
+    build_trial_table_slap2(
+        args.dat_dir, args.save_dir, max_duration_s=args.max_duration_s
     )
     return 0
 
@@ -363,8 +392,8 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point for the ``giant`` console script.
 
-    Dispatches ``register``, ``annotate`` and ``extract`` to their workflow
-    services.
+    Dispatches ``trial-table``, ``register``, ``annotate`` and ``extract``
+    to their workflow services.
 
     Parameters
     ----------
@@ -385,6 +414,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
+        "trial-table": _cmd_trial_table,
         "register": _cmd_register,
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
