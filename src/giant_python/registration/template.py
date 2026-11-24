@@ -7,6 +7,10 @@ well as that median are shifted onto it and averaged. The running template is
 the square root of the mean of all registered frames added so far (pixels
 with fewer than ``min_samples`` contributions are NaN); frames are matched to
 the average of the initial and the running template.
+
+Initial frames without valid samples are left out of the consensus (in
+MATLAB their undefined correlations make every median NaN, so that no frame
+is averaged and the template is empty).
 """
 
 from dataclasses import dataclass
@@ -30,7 +34,8 @@ class ConsensusResult:
         ``(2, n, n)`` [row, col] motion; ``motion[:, i, j]`` matches frame
         ``j`` to frame ``i`` as template.
     reference : int
-        Zero-based index of the reference frame.
+        Zero-based index of the reference frame (-1 if no frame has
+        samples).
     members : ndarray of int
         Zero-based indices of the frames averaged into the template.
     """
@@ -62,6 +67,7 @@ def consensus(
     cols: torch.Tensor,
     search: int,
     dtype=torch.float32,
+    keep=None,
 ) -> ConsensusResult:
     """Match every pair of initial frames and choose the consensus set.
 
@@ -77,6 +83,9 @@ def consensus(
         Largest pairwise shift.
     dtype : torch.dtype
         Precision of the correlation sums.
+    keep : ndarray of bool, optional
+        Frames to match (default: all); the others (frames without valid
+        samples) get NaN correlations and are never reference or members.
 
     Returns
     -------
@@ -84,6 +93,22 @@ def consensus(
         Pairwise correlations and motion, reference and members.
     """
     n = frames.shape[0]
+    if keep is not None and not np.all(keep):
+        idx = np.flatnonzero(keep)
+        corr = np.full((n, n), np.nan)
+        corr[idx, idx] = 1.0
+        mot = np.zeros((2, n, n))
+        if idx.size == 0:
+            return ConsensusResult(corr, mot, -1, idx)
+        sel = torch.as_tensor(idx, device=frames.device)
+        sub = consensus(
+            frames[sel], freshness[sel], images[sel], rows, cols, search, dtype
+        )
+        corr[np.ix_(idx, idx)] = sub.correlation
+        mot[:, idx[:, None], idx[None, :]] = sub.motion
+        return ConsensusResult(
+            corr, mot, int(idx[sub.reference]), idx[sub.members]
+        )
     corr = np.ones((n, n))
     mot = np.zeros((2, n, n))
     weights = torch.where(torch.isnan(frames), 0.0, freshness)
@@ -192,9 +217,20 @@ def initial_template(
     -------
     TemplateState
         Sums of the shifted consensus frames, with ``T0`` as both initial
-        and running template.
+        and running template (empty, all NaN, without members).
     """
     ref = result.reference
+    if len(result.members) == 0:
+        h, w = images.shape[-2:]
+        total = torch.zeros(
+            h + 2 * margin,
+            w + 2 * margin,
+            dtype=torch.float64,
+            device=images.device,
+        )
+        state = TemplateState(total, total.clone(), None, min_samples)
+        state.initial = state.template.clone()
+        return state
     stack = []
     for i in result.members:
         img, _ = interp_frame(

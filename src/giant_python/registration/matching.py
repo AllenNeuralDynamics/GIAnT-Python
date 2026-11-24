@@ -138,7 +138,7 @@ def peak_motion(
     Returns
     -------
     motion : torch.Tensor of float64
-        ``(B, 2)`` [row, col] motion.
+        ``(B, 2)`` [row, col] motion; NaN where the peak is NaN.
     peak : torch.Tensor of float64
         ``(B,)`` maximum correlation (NaN if every shift is undefined).
     """
@@ -165,6 +165,9 @@ def peak_motion(
     d_c = (1 - ratio_c) / (1 + ratio_c) / 2
     sub = torch.stack([mot[:, 0] - d_r, mot[:, 1] - d_c], 1)
     mot = torch.where(inner[:, None], sub, mot)
+    # an undefined map (e.g. a frame without valid samples) has no peak;
+    # its argmax would be the first shift, a finite but arbitrary motion
+    mot = mot.masked_fill(torch.isnan(peak)[:, None], float("nan"))
     return -mot, peak
 
 
@@ -337,7 +340,9 @@ def match(
     Raises
     ------
     RegistrationError
-        If a motion is NaN, as ``xcorr2_nans_weighted`` does.
+        If a motion is NaN, as ``xcorr2_nans_weighted`` does; this includes
+        frames whose correlation is undefined at every shift (e.g. frames
+        without valid samples).
     """
     search = int(round(search))
     tables = shift_tables(template, rows, cols, search, dtype)

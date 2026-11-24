@@ -10,6 +10,7 @@ execution and annotation options. GUI imports occur only when needed.
 from __future__ import annotations
 
 import argparse
+import sys
 from typing import Optional, Sequence
 
 from .models.params import (
@@ -133,11 +134,21 @@ def _add_register_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Re-register trials whose outputs exist.",
     )
-    parser.add_argument(
-        "--h5",
+    movie = parser.add_mutually_exclusive_group()
+    movie.add_argument(
+        "--tif",
+        dest="save_tif",
         action="store_true",
-        help="Save registered movies as HDF5 instead of TIFF.",
+        help="Save registered movies as TIFF, as GIAnT-MATLAB does, instead "
+        "of deflated HDF5 (the default).",
     )
+    movie.add_argument(
+        "--h5",
+        dest="save_tif",
+        action="store_false",
+        help="Save registered movies as deflated HDF5 (the default).",
+    )
+    parser.set_defaults(save_tif=defaults.save_tif)
     parser.add_argument(
         "--compensate-online",
         action="store_true",
@@ -283,18 +294,19 @@ def _cmd_register(args: argparse.Namespace) -> int:
     """Handle ``giant register`` (MultiRoiRegistration)."""
     import logging
 
-    from .pipeline.register import register_multiroi
+    from .io.trial_table import read_trial_table
+    from .pipeline.register import recorded_cells, register_multiroi
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
-    register_multiroi(
+    fields = register_multiroi(
         args.trial_table,
         MultiRoiRegistrationParams(
             align_hz=args.align_hz,
             maxshift=args.maxshift,
             clip_shift=args.clip_shift,
             overwrite_existing=args.overwrite,
-            save_tif=not args.h5,
+            save_tif=args.save_tif,
             compensate_online=args.compensate_online,
             schedule=args.schedule,
             polish=args.polish,
@@ -305,6 +317,59 @@ def _cmd_register(args: argparse.Namespace) -> int:
             device=args.device,
         ),
     )
+    present = recorded_cells(read_trial_table(args.trial_table).filename)
+    return _report_registration(fields, present)
+
+
+def _report_registration(fields: dict, present) -> int:
+    """Summarize ``register_multiroi``'s outcome; nonzero if a trial raised.
+
+    Trials flagged ``registrationFailed`` (too much motion, or too few
+    frames with samples) have outputs and are listed; SILo skips them.
+    Trials whose registration raised have no outputs (empty filenames).
+    Cells of a ragged table without a recording are listed apart.
+
+    Parameters
+    ----------
+    fields : dict
+        What ``register_multiroi`` returned.
+    present : ndarray of bool
+        Which cells of the table name a recording.
+
+    Returns
+    -------
+    int
+        Exit code: 1 if any trial raised, else 0.
+    """
+    import numpy as np
+
+    failed = np.asarray(fields["registration_failed"], dtype=bool)
+    present = np.asarray(present, dtype=bool)
+    unnamed = np.asarray(fields["fn_adata"], dtype=object) == ""
+    raised = unnamed & present
+    flagged = failed & ~unnamed
+
+    def trials(mask):
+        """``trial t (path d)`` for each selected trial."""
+        return ", ".join(
+            f"trial {t + 1} (path {d + 1})" for d, t in zip(*np.nonzero(mask))
+        )
+
+    print(
+        f"giant register: {(~unnamed).sum()} of {present.sum()} "
+        "trials registered."
+    )
+    if not present.all():
+        print(f"No recording (skipped): {trials(~present)}")
+    if flagged.any():
+        print(f"registrationFailed (excluded by SILo): {trials(flagged)}")
+    if raised.any():
+        print(
+            f"Registration raised, no outputs (see the log): "
+            f"{trials(raised)}",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

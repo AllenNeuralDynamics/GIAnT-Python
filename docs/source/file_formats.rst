@@ -159,8 +159,18 @@ deflate-compressed by default (``var_factor_deflate``); readers that use the
 HDF5 library, MATLAB's ``h5read`` included, see the same values. Raster
 recordings can be registered in Python (``giant_python.registration``,
 ``giant register``), which writes the MultiRoiRegistration fields below in
-MATLAB layout (``row_major = 0``); band registration is external. The tree
-includes fields not consumed by BandSILo::
+MATLAB layout (``row_major = 0``); band registration is external. Python
+registration also saves the settings it used as a JSON string attribute
+``align_params`` of the root group (the trial table's ``align_params``
+fields except ``overwriteExisting``); struct readers ignore it, and
+``register_multiroi`` keeps existing outputs only if it matches the
+requested settings. Frames without valid samples get NaN ``motionDSr`` and
+``motionDSc`` and an all-NaN movie frame (MATLAB gives them an arbitrary
+finite motion); ``interp1(..., 'pchip')``, which SILo uses to upsample the
+motion, skips NaN samples but needs two finite ones: a trial of several
+frames with fewer than two frames with samples is saved with
+``registrationFailed`` set, so that SILo skips it. The tree includes fields
+not consumed by BandSILo::
 
    <trial_stem>_ALIGNMENTDATA.h5
    ├── row_major
@@ -395,11 +405,14 @@ Trial table fields
    * - ``motion_correction/fn_reg_ds``
      - nPaths x total trials
      - string
-     - Registered and downsampled TIFF filename.
+     - Registered and downsampled movie filename, ``.tif`` or ``.h5``
+       (empty where Python registration raised or the cell has no
+       recording).
    * - ``motion_correction/fn_adata``
      - nPaths x total trials
      - string
-     - Alignment metadata ``_ALIGNMENTDATA.h5`` filename.
+     - Alignment metadata ``_ALIGNMENTDATA.h5`` filename (empty where
+       Python registration raised or the cell has no recording).
    * - ``motion_correction/fn_raw``
      - nPaths x total trials
      - string
@@ -407,7 +420,8 @@ Trial table fields
    * - ``motion_correction/registration_failed``
      - nPaths x total trials
      - bool
-     - Whether registration failed.
+     - Whether registration failed (true for cells of a ragged table
+       without a recording, which Python registration skips).
    * - ``motion_correction/first_line_original``
      - nPaths x total trials
      - integer

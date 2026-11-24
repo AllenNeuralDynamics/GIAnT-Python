@@ -6,15 +6,25 @@
 * ``<trial>_ALIGNMENTDATA.h5``: the alignment struct written column-major by
   ``saveStructToH5``. Its per-frame variance factor is streamed to disk while
   frames are registered; the file is complete only after :meth:`finish`.
+  The settings that produced it are recorded as a JSON root attribute
+  (:data:`SETTINGS_ATTR`), which struct readers ignore.
+
+Both are written under temporary names (``<name>.partial``) and moved into
+place together by :func:`publish` once both are complete, the alignment file
+last. A run that fails before then leaves an existing pair untouched; one
+that fails while publishing leaves no alignment file, so the trial is not
+mistaken for registered.
 """
 
+import json
+import math
 import os
 import warnings
 import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import h5py
 import numpy as np
@@ -23,6 +33,34 @@ from ..io.hdf5 import write_matlab_value
 
 PIXELS_PER_CM = 4e4
 """Resolution tag of the registered TIFF (250 nm pixels), as in MATLAB."""
+
+SETTINGS_ATTR = "align_params"
+"""Root attribute of an alignment file: JSON of :func:`settings_record`."""
+
+
+def settings_record(params) -> dict:
+    """The settings that produced a trial's outputs, as saved with them.
+
+    The trial table's ``align_params`` fields (MATLAB names) without
+    ``overwriteExisting``, which only decides whether outputs are made;
+    NaN (no junction limit) is stored as None.
+
+    Parameters
+    ----------
+    params : MultiRoiRegistrationParams
+        Settings of the registration.
+
+    Returns
+    -------
+    dict
+        JSON-serializable record.
+    """
+    record = params.to_matlab()
+    record.pop("overwriteExisting")
+    return {
+        key: None if isinstance(value, float) and math.isnan(value) else value
+        for key, value in record.items()
+    }
 
 
 class _Background:
@@ -109,13 +147,19 @@ class _ChunkedFrames:
         self.ds.id.write_direct_chunk((index, 0, 0), prepared.result())
 
 
+def partial_path(path: Path) -> Path:
+    """Temporary name of an output until it is published."""
+    return path.with_name(path.name + ".partial")
+
+
 class MovieWriter:
-    """Append registered pages to a TIFF or HDF5 movie.
+    """Append registered pages to a TIFF or HDF5 movie, under a temporary name.
 
     Parameters
     ----------
     path : str or Path
-        Destination file (overwritten).
+        Final destination; the pages go to ``<path>.partial`` until
+        :func:`publish`.
     shape : (int, int)
         Page shape ``(rows, cols)``.
     n_pages : int
@@ -135,22 +179,24 @@ class MovieWriter:
         tiff: bool = True,
         deflate: int = 1,
     ):
-        """Open the destination file."""
+        """Open the temporary file."""
         self.path = Path(path)
+        self.tmp = partial_path(self.path)
         self.tiff = tiff
         self.n = 0
-        self._bg = _Background()
+        self._closed = False
+        if self.tmp.exists():
+            self.tmp.unlink()
         if tiff:
             import tifffile
 
-            self._tw = tifffile.TiffWriter(self.path, bigtiff=True)
+            self._tw = tifffile.TiffWriter(self.tmp, bigtiff=True)
         else:
-            if self.path.exists():
-                self.path.unlink()
-            self._h5 = h5py.File(self.path, "w")
+            self._h5 = h5py.File(self.tmp, "w")
             self._frames = _ChunkedFrames(
                 self._h5, "data", n_pages, shape, deflate
             )
+        self._bg = _Background()
 
     def write(self, page: np.ndarray) -> None:
         """Append one ``(rows, cols)`` page.
@@ -178,7 +224,10 @@ class MovieWriter:
             self._frames.store(index, page)
 
     def close(self) -> None:
-        """Finish queued pages and close the file."""
+        """Finish queued pages and close the (still temporary) file."""
+        if self._closed:
+            return
+        self._closed = True
         try:
             self._bg.close()
         finally:
@@ -187,6 +236,16 @@ class MovieWriter:
             else:
                 self._h5.close()
 
+    def abort(self) -> None:
+        """Close and delete the temporary file."""
+        try:
+            self.close()
+        except Exception:
+            pass
+        finally:
+            if self.tmp.exists():
+                self.tmp.unlink()
+
 
 class AlignmentFile:
     """Build ``_ALIGNMENTDATA.h5`` under a temporary name.
@@ -194,7 +253,8 @@ class AlignmentFile:
     Parameters
     ----------
     path : str or Path
-        Final destination.
+        Final destination; the file is ``<path>.partial`` until
+        :func:`publish`.
     var_shape : (int, int)
         Shape of each frame's variance factor ``(rows, cols)``.
     n_frames : int
@@ -212,7 +272,7 @@ class AlignmentFile:
     ):
         """Create the temporary file and the variance-factor dataset."""
         self.path = Path(path)
-        self.tmp = self.path.with_name(self.path.name + ".partial")
+        self.tmp = partial_path(self.path)
         if self.tmp.exists():
             self.tmp.unlink()
         self._f = h5py.File(self.tmp, "w")
@@ -229,14 +289,17 @@ class AlignmentFile:
         """Queue frame ``index``'s ``(rows, cols)`` variance factor."""
         self._bg.submit(self._var.store, index, self._var.prepare(var_factor))
 
-    def finish(self, fields: dict) -> None:
-        """Write the remaining fields and move the file into place.
+    def finish(self, fields: dict, settings: Optional[dict] = None) -> None:
+        """Write the remaining fields and close the (still temporary) file.
 
         Parameters
         ----------
         fields : dict
             Struct fields as accepted by ``write_matlab_value``; entries of a
             ``'slap2'`` dict go into the existing ``/slap2`` group.
+        settings : dict, optional
+            :func:`settings_record` of the registration, saved as the root
+            attribute :data:`SETTINGS_ATTR`.
         """
         self._bg.close()
         fields = dict(fields)
@@ -247,8 +310,9 @@ class AlignmentFile:
         for key, value in slap2.items():
             write_matlab_value(grp, key, value)
         self._f.create_dataset("row_major", data=np.zeros((1, 1), np.uint8))
+        if settings is not None:
+            self._f.attrs[SETTINGS_ATTR] = json.dumps(settings, sort_keys=True)
         self._f.close()
-        os.replace(self.tmp, self.path)
 
     def abort(self) -> None:
         """Close and delete the temporary file."""
@@ -261,6 +325,26 @@ class AlignmentFile:
         finally:
             if self.tmp.exists():
                 self.tmp.unlink()
+
+
+def publish(movie: MovieWriter, adata: AlignmentFile) -> None:
+    """Move a finished movie and alignment file into place, as a pair.
+
+    The previous alignment file is removed first and the new one is moved
+    in last. A pair whose alignment file exists is therefore complete and
+    consistent; if publishing is interrupted, no alignment file remains and
+    the trial is registered again.
+
+    Parameters
+    ----------
+    movie : MovieWriter
+        A closed movie.
+    adata : AlignmentFile
+        A finished alignment file.
+    """
+    adata.path.unlink(missing_ok=True)
+    os.replace(movie.tmp, movie.path)
+    os.replace(adata.tmp, adata.path)
 
 
 def downsample2(image: np.ndarray) -> np.ndarray:
