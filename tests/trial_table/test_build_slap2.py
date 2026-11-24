@@ -284,6 +284,30 @@ def test_multicycle_times_from_mtime(session, tmp_path):
     )
 
 
+def test_multicycle_times_from_last_file_mtime(session, tmp_path):
+    """Without the line clock, a CYCLE-split recording ends at its last
+    file's modification time (MATLAB takes the first file's)."""
+    lines = 450000
+    names = ["acq_DMD1-CYCLE-000000.dat", "acq_DMD2-CYCLE-000000.dat"]
+    for n in names:
+        session.dat(n, lines, START)
+    end = START + datetime.timedelta(seconds=30)
+    for n in ("acq_DMD1-CYCLE-000001.dat", "acq_DMD2-CYCLE-000001.dat"):
+        (session.dir / n).write_bytes(b"")
+        os.utime(session.dir / n, (end.timestamp(), end.timestamp()))
+    session.references()
+    s2 = session.build(tmp_path / "out")["slap2_info"]
+    last = session.mtimes(["acq_DMD1-CYCLE-000001.dat"])[0]
+    np.testing.assert_allclose(
+        s2["trial_end_time_from_pc"].ravel()[-1], last, atol=1e-9
+    )
+    np.testing.assert_allclose(
+        s2["trial_start_time_inferred"].ravel()[0],
+        last - lines * LINE_PERIOD_S / 86400,
+        atol=1e-9,
+    )
+
+
 def test_multicycle_edges_are_matlab_linspace(session, tmp_path):
     # 3 trials of 599838 lines: the edges are fractional, as MATLAB's
     lines = 599837
@@ -401,6 +425,34 @@ def test_unaligned_dmds_error(session, tmp_path):
     session.triggered([100000], [150000])
     session.references()
     with pytest.raises(ValueError, match="lining up"):
+        session.build(tmp_path / "out")
+
+
+def test_unmatched_trailing_recordings_warn(session, tmp_path):
+    """Data left after the last trial that lines up is left out, as in
+    MATLAB, with a warning."""
+    session.triggered([100000, 100000], [100000])
+    session.references()
+    with pytest.warns(TrialTableWarning, match="100000 lines of DMD1"):
+        t = session.build(tmp_path / "out")
+    assert t["filename"].shape == (2, 1)
+
+
+def test_no_trials_error(session, tmp_path):
+    session.triggered([100000], [])
+    session.references()
+    with pytest.warns(TrialTableWarning, match="left out"):
+        with pytest.raises(ValueError, match="No trials"):
+            session.build(tmp_path / "out")
+
+
+@pytest.mark.filterwarnings("ignore:Could not read acquisition times")
+def test_mixed_continuous_and_triggered_error(session, tmp_path):
+    session.triggered([100000], [100000])
+    for n in ("acq2_DMD1-CYCLE-000000.dat", "acq2_DMD2-CYCLE-000000.dat"):
+        session.dat(n, 450000, START + datetime.timedelta(minutes=5))
+    session.references()
+    with pytest.raises(ValueError, match="both continuous"):
         session.build(tmp_path / "out")
 
 

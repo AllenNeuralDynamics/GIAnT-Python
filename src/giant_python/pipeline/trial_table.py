@@ -123,6 +123,26 @@ def _later_cycle_file(name: str) -> bool:
     return m is not None and int(m.group(1)) > 0
 
 
+def _recording_mtime(dat_dir: Path, name: str, all_names) -> float:
+    """Modification datenum of a recording: of its file, or for a CYCLE-split
+    recording of its last file, written when the recording ended.
+
+    MATLAB uses the first file's time for a CYCLE-split recording, which puts
+    file-time trial times too early by the length of the later files; only
+    recordings without the FPGA line clock use these times.
+    """
+    m = re.search(r"CYCLE-?\d+", name)
+    if m is None:
+        return _mtime_datenum(dat_dir / name)
+    stem = name[: m.start()]
+    parts = [
+        n
+        for n in all_names
+        if n.startswith(stem) and re.match(r"CYCLE-?\d+", n[len(stem) :])
+    ]
+    return max(_mtime_datenum(dat_dir / n) for n in parts)
+
+
 def _name_timestamp(stamp: str) -> float:
     """``datenum`` of a yyyyMMddHHmmss string, or NaN if not a valid date."""
     v = [int(stamp[0:4]), int(stamp[4:6]), int(stamp[6:8])]
@@ -476,6 +496,18 @@ def _triggered_trials(p1, p2, use_clock, line_period_s) -> _Trials:
         else:
             start, end = end_mtime - n * line_days, end_mtime
         trials.add(files, first, last, start, end)
+    left1 = float(p1.lines[i1:].sum() - acc[0])
+    left2 = float(p2.lines[i2:].sum() - acc[1])
+    if left1 > 0 or left2 > 0:
+        warnings.warn(
+            f"After trial {len(trials.files)} the paths could not be lined "
+            f"up further, so {left1:.0f} lines of DMD1 "
+            f"({len(p1.names) - i1} files) and {left2:.0f} lines of DMD2 "
+            f"({len(p2.names) - i2} files) are left out of the trial table, "
+            f"as in MATLAB.",
+            TrialTableWarning,
+            stacklevel=3,
+        )
     return trials
 
 
@@ -536,8 +568,8 @@ def build_trial_table_slap2(
     """
     dat_dir_str, dat_dir = str(dat_dir), Path(dat_dir)
     save_dir_str = dat_dir_str if save_dir is None else str(save_dir)
-    names = sorted(p.name for p in dat_dir.glob("*.dat") if p.is_file())
-    names = [n for n in names if not _later_cycle_file(n)]
+    all_names = sorted(p.name for p in dat_dir.glob("*.dat") if p.is_file())
+    names = [n for n in all_names if not _later_cycle_file(n)]
     if not names:
         raise FileNotFoundError(f"No .dat files in {dat_dir}")
     ref_stack = {
@@ -546,7 +578,7 @@ def build_trial_table_slap2(
     }
     print(f"Loading metadata from {len(names)} DAT files...")
     info = {n: read_dat_info(dat_dir / n) for n in names}
-    mtime = {n: _mtime_datenum(dat_dir / n) for n in names}
+    mtime = {n: _recording_mtime(dat_dir, n, all_names) for n in names}
     print("done loading")
     line_period_s = info[names[0]].line_period_s
 
@@ -554,12 +586,23 @@ def build_trial_table_slap2(
     use_clock = all(math.isfinite(info[n].first_line_time) for n in names)
     if not use_clock:
         _warn_copy_times(p1, p2, line_period_s, names_ok)
-    if p1.names and "-CYCLE" in p1.names[0]:
+    cycle = ["-CYCLE" in name for name in p1.names + p2.names]
+    if any(cycle) and not all(cycle):
+        raise ValueError(
+            f"{dat_dir} holds both continuous (-CYCLE-) and triggered "
+            f"recordings; build a trial table for each kind separately."
+        )
+    if all(cycle):
         trials = _continuous_trials(p1, p2, use_clock, line_period_s)
     else:
         trials = _triggered_trials(p1, p2, use_clock, line_period_s)
 
     n = len(trials.files)
+    if n == 0:
+        raise ValueError(
+            f"No trials could be lined up across the two paths "
+            f"({len(p1.names)} DMD1 and {len(p2.names)} DMD2 recordings)."
+        )
     table = {
         "datadr": dat_dir_str,
         "savedr": save_dir_str,
