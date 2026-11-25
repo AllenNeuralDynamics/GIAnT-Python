@@ -449,9 +449,12 @@ def _canvas(trials: Sequence, keep: np.ndarray):
     """The trials' mean and activity images on one canvas (top left),
     NaN elsewhere and for trials that are not kept."""
     kept = [t for t, k in zip(trials, keep) if k]
-    h = max(t.mean_im.shape[0] for t in kept)
-    w = max(t.act_im.shape[1] for t in kept)
+    h = max(max(t.mean_im.shape[0], t.act_im.shape[0]) for t in kept)
+    w = max(max(t.mean_im.shape[1], t.act_im.shape[1]) for t in kept)
     n_channels = np.atleast_3d(kept[0].mean_im).shape[2]
+    for t in kept:
+        if np.atleast_3d(t.mean_im).shape[2] != n_channels:
+            raise ValueError("the trials' mean images differ in channels")
     mean_ims = np.full((len(trials), h, w, n_channels), np.nan)
     act_ims = np.full((len(trials), h, w), np.nan)
     for k, trial in enumerate(trials):

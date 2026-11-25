@@ -301,6 +301,26 @@ def test_plan_soma_mask_and_given_seeds():
         plan_path(trials, params=PlanParams(peak_method="wmf"))
 
 
+def test_plan_of_trials_of_different_sizes(synthetic_plan):
+    """Trials of different sizes share one canvas (top left, NaN beyond),
+    as in MATLAB; their mean images must have the same channels."""
+    plan, _ = synthetic_plan
+    trials = _synthetic_trials()
+    # nothing is imaged in the rows and columns cut off here
+    trials[4] = TrialImages(
+        trials[4].mean_im[:60, :80], trials[4].act_im[:60, :80]
+    )
+    small = plan_path(trials, params=PlanParams(peak_th=12.0))
+    assert small.shape == plan.shape
+    np.testing.assert_array_equal(small.shifts, plan.shifts)
+    np.testing.assert_array_equal(small.act_im, plan.act_im)
+    np.testing.assert_array_equal(small.source_rows, plan.source_rows)
+    np.testing.assert_array_equal(small.sel, plan.sel)
+    trials[1] = TrialImages(trials[1].mean_im[:, :, :1], trials[1].act_im)
+    with pytest.raises(ValueError, match="channels"):
+        plan_path(trials)
+
+
 def test_plan_without_sources():
     """A path whose activity images hold nothing above threshold has no
     sources, pixels or groups, and still writes and reads."""
