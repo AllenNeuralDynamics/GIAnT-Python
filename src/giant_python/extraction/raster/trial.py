@@ -95,6 +95,10 @@ class RegisteredTrial:
         Discarded frames.
     align_hz : float
         Frame rate of the registered movie.
+    half_ims : ndarray of shape (2, rows, cols, channels), or None
+        Mean images of two independent halves of the frames (MATLAB's
+        ``halfIMs``, for the patchwise across-trial alignment); only when
+        asked for.
     """
 
     movie: np.ndarray
@@ -102,6 +106,68 @@ class RegisteredTrial:
     mean_im: np.ndarray
     discard: np.ndarray
     align_hz: float
+    half_ims: np.ndarray | None = None
+
+
+def trial_halves(n_frames: int, block_len: int) -> np.ndarray:
+    """Split a trial's frames into two halves of equal size.
+
+    Port of ``trialHalves.m``: alternating blocks of ``block_len`` frames
+    (neighbouring frames share noise); the larger half's last frames move to
+    the other half until the two are equal to a frame.
+
+    Returns
+    -------
+    ndarray of int, shape (n_frames,)
+        0 or 1 for each frame (MATLAB's 1 and 2).
+    """
+    half = (np.arange(n_frames) // max(1, int(block_len))) % 2
+    n_first = int((half == 0).sum())
+    n_move = abs(2 * n_first - n_frames) // 2
+    if n_move > 0:
+        big = int(2 * n_first < n_frames)
+        half[np.flatnonzero(half == big)[-n_move:]] = 1 - big
+    return half
+
+
+def half_mean_images(
+    stack: np.ndarray, half: np.ndarray, nan_thresh: float
+) -> np.ndarray:
+    """Mean images of the two halves of a trial (MATLAB's ``halfIMs``).
+
+    Parameters
+    ----------
+    stack : ndarray of shape (frames, channels, rows, cols)
+        The registered movie, all frames.
+    half : ndarray of int, shape (frames,)
+        0 or 1 for each frame (:func:`trial_halves`).
+    nan_thresh : float
+        A pixel missing in more than this fraction of a half's frames
+        (averaged over channels) is NaN in that half.
+
+    Returns
+    -------
+    ndarray of float32, shape (2, rows, cols, channels)
+    """
+    n_ch, rows, cols = stack.shape[1:]
+    total = np.zeros((2, n_ch, rows, cols))
+    count = np.zeros((2, n_ch, rows, cols))
+    block = 256  # frames at a time: a half's frames are not copied at once
+    for a in range(0, stack.shape[0], block):
+        chunk = stack[a : a + block]
+        for h in (0, 1):
+            x = chunk[half[a : a + block] == h]
+            ok = ~np.isnan(x)
+            total[h] += np.where(ok, x, 0.0).sum(axis=0, dtype=np.float64)
+            count[h] += ok.sum(axis=0)
+    out = np.empty((2, rows, cols, n_ch), np.float32)
+    for h in (0, 1):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            m = total[h] / count[h]
+        missing = 1 - count[h].mean(axis=0) / (half == h).sum() > nan_thresh
+        m[:, missing] = np.nan
+        out[h] = m.transpose(1, 2, 0)
+    return out
 
 
 def _check_channels(num_channels, activity_channel) -> None:
@@ -152,6 +218,7 @@ def load_registered_trial(
     motion_thresh: float = 2.0,
     discard_initial_s: float = 0.0,
     nan_thresh: float = 0.33,
+    half_ims: bool = False,
 ) -> RegisteredTrial:
     """Read a registered trial as ``loadAndProcessTrialAsync`` does.
 
@@ -168,6 +235,10 @@ def load_registered_trial(
         1-based channel of the activity signal (``activityChannel``).
     motion_thresh, discard_initial_s, nan_thresh : float
         SiLo's ``motionThresh``, ``discardInitial_s`` and ``nanThresh``.
+    half_ims : bool
+        Also return the mean images of two halves of the frames
+        (alternating 0.5 s blocks), which the patchwise across-trial
+        alignment weights its patches with.
 
     Returns
     -------
@@ -211,10 +282,19 @@ def load_registered_trial(
         mean_im = np.nanmean(stack, axis=0).transpose(1, 2, 0)
     missing = np.isnan(stack).mean(axis=(0, 1)) > nan_thresh
     mean_im[missing] = np.nan
+    stem = fn[: fn.index("_REGISTERED")]
+    halves = None
+    if half_ims:
+        with h5py.File(moco_dir / f"{stem}_ALIGNMENTDATA.h5", "r") as f:
+            hz = float(np.asarray(f["alignHz"]).ravel()[0])
+        halves = half_mean_images(
+            stack,
+            trial_halves(n_frames, int(math.floor(0.5 * hz + 0.5))),
+            nan_thresh,
+        )
     movie = np.ascontiguousarray(stack[:, activity_channel - 1])
     del stack, raw
 
-    stem = fn[: fn.index("_REGISTERED")]
     with h5py.File(moco_dir / f"{stem}_ALIGNMENTDATA.h5", "r") as f:
         align_hz = float(np.asarray(f["alignHz"]).ravel()[0])
         rne = np.asarray(f["recNegErr"]).ravel()
@@ -227,7 +307,7 @@ def load_registered_trial(
         rne[:n_frames], align_hz, motion_thresh, discard_initial_s
     )
     movie[discard] = np.nan
-    return RegisteredTrial(movie, vf, mean_im, discard, align_hz)
+    return RegisteredTrial(movie, vf, mean_im, discard, align_hz, halves)
 
 
 def localize_trial(
@@ -239,6 +319,7 @@ def localize_trial(
     activity_channel: int = 1,
     motion_thresh: float = 2.0,
     discard_initial_s: float = 0.0,
+    half_ims: bool = False,
 ) -> tuple[RasterLocalization, RegisteredTrial]:
     """Load one registered trial and localize it (SiLo's per-trial step).
 
@@ -246,6 +327,15 @@ def localize_trial(
     predict-registered``) replaces the moving median. As in MATLAB, a failed
     localization is retried with the first and last rows and columns set to
     NaN (invalid inputs, such as a wrong baseline size, are not retried).
+    With ``half_ims`` the trial also carries the mean images of two halves
+    of its frames (MATLAB's ``hIM``, for the patchwise alignment).
+
+    Against MATLAB's ``loadAndProcessTrialAsync``: ``mIM`` is
+    ``trial.mean_im``, ``aIM`` is ``localization.act_im``, ``peaks`` is
+    ``localization.peaks`` (``[amplitude, row, col, sigma]``, zero-based),
+    ``discardFrames`` is ``trial.discard`` and ``hIM`` is
+    ``trial.half_ims``. The alignment data (``aData``) is not returned;
+    extraction reads what it needs from the file.
     """
     p = params or RasterLocalizationParams()
     trial = load_registered_trial(
@@ -256,6 +346,7 @@ def localize_trial(
         motion_thresh,
         discard_initial_s,
         p.nan_thresh,
+        half_ims,
     )
     p = replace(p, align_hz=trial.align_hz)
     baseline = None
