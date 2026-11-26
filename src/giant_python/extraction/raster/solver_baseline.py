@@ -187,6 +187,10 @@ def activity_noise(
     The variance of each pixel's residual is taken from its negative
     residuals, weighted by the freshness; the activity's noise follows
     from the footprints by weighted least squares, over ``tau`` frames.
+    When the weighted footprints' normal matrix is exactly singular (for
+    example a source whose fitted footprint is all zero), MATLAB's ``inv``
+    warns and returns Inf everywhere; so does this: every source's noise
+    is then Inf and its SNR 0 (numpy would raise ``LinAlgError``).
 
     Returns
     -------
@@ -197,7 +201,17 @@ def activity_noise(
     w = np.where(resid >= 0, 0.0, 1.0 / finv)
     with np.errstate(invalid="ignore", divide="ignore"):
         resid_var = (resid * resid * w).sum(1) / w.sum(1)
-        cov = np.linalg.inv(h.T @ (h / resid_var[:, None]))
+        normal = h.T @ (h / resid_var[:, None])
+        try:
+            cov = np.linalg.inv(normal)
+        except np.linalg.LinAlgError:
+            warnings.warn(
+                "activity noise: the footprints' normal matrix is singular "
+                "(a footprint all zero?); noise Inf and SNR 0, as MATLAB",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            cov = np.full(normal.shape, np.inf)
         x_noise = np.sqrt(np.diag(cov) / tau)
         x_snr = np.std(x, axis=1, ddof=1) / x_noise
     return resid_var, x_noise, x_snr
