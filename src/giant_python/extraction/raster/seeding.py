@@ -113,6 +113,8 @@ def seed_sources(
     soma_mask: np.ndarray | None = None,
     min_peak_distance: int = 1,
     method: str = "getactimpeaks",
+    fit: str = "matlab",
+    merge_px: float = 0.0,
 ) -> np.ndarray:
     """Seed sources in the combined activity image.
 
@@ -130,6 +132,12 @@ def seed_sources(
     method : str
         ``"getactimpeaks"`` (maxima fitted with Gaussians). ``"wmf"``
         (MATLAB's ``findSourcesWMF``) is not ported yet.
+    fit : {'matlab', 'local'}
+        The Gaussian fits (:func:`~giant_python.extraction.raster.peaks.
+        get_act_im_peaks`): MATLAB's, or the faster local ones.
+    merge_px : float
+        Reject a residual peak that ends closer than this to another peak
+        (0: MATLAB's rule only).
 
     Returns
     -------
@@ -153,7 +161,9 @@ def seed_sources(
     usable = ~np.isnan(act_im) if mask is None else ~np.isnan(act_im) & ~mask
     if not usable.any():  # SILo.m: no sources without a pixel to seed in
         return np.zeros((0, 4))
-    return get_act_im_peaks(act_im, peak_th, mask, min_peak_distance)
+    return get_act_im_peaks(
+        act_im, peak_th, mask, min_peak_distance, fit, merge_px
+    )
 
 
 def sources_from_seeds(

@@ -46,6 +46,7 @@ from .alignment import (
     warp_trial_image,
 )
 from .localization import nanmedfilt2
+from .peaks import SEED_FITS
 from .solver_setup import Subproblem
 from .trial_data import RigidShift
 from .seeding import (
@@ -84,6 +85,13 @@ class PlanParams:
         (``interTrialAlignment``).
     peak_method : str
         ``"getactimpeaks"``; ``"wmf"`` is not ported yet (``peakMethod``).
+    seed_fit : str
+        ``"matlab"`` (MATLAB's Gaussian fits) or ``"local"`` (faster local
+        fits run to convergence; not in MATLAB). See
+        :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`.
+    seed_merge_px : float
+        Reject a residual peak that ends closer than this to another peak
+        (0: MATLAB's rule only).
     peak_th : float
         Seed threshold in robust SDs of the combined activity image
         (``peakth``: 3 for SLAP2, 8 otherwise).
@@ -107,6 +115,8 @@ class PlanParams:
     max_corr_thresh: float = 0.90
     inter_trial_alignment: str = "rigid"
     peak_method: str = "getactimpeaks"
+    seed_fit: str = "matlab"
+    seed_merge_px: float = 0.0
     peak_th: float = 3.0
     min_peak_distance: int = 1
     d_xy: float = 3.0
@@ -126,6 +136,12 @@ class PlanParams:
                 f"peak_method must be one of {SEEDING_METHODS}, "
                 f"not {self.peak_method!r}"
             )
+        if self.seed_fit not in SEED_FITS:
+            raise ValueError(
+                f"seed_fit must be one of {SEED_FITS}, not {self.seed_fit!r}"
+            )
+        if not self.seed_merge_px >= 0:
+            raise ValueError("seed_merge_px must be nonnegative")
         for name in ("d_xy", "sigma_px", "template_trials", "valid_kernel"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be positive")
@@ -710,7 +726,13 @@ def plan_path(  # noqa: C901
     soma = _soma_canvas(soma_mask, shape, warp, soma_mask_trial)
     if seeds is None:
         seeds = seed_sources(
-            act_im, p.peak_th, soma, p.min_peak_distance, p.peak_method
+            act_im,
+            p.peak_th,
+            soma,
+            p.min_peak_distance,
+            p.peak_method,
+            p.seed_fit,
+            p.seed_merge_px,
         )
     seeds = np.asarray(seeds, dtype=np.float64).reshape(-1, 4)
     rows, cols, values = sources_from_seeds(seeds, shape)

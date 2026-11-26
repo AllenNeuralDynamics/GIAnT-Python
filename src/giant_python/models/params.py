@@ -560,6 +560,14 @@ class SiloParams:
         ``alignPatchPx`` (patchwise alignment only; recorded).
     peak_method : {'getactimpeaks'}
         Seeding (``peakMethod``); WMF is not ported yet.
+    seed_fit : {'matlab', 'local'}
+        Gaussian fits of the seeding and of the per-trial peaks:
+        MATLAB's (``'matlab'``), or local fits run to convergence
+        (``'local'``, much faster on large images; not a MATLAB option). See
+        :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`.
+    seed_merge_px : float
+        Reject a residual peak that ends closer than this many pixels to
+        another peak (0: MATLAB's rule only; not a MATLAB option).
     wmf_peak_th, wmf_dip, wmf_deblend_th : float
         ``wmfPeakth``, ``wmfDip``, ``wmfDeblendth`` (WMF only; recorded).
     photon_scale : float
@@ -624,6 +632,8 @@ class SiloParams:
     inter_trial_alignment: str = "rigid"
     align_patch_px: int = 1500
     peak_method: str = "getactimpeaks"
+    seed_fit: str = "matlab"
+    seed_merge_px: float = 0.0
     wmf_peak_th: float = 3.0
     wmf_dip: float = 3.0
     wmf_deblend_th: float = 8.0
@@ -679,6 +689,7 @@ class SiloParams:
             "wmf_dip",
             "wmf_deblend_th",
             "localization_soft_th",
+            "seed_merge_px",
         ):
             _nonnegative(name, getattr(self, name))
         if self.localization_peak_th is not None:
@@ -692,6 +703,7 @@ class SiloParams:
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a bool")
         _choice("debias_variance", self.debias_variance, ("fixed", "model"))
+        _choice("seed_fit", self.seed_fit, ("matlab", "local"))
         self._solver_defaults()
         if self.inter_trial_alignment != "rigid":
             raise NotImplementedError(
@@ -764,6 +776,8 @@ class SiloParams:
             nan_thresh=self.nan_thresh,
             inter_trial_alignment=self.inter_trial_alignment,
             peak_method=self.peak_method,
+            seed_fit=self.seed_fit,
+            seed_merge_px=self.seed_merge_px,
             peak_th=self.peak_th,
             min_peak_distance=self.min_peak_distance,
             d_xy=self.d_xy,
@@ -857,7 +871,14 @@ class SiloParams:
             Field names and values (JSON types).
         """
         _choice("stage", stage, _SILO_STAGES)
-        return {n: getattr(self, n) for n in _STAGE_FIELDS[stage]}
+        out = {n: getattr(self, n) for n in _STAGE_FIELDS[stage]}
+        # fields added later count only when they differ from their
+        # default, so outputs made before they existed stay current
+        defaults = {f.name: f.default for f in fields(self)}
+        for n in _STAGE_FIELDS_ADDED.get(stage, ()):
+            if getattr(self, n) != defaults[n]:
+                out[n] = getattr(self, n)
+        return out
 
     def to_matlab(
         self,
@@ -1039,6 +1060,14 @@ _STAGE_FIELDS = {
 
 # settings without a MATLAB name: their names in the saved params, and the
 # value that is MATLAB's algorithm
+# stage fields added after the stage files' first version (see
+# SiloParams.stage_settings)
+_STAGE_FIELDS_ADDED = {
+    "localize": ("seed_fit", "seed_merge_px"),
+    "plan": ("seed_fit", "seed_merge_px"),
+}
+
+
 _PYTHON_ONLY = {
     "footprint_variance": ("footprintVariance", "model"),
     "localization_baseline": ("localizationBaseline", "median"),
@@ -1055,6 +1084,8 @@ _PYTHON_ONLY = {
     "baseline_knot_factor": ("baselineKnotFactor", 0.5),
     "baseline_penalty": ("baselinePenalty", 30.0),
     "min_frames": ("minFrames", 100),
+    "seed_fit": ("seedFit", "matlab"),
+    "seed_merge_px": ("seedMergePx", 0.0),
 }
 
 
