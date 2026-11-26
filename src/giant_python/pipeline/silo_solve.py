@@ -21,7 +21,7 @@ Job file (JSON)::
                 "container_hash": "...", "span": [0, 46],
                 "results": "path1_trial0001_s0000-0045.h5",
                 "work": 1.2e9}, ...],
-     "work": 5.0e9, "estimated_seconds": 400.0}
+     "work": 5.0e9, "estimated_seconds": 4000.0}
 
 ``span`` is ``[first, stop)`` in the container's subproblem order; names
 are relative to the containers' and results' folders given at run time.
@@ -50,9 +50,12 @@ from .silo_session import (
 JOB_FORMAT = "giant-silo-job"
 JOB_VERSION = 1
 
-SECONDS_PER_WORK = 2.5e-8
-"""Estimated solve time per unit of :func:`subproblem_work` on one process
-with 4 threads (measured on 780125; a guide for shard sizes only)."""
+SECONDS_PER_WORK = 8e-7
+"""Estimated solve time per unit of :func:`subproblem_work` for one solver
+process of 4 threads on the CPU (780125 on a 16-core Threadripper: about
+120 s per trial-path of 5.9e8 work with 4 such processes, the trial loader
+running beside them). A job's ``estimated_seconds`` is for one such
+process; P processes take about 1/P of it. A guide for shard sizes only."""
 
 
 def subproblem_work(n_pixels, n_sources, n_frames) -> np.ndarray:
