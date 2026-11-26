@@ -32,9 +32,10 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
@@ -711,19 +712,39 @@ class _Pending:
     attrs: dict
     out: Path
     submitted: float = 0.0
-    done: list = field(default_factory=list)
+    done: Optional[_Done] = None
 
 
-def _track(futures: list) -> list:
-    """A list that gets the time each future is done (a done callback);
-    for no futures (solved here), the time now."""
-    done: list = []
+class _Done:
+    """Completion times of a trial's subproblems, from done callbacks."""
+
+    def __init__(self, n: int) -> None:
+        """Expect ``n`` completions."""
+        self.n, self.times = n, []
+        self.cond = threading.Condition()
+
+    def add(self, _future=None) -> None:
+        """Record one completion now (a done callback)."""
+        with self.cond:
+            self.times.append(time.perf_counter())
+            self.cond.notify_all()
+
+    def last(self, timeout: float = 60.0):
+        """The last completion time once all ``n`` are in (a future's
+        result can be read before its callbacks have run), or None."""
+        with self.cond:
+            self.cond.wait_for(lambda: len(self.times) >= self.n, timeout)
+            return max(self.times) if self.times else None
+
+
+def _track(futures: list) -> _Done:
+    """Track when each future is done; for no futures (solved here), the
+    solve is done now."""
+    done = _Done(max(1, len(futures)))
     if not futures:
-        done.append(time.perf_counter())
+        done.add()
     for f in futures:
-        f.add_done_callback(
-            lambda _f, box=done: box.append(time.perf_counter())
-        )
+        f.add_done_callback(done.add)
     return done
 
 
@@ -983,17 +1004,10 @@ def stream(  # noqa: C901
 
 def _solve_span(p: _Pending, clock0: float) -> tuple:
     """When a finished trial went to the solver and when its last
-    subproblem was solved, in seconds since ``clock0``.
-
-    A future's result can be read before its done callbacks have run, so
-    this waits (briefly) for every callback's time.
-    """
-    deadline = time.perf_counter() + 5.0
-    while len(p.done) < max(1, len(p.futures)):
-        if time.perf_counter() > deadline:
-            break
-        time.sleep(0.001)
-    end = max(p.done) if p.done else time.perf_counter()
+    subproblem was solved, in seconds since ``clock0``."""
+    end = p.done.last() if p.done is not None else None
+    if end is None:
+        end = time.perf_counter()
     return p.submitted, end - clock0
 
 

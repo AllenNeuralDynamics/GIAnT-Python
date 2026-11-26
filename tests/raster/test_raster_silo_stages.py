@@ -564,27 +564,31 @@ def test_cli(tmp_path, fake, capsys):
     capsys.readouterr()
 
 
-def test_solve_span_is_the_last_subproblem_solved():
+def test_solve_span_is_the_last_subproblem_solved(monkeypatch):
     """A trial's solve span ends when its last subproblem is done, also
     when the trial finishes while the previous one is still collected and
-    is itself collected later; it starts when it was submitted."""
+    is itself collected later; it starts when it was submitted. Uses a
+    controlled clock and futures completed in a set order."""
     import concurrent.futures as cf
-    import time
+    import types
 
-    clock0 = time.perf_counter()
-    with cf.ThreadPoolExecutor(2) as pool:
-        futures = [pool.submit(time.sleep, x) for x in (0.05, 0.2)]
-        done = silo._track(futures)  # tracked as submitted
-        time.sleep(0.4)  # the previous trial's collection, meanwhile
-        p = silo._Pending(
-            0, 0, None, [], futures, [], {}, Path("x"), 0.01, done
-        )
-        submitted, solved = silo._solve_span(p, clock0)
-    assert submitted == 0.01
-    assert 0.2 <= solved < 0.35
+    now = [0.0]
+    monkeypatch.setattr(
+        silo, "time", types.SimpleNamespace(perf_counter=lambda: now[0])
+    )
+    futures = [cf.Future(), cf.Future()]
+    done = silo._track(futures)  # tracked as submitted, at 0.0
+    now[0] = 0.05
+    futures[0].set_result(None)
+    now[0] = 0.2
+    futures[1].set_result(None)  # the last subproblem
+    now[0] = 0.6  # collected later
+    p = silo._Pending(0, 0, None, [], futures, [], {}, Path("x"), 0.01, done)
+    assert silo._solve_span(p, 0.0) == (0.01, 0.2)
     # solved here (no futures): done when the solve returned
-    t_back = time.perf_counter() - clock0
+    now[0] = 0.7
     q = silo._Pending(
         0, 1, None, [], [], [1], {}, Path("y"), 0.5, silo._track([])
     )
-    assert silo._solve_span(q, clock0)[1] == pytest.approx(t_back, abs=0.05)
+    now[0] = 0.9
+    assert silo._solve_span(q, 0.0) == (0.5, 0.7)
