@@ -1,17 +1,24 @@
 """SiLo's subproblem solver: sources' footprints, activity and baseline.
 
 Port of ``extractSources`` in GIAnT-MATLAB's ``extractTrial.m`` (main
-5a0673b), MATLAB's algorithm unchanged: starting footprints and baseline,
-then ``nmf_iter`` rounds of the activity fit, the baseline fit and the
-footprint fit, the debias refit of the events found, least squares,
-channel 2 on the same footprints, and each source's baseline F0.
+5a0673b): starting footprints and baseline, then ``nmf_iter`` rounds of
+the activity fit, the baseline fit and the footprint fit, the debias
+refit of the events found, least squares, channel 2 on the same
+footprints, and each source's baseline F0.
 
-The difference from MATLAB is in how far the iterative fits go. MATLAB's
-fmincon runs stop at iteration caps; here the activity and footprint
-fits, which are convex, are solved to convergence
-(:mod:`~giant_python.extraction.raster.solver_fits`).
-``SolverOptions.max_iter`` and ``fit_max_iter`` cap them, for diagnosing
-differences.
+It differs from MATLAB in two ways:
+
+- How far the iterative fits go. MATLAB's fmincon runs stop at iteration
+  caps; here the activity and footprint fits, which are convex, are
+  solved to convergence
+  (:mod:`~giant_python.extraction.raster.solver_fits`).
+  ``SolverOptions.max_iter`` and ``fit_max_iter`` cap them, for
+  diagnosing differences.
+- The footprint fit's variance term is held at its value at the fit's
+  start (``SolverParams.footprint_variance='fixed'``, the default). With
+  MATLAB's loss, whose variance follows the model, the converged
+  footprints are too spread out; MATLAB's early stop hides that.
+  ``footprint_variance='model'`` gives MATLAB's loss.
 
 Subproblems with the same number of frames are fitted together, padded to
 a common size, on the CPU or a GPU.
