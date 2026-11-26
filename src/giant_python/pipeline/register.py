@@ -233,8 +233,10 @@ def _stage(grp: h5py.Group, fields: dict) -> dict:
     return staged
 
 
-def _update_trial_table(path: Path, fields: dict) -> None:
-    """Replace ``fields`` in the table's ``motion_correction`` group.
+def _update_trial_table(
+    path: Path, fields: dict, group: str = "motion_correction"
+) -> None:
+    """Replace ``fields`` in one of the table's groups.
 
     Other entries of the group (and their attributes) are left as they
     are. Every new value is first written under a staged name; old values
@@ -243,7 +245,7 @@ def _update_trial_table(path: Path, fields: dict) -> None:
     """
     with h5py.File(path, "r+") as f:
         _check_column_major(f)
-        grp = f.require_group("motion_correction")
+        grp = f.require_group(group)
         staged = _stage(grp, fields)
         for key, name in staged.items():
             if key in grp:
