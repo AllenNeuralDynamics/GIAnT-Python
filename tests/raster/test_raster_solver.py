@@ -160,6 +160,43 @@ def test_more_than_two_channels_are_refused(fixture):
         solve_subproblem(three, PARAMS)
 
 
+def test_data_the_fits_cannot_weigh_are_refused(fixture):
+    """NaN samples and variance multipliers that are not positive and
+    finite are input errors, not NaN results."""
+    sub, _ = fixture
+    y = sub.y[:1].copy()
+    y[0, 3, 7] = np.nan
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        solve_subproblem(replace(sub, y=y), PARAMS)
+    for bad in (0.0, -1.0, np.nan, np.inf):
+        finv = sub.finv.copy()
+        finv[5, 9] = bad
+        with pytest.raises(ValueError, match="variance multiplier"):
+            solve_subproblem(replace(sub, y=sub.y[:1], finv=finv), PARAMS)
+    empty = replace(sub, y=sub.y[:1], sources_rc=np.zeros((0, 2), int))
+    with pytest.raises(ValueError, match="no source"):
+        solve_subproblem(empty, PARAMS)
+    assert solve_subproblems([], PARAMS) == []
+
+
+def test_options_are_checked():
+    """Options the fits cannot run with are refused when they are made."""
+    with pytest.raises(ValueError, match="dtype"):
+        SolverOptions(dtype="float16")
+    with pytest.raises(ValueError, match="max_iter"):
+        SolverOptions(max_iter=-1)
+    with pytest.raises(ValueError, match="names no fit"):
+        SolverOptions(fit_max_iter={"footprint1": 0})
+    with pytest.raises(ValueError, match="whole number"):
+        SolverOptions(fit_max_iter={"footprints1": -1})
+    with pytest.raises(ValueError, match="batch_bytes"):
+        SolverOptions(batch_bytes=-1.0)
+    caps = {"activity2": 3, "debias": 0, "activity_ch2": 1, "debias_ch2": 2}
+    opt = SolverOptions(fit_max_iter=caps, max_iter=7)
+    assert opt.fit_options("activity2")["max_iter"] == 3
+    assert opt.fit_options("activity1")["max_iter"] == 7
+
+
 def test_float32_fits_are_close(fixture, solved):
     """Fits in float32 give nearly the float64 result."""
     sub, _ = fixture
@@ -313,6 +350,21 @@ def test_assemble_results():
             )
     with pytest.raises(ValueError, match="negative index"):
         replace(subs[0], pixels=np.array([0, -1, 4]))
+    # one result per subproblem, each of the trial's channels and frames
+    with pytest.raises(ValueError, match="2 subproblems and 1 results"):
+        assemble_results(subs, results[:1], 6, 5, 25.0)
+    with pytest.raises(ValueError, match="at least one"):
+        assemble_results([], [], 6, 5, 25.0)
+    one_channel = _result(2, 2, 6, 2.0, n_ch=1)
+    with pytest.raises(ValueError, match="events are"):
+        assemble_results(subs, [results[0], one_channel], 6, 5, 25.0)
+    short = _result(2, 2, 5, 2.0)
+    with pytest.raises(ValueError, match="events are"):
+        assemble_results(subs, [results[0], short], 6, 5, 25.0)
+    wrong_snr = _result(2, 2, 6, 2.0)
+    wrong_snr.snr = np.ones(3)
+    with pytest.raises(ValueError, match="one SNR per source"):
+        assemble_results(subs, [results[0], wrong_snr], 6, 5, 25.0)
 
 
 def test_process_result():
@@ -344,6 +396,8 @@ def test_process_result():
     assert np.array_equal(act.events[1], trial.events[1])
     assert np.array_equal(act.events[0][:, keep], trial.events[0][:, keep])
     assert act.f0 is trial.f0 and act.snr is trial.snr
+    with pytest.raises(ValueError, match="discard has 39 frames"):
+        process_result(trial, params, discard[:-1])
     # the trial's own arrays are left as they were
     assert not np.isnan(trial.events).any()
 

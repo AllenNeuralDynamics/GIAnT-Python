@@ -94,6 +94,11 @@ def draw_refit_data(
     ``truth_scale`` multiplies the true activity, to map the detection
     threshold.
     """
+    if truth.baseline is None:
+        raise ValueError(
+            "the truth needs its baseline: fit it with "
+            "SolverOptions(keep_baseline=True)"
+        )
     f = np.asarray(sub.finv, dtype=np.float64)
     x = conv_same(truth_scale * truth.events[0], params.k)
     b = truth.baseline[0]

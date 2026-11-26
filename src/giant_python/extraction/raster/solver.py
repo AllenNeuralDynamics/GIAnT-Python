@@ -19,6 +19,7 @@ a common size, on the CPU or a GPU.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -44,6 +45,10 @@ from .solver_setup import (
 
 # events below this are dropped before the debias refit (MATLAB: 1e-1)
 _EVENT_FLOOR = 0.1
+# the fits that SolverOptions.fit_max_iter can name
+_FIT_NAME = re.compile(
+    r"(activity|footprints)[1-9]\d*|(activity|debias)_ch2|debias"
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,28 @@ class SolverOptions:
     cg_iter: int = 100
     batch_bytes: float | None = None
     keep_baseline: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject options the fits cannot run with."""
+        if self.dtype not in ("float64", "float32"):
+            raise ValueError(
+                f"dtype must be 'float64' or 'float32', not {self.dtype!r}"
+            )
+        if self.max_iter < 0 or self.cg_iter < 1:
+            raise ValueError("max_iter must be >= 0 and cg_iter >= 1")
+        if self.ftol is not None and not self.ftol >= 0:
+            raise ValueError("ftol must not be negative")
+        if self.batch_bytes is not None and not self.batch_bytes >= 0:
+            raise ValueError("batch_bytes must not be negative")
+        for name, cap in self.fit_max_iter.items():
+            if not _FIT_NAME.fullmatch(name):
+                raise ValueError(
+                    f"fit_max_iter names no fit of the solver: {name!r}"
+                )
+            if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+                raise ValueError(
+                    f"the cap of {name} must be a whole number >= 0"
+                )
 
     def fit_options(self, name: str) -> dict:
         """Keyword arguments of the fit called ``name``."""
@@ -148,6 +175,26 @@ def estimate_photon_scale(y: np.ndarray, finv: np.ndarray) -> float:
         mean < matlab_prctile(mean, 90)
     )
     return matlab_prctile((var[bright] - vb) / mean[bright], 10)
+
+
+def _check_data(sub: Subproblem) -> None:
+    """Reject data the fits cannot weigh.
+
+    The trial loader fills missing samples and gives them a large variance
+    multiplier, as MATLAB's does; a NaN that reaches the solver would
+    spread through the loss even at zero weight.
+    """
+    if sub.n_sources == 0:
+        raise ValueError("a subproblem has no source")
+    if not np.isfinite(sub.y).all():
+        raise ValueError(
+            "a subproblem's data hold NaN or infinite samples; fill missing "
+            "samples and give them a large variance multiplier"
+        )
+    if not (np.isfinite(sub.finv).all() and (sub.finv > 0).all()):
+        raise ValueError(
+            "a subproblem's variance multiplier must be positive and finite"
+        )
 
 
 def _lstsq(h: np.ndarray, r: np.ndarray) -> np.ndarray:
@@ -268,6 +315,8 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
             "the solver fits the activity channel and at most one more; "
             f"a subproblem has {n_ch} channels"
         )
+    for sb in subs:
+        _check_data(sb)
     bt = _Batch(subs, params, opt)
     p = params
     info = [dict() for _ in subs]
@@ -510,6 +559,11 @@ def assemble_results(
     and traces go. Footprints and SNR do not depend on the scale; events,
     least squares and F0 go back to movie units.
     """
+    if len(subs) != len(results) or not results:
+        raise ValueError(
+            f"{len(subs)} subproblems and {len(results)} results: one "
+            "result per subproblem is needed, and at least one"
+        )
     n_ch, _, n_t = results[0].events.shape
     h = np.full((n_pixels, n_sources), np.nan, dtype=np.float32)
     shape = (n_ch, n_sources, n_t)
@@ -524,6 +578,15 @@ def assemble_results(
         _check_placement(
             sb.sources, r.footprints.shape[1], n_sources, "sources"
         )
+        want = (n_ch, r.footprints.shape[1], n_t)
+        for name in ("events", "ls", "f0"):
+            if getattr(r, name).shape != want:
+                raise ValueError(
+                    f"a result's {name} are {getattr(r, name).shape}; the "
+                    f"trial's channels and frames and its sources give {want}"
+                )
+        if np.shape(r.snr) != want[1:2]:
+            raise ValueError("a result needs one SNR per source")
         h[np.ix_(sb.pixels, sb.sources)] = r.footprints
         ev[:, sb.sources] = r.events
         ls[:, sb.sources] = r.ls
@@ -581,6 +644,11 @@ def process_result(
     2's events keep their values here too, so that the outputs agree.
     """
     discard = np.asarray(discard, dtype=bool).ravel()
+    if discard.size != trial.events.shape[2]:
+        raise ValueError(
+            f"discard has {discard.size} frames; the trial has "
+            f"{trial.events.shape[2]}"
+        )
     denoised = np.empty_like(trial.events)
     denoised[0] = conv_same(trial.events[0], params.k)
     for ch in range(1, trial.events.shape[0]):

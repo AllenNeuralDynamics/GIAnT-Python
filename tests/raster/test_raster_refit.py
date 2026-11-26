@@ -9,12 +9,16 @@ import pytest
 from giant_python.extraction.raster.refit_test import (
     RefitTruth,
     by_size,
+    draw_refit_data,
     find_events,
     refit_test,
     score_refit,
     summarize,
 )
-from giant_python.extraction.raster.solver import SolverOptions
+from giant_python.extraction.raster.solver import (
+    SolverOptions,
+    solve_subproblem,
+)
 from giant_python.extraction.raster.solver_setup import (
     SolverParams,
     Subproblem,
@@ -134,3 +138,7 @@ def test_refit_test_on_a_real_subproblem():
     again = refit_test([sub], PARAMS, seed=3, keep_truths=True)
     assert np.array_equal(again.truths[0].z, truth.z)
     assert refit_test([sub], PARAMS, seed=4).truths == []
+    # the truth of a redraw needs its baseline
+    fit = solve_subproblem(sub, PARAMS)
+    with pytest.raises(ValueError, match="keep_baseline"):
+        draw_refit_data(sub, fit, PARAMS, np.random.default_rng(0))
