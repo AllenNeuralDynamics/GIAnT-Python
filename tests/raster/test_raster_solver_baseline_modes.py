@@ -328,3 +328,20 @@ def test_filled_frames_do_not_fake_a_shared_change():
     c, rec = shared_time_course(y, q, np.zeros_like(q), finv)
     assert abs(rec["alpha"] - 0.75) < 0.03
     assert np.ptp(c) < 0.01
+
+
+def test_shared_change_found_when_most_frames_are_filled():
+    """With 70% of the frames filled in, the shared change is still found
+    on the others."""
+    rng = np.random.default_rng(12)
+    n_px, n_t = 200, 3000
+    q = np.full((n_px, n_t), 3.0)
+    finv = np.ones((n_px, n_t))
+    filled = rng.random(n_t) < 0.7
+    finv[:, filled] = 1000.0
+    true = 1 + 0.15 * np.sin(np.arange(n_t) / 7.0)
+    y = rng.poisson(q * true[None]).astype(np.float64)
+    y[:, filled] = 3.0
+    c, rec = shared_time_course(y, q, np.zeros_like(q), finv)
+    assert rec["s2"] > 0
+    assert _corr(c[~filled], true[~filled]) > 0.85

@@ -739,9 +739,10 @@ def shared_time_course(
     mean ``m`` by the empirical-Bayes weight ``s2 / (s2 + var_t)``, where
     ``s2`` is the variance of the factors about ``m`` beyond their
     sampling variance (at least 0), estimated from the reliable frames
-    (sampling variance at most ``RELIABLE_FACTOR`` times its median; this
-    leaves out filled-in frames). Without a shared change the factor is
-    ``m`` throughout.
+    (sampling variance at most ``RELIABLE_FACTOR`` times its median, or
+    times ten times its 10th percentile if that is lower; this leaves out
+    filled-in frames, also where they are most of the trial). Without a
+    shared change the factor is ``m`` throughout.
 
     Returns
     -------
@@ -766,10 +767,12 @@ def shared_time_course(
     # RELIABLE_FACTOR times its median. Filled-in frames (discarded,
     # variance multiplier 1000 x) would otherwise inflate the mean sampling
     # variance without adding spread, and count in alpha's degrees of
-    # freedom without adding residual
+    # freedom without adding residual. The median is capped at 10 times
+    # the 10th percentile, for trials where most frames are filled in
     inv = np.full(n_t, np.inf)
     inv[ok] = 1.0 / den[ok]
-    rel = ok & (inv <= RELIABLE_FACTOR * np.median(inv[ok]))
+    ref = min(np.median(inv[ok]), 10 * np.percentile(inv[ok], 10))
+    rel = ok & (inv <= RELIABLE_FACTOR * ref)
     n_obs = y.shape[0] * int(rel.sum())
     dof = max(n_obs - int(rel.sum()), 1)
     alpha = float((w * (r - raw * q) ** 2)[:, rel].sum() / dof)
