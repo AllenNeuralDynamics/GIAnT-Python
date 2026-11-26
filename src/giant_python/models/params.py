@@ -484,12 +484,11 @@ class SiloParams:
     plan, trial loading, subproblem solving, collection). The defaults are
     GIAnT-MATLAB main's ``setParams('SILo')`` for SLAP2 (``isSLAP2``), with
     its modality defaults resolved (``peakth`` 3, ``minKineticScore`` 0.2,
-    ``photonScale`` 25), and the solver's fixed-variance footprint fit
-    (``footprint_variance='model'`` gives MATLAB's). MATLAB's names are
-    given in brackets; :meth:`to_matlab` returns the ``params`` struct
-    that SILo saves. The stages' own parameter types are derived with
-    :meth:`plan_params`,
-    :meth:`load_params`, :meth:`solver_params` and
+    ``photonScale`` 25); the footprint fit's variance term is the solver's
+    default (``footprint_variance='model'`` gives MATLAB's loss). MATLAB's
+    names are given in brackets; :meth:`to_matlab` returns the ``params``
+    struct that SILo saves. The stages' own parameter types are derived
+    with :meth:`plan_params`, :meth:`load_params`, :meth:`solver_params` and
     :meth:`localization_params`.
 
     Attributes
@@ -575,10 +574,12 @@ class SiloParams:
         Lower bound of the baseline, normalized units (``minBaseline``).
     debias_variance : {'fixed', 'model'}
         Variance term of the debias refit (``debiasVariance``).
-    footprint_variance : {'fixed', 'model'}
+    footprint_variance : {'fixed', 'model'} or None
         Variance term of the footprint fit: held at the fit's start
-        ('fixed', the default since GIAnT-Python#23) or following the model
-        as in MATLAB ('model'). Not a MATLAB option.
+        ('fixed') or following the model as in MATLAB ('model'). Not a
+        MATLAB option. None (the default) takes the solver's default,
+        ``SolverParams.footprint_variance`` ('fixed' since
+        GIAnT-Python#23); the resolved value is what the object holds.
     baseline_knot_factor, baseline_penalty : float
         The solver's baseline spline (MATLAB's fixed values).
     min_kinetic_score : float
@@ -632,7 +633,7 @@ class SiloParams:
     nmf_iter: int = 2
     min_baseline: float = 0.01
     debias_variance: str = "fixed"
-    footprint_variance: str = "fixed"
+    footprint_variance: Optional[str] = None
     baseline_knot_factor: float = 0.5
     baseline_penalty: float = 30.0
     min_kinetic_score: float = 0.2
@@ -691,9 +692,7 @@ class SiloParams:
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a bool")
         _choice("debias_variance", self.debias_variance, ("fixed", "model"))
-        _choice(
-            "footprint_variance", self.footprint_variance, ("model", "fixed")
-        )
+        self._solver_defaults()
         if self.inter_trial_alignment != "rigid":
             raise NotImplementedError(
                 f"interTrialAlignment {self.inter_trial_alignment!r} is not "
@@ -712,6 +711,18 @@ class SiloParams:
         # the stages' own types check the rest
         self.localization_params(80.0)
         self.solver_params()
+
+    def _solver_defaults(self) -> None:
+        """Take the footprint fit's default from the solver (one default)."""
+        if self.footprint_variance is None:
+            from ..extraction.raster.solver_setup import SolverParams
+
+            object.__setattr__(
+                self, "footprint_variance", SolverParams.footprint_variance
+            )
+        _choice(
+            "footprint_variance", self.footprint_variance, ("model", "fixed")
+        )
 
     def _check_localization(self) -> None:
         """Checks of the localization options that their type cannot do."""
@@ -868,7 +879,8 @@ class SiloParams:
         orientation. A setting without a MATLAB name is added (in
         camelCase) when it differs from MATLAB's algorithm, so that a run
         with MATLAB's algorithm has MATLAB's fields exactly. With the
-        defaults that is ``footprintVariance = 'fixed'`` alone.
+        defaults that is ``footprintVariance`` alone while the solver's
+        default is ``'fixed'``.
 
         Parameters
         ----------

@@ -129,6 +129,28 @@ def test_defaults_are_matlabs_slap2_silo():
     assert p.sel_radius == 6
 
 
+def test_footprint_default_is_the_solvers(monkeypatch):
+    """The footprint fit's default comes from the solver, not from here."""
+    from dataclasses import fields
+
+    from giant_python.extraction.raster import solver_setup
+
+    assert SiloParams().footprint_variance == SolverParams.footprint_variance
+    default = next(
+        f.default
+        for f in fields(solver_setup.SolverParams)
+        if f.name == "footprint_variance"
+    )
+    assert SiloParams().solver_params().footprint_variance == default
+    monkeypatch.setattr(
+        solver_setup.SolverParams, "footprint_variance", "model"
+    )
+    assert SiloParams().footprint_variance == "model"
+    assert SiloParams(footprint_variance="fixed").footprint_variance == (
+        "fixed"
+    )
+
+
 def test_one_setting_reaches_every_stage():
     """A shared setting is passed to each stage that uses it."""
     p = SiloParams(sigma_px=1.5, nan_thresh=0.2, peak_th=4.0)
