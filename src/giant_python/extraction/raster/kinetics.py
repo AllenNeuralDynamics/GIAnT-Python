@@ -74,6 +74,33 @@ def _plateaus(y: np.ndarray) -> list:
     return out
 
 
+def _higher_left(y: np.ndarray, first: int, v: float) -> int:
+    """Index of the nearest sample left of ``first`` above ``v`` (-1 if
+    none), searched in windows that double: the nearest higher sample is
+    usually close, so a row's maxima cost about its length in all."""
+    stop, width = first, 64
+    while stop > 0:
+        start = max(0, stop - width)
+        hit = np.flatnonzero(y[start:stop] > v)
+        if hit.size:
+            return start + int(hit[-1])
+        stop, width = start, 2 * width
+    return -1
+
+
+def _higher_right(y: np.ndarray, last: int, v: float) -> int:
+    """Index of the nearest sample right of ``last`` above ``v`` (the row's
+    length if none), searched as :func:`_higher_left`."""
+    start, width = last + 1, 64
+    while start < y.size:
+        stop = min(y.size, start + width)
+        hit = np.flatnonzero(y[start:stop] > v)
+        if hit.size:
+            return start + int(hit[0])
+        start, width = stop, 2 * width
+    return y.size
+
+
 def _prominence(y: np.ndarray, first: int, last: int) -> float:
     """Prominence of the maximum on ``y[first:last + 1]``.
 
@@ -82,11 +109,9 @@ def _prominence(y: np.ndarray, first: int, last: int) -> float:
     is none).
     """
     v = y[first]
-    left = np.flatnonzero(y[:first] > v)
-    lmin = y[left[-1] + 1 : first].min() if left.size else y[:first].min()
-    right = np.flatnonzero(y[last + 1 :] > v)
-    stop = last + 1 + right[0] if right.size else y.size
-    return float(v - max(lmin, y[last + 1 : stop].min()))
+    lmin = y[_higher_left(y, first, v) + 1 : first].min()
+    rmin = y[last + 1 : _higher_right(y, last, v)].min()
+    return float(v - max(lmin, rmin))
 
 
 def islocalmax(y: np.ndarray, min_separation: float = 0) -> np.ndarray:

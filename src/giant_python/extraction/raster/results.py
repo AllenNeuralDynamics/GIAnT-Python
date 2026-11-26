@@ -12,7 +12,10 @@ File layout (HDF5, row-major, zero-based indices)::
 
     /                       attributes: format, format_version,
                             code_version, settings_hash (of the solve
-                            stage), container, container_hash, path,
+                            stage and the subproblem range),
+                            solve_settings (the same without the range:
+                            equal in every file of one run), container,
+                            container_hash, path,
                             trial (both one-based), n_subproblems (of the
                             container), n_pixels, n_sources, photon_scale,
                             extracted (0 for a trial too short to extract)
@@ -266,9 +269,11 @@ def trial_outcome(
     """Assemble one trial-path from the results files that cover it.
 
     Each of the container's subproblems must be in exactly one file (or in
-    several with equal results). Footprints and traces are assembled
-    (``assembleResults``) and processed (``processResult``) as MATLAB does
-    after the trial's subproblems are solved.
+    several with equal placement and results), and all files must have
+    been solved with the same settings (``solve_settings``). Footprints
+    and traces are assembled (``assembleResults``) and processed
+    (``processResult``) as MATLAB does after the trial's subproblems are
+    solved.
 
     Parameters
     ----------
@@ -325,10 +330,15 @@ def _merge(files: Sequence[ResultsFile]) -> dict:
                     f"results of different containers ({key}): "
                     f"{first.get(key)} and {f.attrs.get(key)}"
                 )
+        if _solve_settings(f.attrs) != _solve_settings(first):
+            raise ValueError(
+                f"results of {first.get('container')} were solved with "
+                "different settings"
+            )
     merged: dict = {}
     for f in files:
         for k, item in f.results.items():
-            if k in merged and not _same(merged[k][2], item[2]):
+            if k in merged and not _same(merged[k], item):
                 raise ValueError(f"subproblem {k} has two different results")
             merged[k] = item
     n_sub = int(first["n_subproblems"])
@@ -350,10 +360,19 @@ class _Placement:
     sources: np.ndarray
 
 
-def _same(a: SubproblemResult, b: SubproblemResult) -> bool:
-    """Whether two results of one subproblem are equal (NaN equal)."""
+def _solve_settings(attrs: dict):
+    """The hash of how a results file was solved, without its subproblem
+    range (``solve_settings``; None if the file does not record it)."""
+    return attrs.get("solve_settings")
+
+
+def _same(a: tuple, b: tuple) -> bool:
+    """Whether two entries ``(pixels, sources, result)`` of one subproblem
+    are equal: placement and results (NaN equal)."""
+    if not (np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1])):
+        return False
     return all(
-        np.array_equal(getattr(a, n), getattr(b, n), equal_nan=True)
+        np.array_equal(getattr(a[2], n), getattr(b[2], n), equal_nan=True)
         for n in ("footprints", "events", "ls", "f0", "snr")
     )
 

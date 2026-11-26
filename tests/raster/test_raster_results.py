@@ -166,6 +166,30 @@ def test_incomplete_or_conflicting_results_raise(tmp_path):
         )
     with pytest.raises(ValueError):
         trial_outcome([], p)
+    # the same results placed elsewhere
+    moved = dict(res)
+    moved[2] = (res[2][0] + 0, np.array([2]), res[2][2])
+    write_results(tmp_path / "d.h5", rec, {2: res[2]}, attrs())
+    write_results(tmp_path / "e.h5", rec, {2: moved[2]}, attrs())
+    write_results(tmp_path / "f.h5", rec, {0: res[0], 1: res[1]}, attrs())
+    with pytest.raises(ValueError, match="two different results"):
+        trial_outcome(
+            [read_results(tmp_path / n) for n in ("f.h5", "d.h5", "e.h5")], p
+        )
+    # parts solved with different settings
+    write_results(
+        tmp_path / "g.h5", rec, {2: res[2]}, attrs(solve_settings="lam 0.5")
+    )
+    write_results(
+        tmp_path / "h.h5",
+        rec,
+        {0: res[0], 1: res[1]},
+        attrs(solve_settings="lam 0.9"),
+    )
+    with pytest.raises(ValueError, match="different settings"):
+        trial_outcome(
+            [read_results(tmp_path / n) for n in ("g.h5", "h.h5")], p
+        )
 
 
 def test_trial_not_extracted(tmp_path):

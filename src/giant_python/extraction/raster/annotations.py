@@ -80,11 +80,15 @@ class PathAnnotations:
     dr : str
         The folder of that file when it was annotated.
     rois : list of UserRoi
+    path : int
+        The path's number in the file (``Path<n>`` or ``DMD<n>``; 0 if not
+        read from a file).
     """
 
     fn: str = ""
     dr: str = ""
     rois: list = field(default_factory=list)
+    path: int = 0
 
 
 def _text(f: h5py.File, path: str, default: str = "") -> str:
@@ -95,7 +99,9 @@ def _text(f: h5py.File, path: str, default: str = "") -> str:
     if raw.dtype.kind in ("S", "O", "U"):
         value = raw.ravel()[0] if raw.size else ""
         return value.decode() if isinstance(value, bytes) else str(value)
-    return "".join(chr(int(c)) for c in raw.ravel())
+    # MATLAB characters are UTF-16 code units
+    codes = np.asarray(raw.ravel(), dtype="<u2")
+    return codes.tobytes().decode("utf-16-le", errors="replace")
 
 
 def _array(f: h5py.File, path: str) -> Optional[np.ndarray]:
@@ -138,8 +144,7 @@ def read_annotations(path) -> list:
     -------
     list of PathAnnotations
         One entry per ``Path<n>`` (or ``DMD<n>``) group, in the order of
-        their numbers; the entry for path ``n`` is at index ``n - 1`` when
-        the paths are numbered from 1 without gaps.
+        their numbers (``PathAnnotations.path``).
     """
     with h5py.File(path, "r") as f:
         zero = True
@@ -153,7 +158,7 @@ def read_annotations(path) -> list:
             if m and isinstance(f[name], h5py.Group):
                 groups.append((int(m.group(1)), name))
         out = []
-        for _, name in sorted(groups):
+        for number, name in sorted(groups):
             n_rois = _scalar(_array(f, f"{name}/n_rois")) or 0
             rois = []
             for k in range(1, int(n_rois) + 1):
@@ -182,6 +187,7 @@ def read_annotations(path) -> list:
                     fn=_text(f, f"{name}/fn"),
                     dr=_text(f, f"{name}/dr"),
                     rois=rois,
+                    path=number,
                 )
             )
         return out
@@ -310,12 +316,16 @@ def session_annotations(
     Returns
     -------
     list of (PathAnnotations or None)
-        Index ``d`` holds path ``d + 1``'s annotations; None where the
-        file has none for that path.
+        Index ``d`` holds the annotations of the file's ``Path<d + 1>``;
+        None where the file has none for that path. (MATLAB's
+        ``loadAnnotationsH5`` numbers the groups it finds in order, which
+        is the same for the files its ``saveAnnotationsH5`` writes, with
+        every path.)
     """
     out: list = [None] * n_paths
     if path is None or not Path(path).exists():
         return out
-    for d, entry in enumerate(read_annotations(path)[:n_paths]):
-        out[d] = entry
+    for entry in read_annotations(path):
+        if 1 <= entry.path <= n_paths:
+            out[entry.path - 1] = entry
     return out
