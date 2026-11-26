@@ -57,6 +57,34 @@ def temporal_kernel(tau: float) -> np.ndarray:
     return k / k.sum()
 
 
+_POSITIVE = (
+    "analyze_hz",
+    "tau_s",
+    "tau2_s",
+    "sigma_px",
+    "sel_radius",
+    "baseline_window_s",
+    "denoise_window_s",
+    "min_baseline",
+    "baseline_knot_factor",
+)
+_POSITIVE_IF_GIVEN = ("tau_full", "photon_scale")
+_NOT_NEGATIVE = ("lam", "phi", "baseline_penalty")
+
+
+def _check_numbers(params) -> None:
+    """Reject numbers that are not finite or have the wrong sign."""
+    given = [n for n in _POSITIVE_IF_GIVEN if getattr(params, n) is not None]
+    for name in list(_POSITIVE) + given:
+        v = getattr(params, name)
+        if not (v > 0 and math.isfinite(v)):
+            raise ValueError(f"{name} must be positive and finite")
+    for name in _NOT_NEGATIVE:
+        v = getattr(params, name)
+        if not (v >= 0 and math.isfinite(v)):
+            raise ValueError(f"{name} must not be negative")
+
+
 @dataclass(frozen=True)
 class SolverParams:
     """Parameters of the subproblem solver (SILo's defaults for SLAP2).
@@ -90,6 +118,11 @@ class SolverParams:
         Variance term of the debias refit: held at its value at the
         refit's start (a weighted least-squares refit) or following the
         model.
+    footprint_variance : {'model', 'fixed'}
+        Variance term of the footprint fit: following the model, as in
+        MATLAB, or held at its value at the fit's start (a weighted
+        least-squares fit, as the debias refit's 'fixed'). Not a MATLAB
+        option.
     baseline_knot_factor : float
         Knot spacing of the baseline spline, in baseline windows.
     baseline_penalty : float
@@ -112,42 +145,22 @@ class SolverParams:
     nmf_iter: int = 2
     photon_scale: float | None = 25.0
     debias_variance: str = "fixed"
+    footprint_variance: str = "model"
     baseline_knot_factor: float = 0.5
     baseline_penalty: float = 30.0
     tau_full: float | None = None
 
     def __post_init__(self) -> None:
         """Reject values the solver cannot run with."""
-        if self.debias_variance not in ("fixed", "model"):
-            raise ValueError(
-                "debias_variance must be 'fixed' or 'model', not "
-                f"{self.debias_variance!r}"
-            )
+        for name in ("debias_variance", "footprint_variance"):
+            if getattr(self, name) not in ("fixed", "model"):
+                raise ValueError(
+                    f"{name} must be 'fixed' or 'model', not "
+                    f"{getattr(self, name)!r}"
+                )
         if self.nmf_iter < 1:
             raise ValueError(f"nmf_iter must be >= 1, not {self.nmf_iter}")
-        positive = [
-            "analyze_hz",
-            "tau_s",
-            "tau2_s",
-            "sigma_px",
-            "sel_radius",
-            "baseline_window_s",
-            "denoise_window_s",
-            "min_baseline",
-            "baseline_knot_factor",
-        ]
-        if self.tau_full is not None:
-            positive.append("tau_full")
-        if self.photon_scale is not None:
-            positive.append("photon_scale")
-        for name in positive:
-            v = getattr(self, name)
-            if not (v > 0 and math.isfinite(v)):
-                raise ValueError(f"{name} must be positive and finite")
-        for name in ("lam", "phi", "baseline_penalty"):
-            v = getattr(self, name)
-            if not (v >= 0 and math.isfinite(v)):
-                raise ValueError(f"{name} must not be negative")
+        _check_numbers(self)
         if self.lp_factor < 2:
             # splitFreq takes a low order statistic over this many pages
             raise ValueError(
@@ -266,6 +279,10 @@ class Subproblem:
                 f"sel has {n_px} pixels; y is {self.y.shape} and finv "
                 f"{self.finv.shape}"
             )
+        for name in ("pixels", "sources"):
+            index = getattr(self, name)
+            if index is not None and np.asarray(index).min(initial=0) < 0:
+                raise ValueError(f"{name} holds a negative index")
         r, c = self.sources_rc[:, 0], self.sources_rc[:, 1]
         inside = (
             (r >= 0)
@@ -275,6 +292,9 @@ class Subproblem:
         )
         if not inside.all():
             raise ValueError("sources_rc lies outside the crop")
+        if np.unique(self.sources_rc, axis=0).shape[0] != len(r):
+            # two footprints would be the same: no unique activity
+            raise ValueError("two sources share a position")
 
     @property
     def n_pixels(self) -> int:
@@ -457,6 +477,12 @@ def _trial_pixel_index(trial_file: Path, row0, col0, sel) -> np.ndarray:
     rows, cols = sel_coords(full)
     index[rows, cols] = np.arange(rows.size)
     r, c = sel_coords(sel)
+    inside = (r + row0 < full.shape[0]) & (c + col0 < full.shape[1])
+    if not inside.all() or (index[r + row0, c + col0] < 0).any():
+        raise ValueError(
+            f"{trial_file} does not select every pixel of the subproblem: "
+            "the two files are not from the same trial"
+        )
     return index[r + row0, c + col0]
 
 

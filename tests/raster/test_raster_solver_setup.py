@@ -162,6 +162,8 @@ def test_subproblem_checks_its_arrays():
         Subproblem(y=y, finv=finv, sel=sel, sources_rc=[[1, 3]])
     with pytest.raises(ValueError, match="channels"):
         Subproblem(y=y[0], finv=finv, sel=sel, sources_rc=[[1, 1]])
+    with pytest.raises(ValueError, match="share a position"):
+        Subproblem(y=y, finv=finv, sel=sel, sources_rc=[[1, 1], [1, 1]])
 
 
 def _write_matlab_params(g, params: SolverParams, **extra):
@@ -245,6 +247,32 @@ def test_load_matlab_subproblem(tmp_path):
     assert (p.sigma_px, p.sel_radius, p.lam) == (1.6, 4, 0.7)
     assert p.tau_frames == pytest.approx(0.03 * 200)
     assert load_matlab_subproblem(path, np.float32)[0].y.dtype == np.float32
+
+
+def test_trial_file_of_another_trial_is_refused(tmp_path):
+    """A trial.mat that does not select every pixel of the subproblem
+    cannot give its pixel indices."""
+    sel = np.ones((3, 3), dtype=bool)
+    path = _write_matlab_subproblem(
+        tmp_path,
+        np.zeros((1, 9, 5)),
+        np.ones((9, 5)),
+        sel,
+        np.array([[1, 1]]),
+        SolverParams(),
+        2,
+        1,
+    )
+    with h5py.File(tmp_path / "trial.mat", "r+") as f:
+        full = f["selPix"][()]
+        full[2, 3] = 0  # one of the crop's pixels, in MATLAB's file order
+        f["selPix"][...] = full
+    with pytest.raises(ValueError, match="not from the same trial"):
+        load_matlab_subproblem(path)
+    with h5py.File(tmp_path / "trial.mat", "w") as f:
+        f.create_dataset("selPix", data=np.ones((2, 2), np.uint8))
+    with pytest.raises(ValueError, match="not from the same trial"):
+        load_matlab_subproblem(path)
 
 
 def test_single_channel_subproblem_without_trial_file(tmp_path):

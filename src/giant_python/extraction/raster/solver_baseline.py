@@ -11,6 +11,7 @@ float64.
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 from scipy import linalg, ndimage, optimize, sparse
@@ -261,11 +262,14 @@ def curvature_penalty(n_coef: int) -> np.ndarray:
 
 
 def _bvls_fallback(g, c, lb, ub):
-    """One bounded QP by scipy's bounded-variable least squares.
+    """One bounded QP by scipy, with the objective as given.
 
-    Variables whose bounds coincide are set to them first (the least
-    squares need a lower bound below the upper one), and the others
-    solved with their contribution moved into the linear term.
+    Variables whose bounds coincide are set to them first, and the others
+    solved with their contribution moved into the linear term: by
+    bounded-variable least squares on the Cholesky factor where G is
+    positive definite, and otherwise (G singular, so that the linear term
+    may act alone along some direction) by L-BFGS-B on the objective
+    itself. No ridge is added.
     """
     fixed = lb >= ub
     x = np.where(fixed, lb, 0.0)
@@ -274,19 +278,38 @@ def _bvls_fallback(g, c, lb, ub):
     free = ~fixed
     gf = g[np.ix_(free, free)]
     cf = c[free] - g[np.ix_(free, fixed)] @ x[fixed]
-    n = gf.shape[0]
-    ridge = 1e-13 * max(np.trace(gf) / n, np.finfo(float).tiny)
-    r = linalg.cholesky(gf + ridge * np.eye(n), lower=False)
-    rhs = linalg.solve_triangular(r, cf, trans="T")
-    res = optimize.lsq_linear(
-        r,
-        rhs,
-        bounds=(lb[free], ub[free]),
-        method="bvls",
-        tol=1e-14,
-        max_iter=50 * n,
-    )
-    x[free] = res.x
+    lo, hi = lb[free], ub[free]
+    try:
+        r = linalg.cholesky(gf, lower=False)
+        rhs = linalg.solve_triangular(r, cf, trans="T")
+        x[free] = optimize.lsq_linear(
+            r,
+            rhs,
+            bounds=(lo, hi),
+            method="bvls",
+            tol=1e-14,
+            max_iter=50 * gf.shape[0],
+        ).x
+    except linalg.LinAlgError:
+        # in units of the linear term, so that the tolerance means the same
+        # whatever the program's scale
+        scale = np.abs(cf).max()
+        if scale == 0:
+            scale = 1.0  # no linear term: G's unit diagonal sets the scale
+
+        def objective(v):
+            """The objective and its gradient, over the linear term's scale."""
+            gv = gf @ v
+            return (0.5 * v @ gv - cf @ v) / scale, (gv - cf) / scale
+
+        x[free] = optimize.minimize(
+            objective,
+            np.clip(0.0, lo, hi),
+            jac=True,
+            method="L-BFGS-B",
+            bounds=list(zip(lo, hi)),
+            options=dict(maxiter=20000, ftol=0.0, gtol=1e-12),
+        ).x
     return x
 
 
@@ -349,7 +372,9 @@ def solve_box_qp(
         ``converged`` (per problem; False where the fallback was used) and
         ``kkt``, the largest gradient component among the variables that
         no bound holds, relative to the largest of ``c`` (both with G
-        scaled to a unit diagonal).
+        scaled to a unit diagonal). It is computed on the objective as
+        given, also for the fallback's solutions; a warning is given if
+        one of those is above 1e-6.
     """
     m, n = c.shape
     diag = np.einsum("mii->mi", g)
@@ -402,6 +427,13 @@ def solve_box_qp(
         )
         x[i] = xi
     kkt = kkt_residual(x)[2] / grad_scale
+    if np.any(kkt[~done] > 1e-6):
+        warnings.warn(
+            f"{int(np.sum(kkt[~done] > 1e-6))} bounded quadratic programs "
+            "were not solved to tolerance (largest relative gradient "
+            f"{kkt[~done].max():.1e})",
+            stacklevel=2,
+        )
     # back to the given scale; the bounds are met exactly
     x = np.clip(x * scale, lb, ub)
     linear = np.where(c > 0, ub, np.where(c < 0, lb, np.clip(0.0, lb, ub)))

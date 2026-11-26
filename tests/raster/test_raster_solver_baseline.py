@@ -2,6 +2,7 @@
 (splitFreq, fitB and its helpers), the floor and the noise estimate,
 against GIAnT-MATLAB's values."""
 
+import warnings
 from pathlib import Path
 
 import h5py
@@ -277,6 +278,33 @@ def test_box_qp_fixed_variables():
         g[:, keep][:, :, keep], c[:, keep] - shift, lb[:, keep], ub[:, keep]
     )
     np.testing.assert_allclose(x[:, keep], ref, atol=1e-9)
+
+
+def test_box_qp_fallback_keeps_the_objective():
+    """The fallback solves the program as given: a singular G whose linear
+    term acts along the null direction ends on the bounds, without a
+    warning, as the Newton iterations do."""
+    g = np.array([[[1.0, 1.0], [1.0, 1.0]]])
+    lb, ub = np.full((1, 2), -2.0), np.full((1, 2), 2.0)
+    for c in ([[1e-16, -1e-16]], [[0.5, -0.5]]):
+        c = np.array(c)
+        for max_iter in (100, 0):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                x, info = sb.solve_box_qp(g, c, lb, ub, max_iter=max_iter)
+            assert x.tolist() == [[2.0, -2.0]], (c, max_iter)
+            assert info["kkt"].max() < 1e-9
+    # no linear term at all: the quadratic alone, pushed to the bounds
+    ones = np.ones((1, 4, 4))
+    zero = np.zeros((1, 4))
+    x, info = sb.solve_box_qp(
+        ones, zero, np.full((1, 4), 1.0), np.full((1, 4), 2.0), max_iter=0
+    )
+    assert x.tolist() == [[1.0] * 4] and np.isfinite(info["kkt"]).all()
+    # a positive semidefinite program with its minimum inside the bounds
+    c = np.array([[1.0, 1.0]])
+    x, info = sb.solve_box_qp(g, c, lb, ub, max_iter=0)
+    assert x.sum() == pytest.approx(1.0, abs=1e-9) and info["kkt"].max() < 1e-9
 
 
 def test_box_qp_zero_rows_and_fallback():
