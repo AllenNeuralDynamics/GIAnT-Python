@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import numpy as np
-from scipy.signal import lfilter
+from scipy.signal import lfilter, peak_prominences
 
 THRESH = 5.0
 """Event threshold, robust SDs of the filtered trace."""
@@ -74,46 +74,6 @@ def _plateaus(y: np.ndarray) -> list:
     return out
 
 
-def _higher_left(y: np.ndarray, first: int, v: float) -> int:
-    """Index of the nearest sample left of ``first`` above ``v`` (-1 if
-    none), searched in windows that double: the nearest higher sample is
-    usually close, so a row's maxima cost about its length in all."""
-    stop, width = first, 64
-    while stop > 0:
-        start = max(0, stop - width)
-        hit = np.flatnonzero(y[start:stop] > v)
-        if hit.size:
-            return start + int(hit[-1])
-        stop, width = start, 2 * width
-    return -1
-
-
-def _higher_right(y: np.ndarray, last: int, v: float) -> int:
-    """Index of the nearest sample right of ``last`` above ``v`` (the row's
-    length if none), searched as :func:`_higher_left`."""
-    start, width = last + 1, 64
-    while start < y.size:
-        stop = min(y.size, start + width)
-        hit = np.flatnonzero(y[start:stop] > v)
-        if hit.size:
-            return start + int(hit[0])
-        start, width = stop, 2 * width
-    return y.size
-
-
-def _prominence(y: np.ndarray, first: int, last: int) -> float:
-    """Prominence of the maximum on ``y[first:last + 1]``.
-
-    Its height above the higher of the two lowest points between it and
-    the nearest higher sample on each side (the end of the row when there
-    is none).
-    """
-    v = y[first]
-    lmin = y[_higher_left(y, first, v) + 1 : first].min()
-    rmin = y[last + 1 : _higher_right(y, last, v)].min()
-    return float(v - max(lmin, rmin))
-
-
 def islocalmax(y: np.ndarray, min_separation: float = 0) -> np.ndarray:
     """MATLAB ``islocalmax(y, 2, 'MinSeparation', s)`` for each row.
 
@@ -122,7 +82,10 @@ def islocalmax(y: np.ndarray, min_separation: float = 0) -> np.ndarray:
     the end of that maximum's run of equal values to the start of its
     own) replaces it if it is more prominent and is dropped otherwise.
     This reproduces MATLAB R2024b on rows with and without runs of equal
-    values (checked against MATLAB in the tests).
+    values (checked against MATLAB in the tests). Prominences are those of
+    :func:`scipy.signal.peak_prominences` at the runs' centres: the height
+    above the higher of the lowest points between the maximum and the
+    nearest higher sample on each side.
 
     Parameters
     ----------
@@ -139,18 +102,22 @@ def islocalmax(y: np.ndarray, min_separation: float = 0) -> np.ndarray:
     rows = np.atleast_2d(y)
     out = np.zeros(rows.shape, bool)
     for r, row in enumerate(rows):
-        kept = []
-        for first, last, mark in _plateaus(row):
-            if min_separation > 0 and kept:
-                prev_last, prev_prom = kept[-1][1], kept[-1][3]
-                if first - prev_last < min_separation:
-                    prom = _prominence(row, first, last)
-                    if prom > prev_prom:
-                        kept[-1] = (first, last, mark, prom)
-                    continue
-            prom = _prominence(row, first, last) if min_separation > 0 else 0.0
-            kept.append((first, last, mark, prom))
-        out[r, [k[2] for k in kept]] = True
+        runs = _plateaus(row)
+        if not runs:
+            continue
+        marks = np.array([m for _, _, m in runs])
+        if min_separation <= 0 or len(runs) == 1:
+            out[r, marks] = True
+            continue
+        prom = peak_prominences(row, marks)[0]
+        kept = []  # indices into runs
+        for i, (first, _, _) in enumerate(runs):
+            if kept and first - runs[kept[-1]][1] < min_separation:
+                if prom[i] > prom[kept[-1]]:
+                    kept[-1] = i
+                continue
+            kept.append(i)
+        out[r, marks[kept]] = True
     return out.reshape(y.shape)
 
 
