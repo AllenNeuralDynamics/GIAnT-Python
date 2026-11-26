@@ -10,6 +10,7 @@ the existing algorithm.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass, fields
 from numbers import Integral, Real
 from typing import Optional, Union
@@ -705,6 +706,15 @@ class SiloParams:
                 f"peakMethod {self.peak_method!r} is not ported yet; only "
                 "'getactimpeaks'"
             )
+        seed = self.localization_null_seed
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, Integral)
+            or seed < 0
+        ):
+            raise ValueError(
+                "localization_null_seed must be a nonnegative integer"
+            )
         # the stages' own types check the rest
         self.localization_params(80.0)
         self.solver_params()
@@ -1015,6 +1025,9 @@ _PYTHON_ONLY = {
 }
 
 
+_DEVICE = re.compile(r"cpu|cuda(:\d+)?")
+
+
 @dataclass
 class SiloExecution:
     """How SILo runs on one machine; never changes the results.
@@ -1061,10 +1074,10 @@ class SiloExecution:
             _positive(name, getattr(self, name), integer=True)
         for name in ("device", "loader_device"):
             value = getattr(self, name)
-            if not isinstance(value, str) or not (
-                value == "cpu" or value.startswith("cuda")
-            ):
-                raise ValueError(f"{name} must be 'cpu' or 'cuda[:N]'")
+            if not isinstance(value, str) or not _DEVICE.fullmatch(value):
+                raise ValueError(
+                    f"{name} must be 'cpu', 'cuda' or 'cuda:N', not {value!r}"
+                )
         _choice("dtype", self.dtype, ("float64", "float32"))
         if self.batch_bytes is not None:
             _positive("batch_bytes", self.batch_bytes)
