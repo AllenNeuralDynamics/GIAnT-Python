@@ -754,11 +754,11 @@ def _submit(subs, sp, options, pool):
     """Solve a trial's subproblems: futures from the pool (largest first),
     or results solved here."""
     from ..extraction.raster.solver import solve_subproblems
-    from .silo_solve import _solve_one
+    from .silo_solve import _solve_one, effective_batch
 
     if not subs:
         return [], []
-    if pool is None or options.batch_bytes is not None:
+    if pool is None or effective_batch(options) is not None:
         return [], solve_subproblems(subs, sp, options)
     order = np.argsort(
         [-s.n_pixels * s.n_frames * (s.n_sources + 1) for s in subs],
@@ -1021,9 +1021,9 @@ def run_silo(
         timer["plan_paths"] = {p["path"] + 1: p["seconds"] for p in plans}
 
         t0 = time.perf_counter()
-        pool = None
-        if ex.solver_workers > 1 and ex.batch_bytes is None:
-            pool = make_pool(ex.solver_workers, ex.solver_threads)
+        from .silo_solve import _pool
+
+        pool = _pool(ex, ex.solver_options())
         try:
             timer["trials"] = stream(
                 session, params, ex, None, pool, save_subproblems

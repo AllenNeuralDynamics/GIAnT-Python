@@ -68,6 +68,16 @@ def subproblem_work(n_pixels, n_sources, n_frames) -> np.ndarray:
     )
 
 
+def effective_batch(options) -> Optional[float]:
+    """The batch size the solver uses: ``batch_bytes``, or on a GPU its
+    default of 2e8 (``solve_subproblems``); None (one subproblem at a time)
+    on the CPU. Subproblems are batched exactly when this is not None,
+    whatever the number of processes."""
+    if options.batch_bytes is not None:
+        return float(options.batch_bytes)
+    return None if str(options.device).split(":")[0] == "cpu" else 2e8
+
+
 def _solve_record(params: SiloParams, options) -> dict:
     """What a results file depends on besides its container and range."""
     return {
@@ -76,7 +86,7 @@ def _solve_record(params: SiloParams, options) -> dict:
         "solver": {
             "device": str(options.device).split(":")[0],
             "dtype": options.dtype,
-            "batch_bytes": options.batch_bytes,
+            "batch_bytes": effective_batch(options),
             "max_iter": options.max_iter,
             "fit_max_iter": options.fit_max_iter,
             "ftol": options.ftol,
@@ -113,14 +123,16 @@ def _solve_one(sub, params, options):
 def solve_subproblem_list(subs, params, options, pool=None) -> list:
     """Solve subproblems, in a pool if given; results in input order.
 
-    With ``options.batch_bytes`` (GPU batches) they are solved together
-    here instead. Larger subproblems are submitted first.
+    When the solver batches (:func:`effective_batch`: always on a GPU)
+    they are solved together here, with or without a pool, so the results
+    do not depend on the number of processes. Larger subproblems are
+    submitted first.
     """
     from ..extraction.raster.solver import solve_subproblems
 
     if not subs:
         return []
-    if options.batch_bytes is not None or pool is None:
+    if effective_batch(options) is not None or pool is None:
         return solve_subproblems(list(subs), params, options)
     order = np.argsort(
         [-s.n_pixels * s.n_frames * (s.n_sources + 1) for s in subs],
@@ -343,6 +355,7 @@ def dispatch(
         if c.frame_lines.size < params.min_frames or not len(work):
             # nothing to solve: one empty item writes the trial's record
             entries.append((f, h, c.n_subproblems, None, 0.0))
+            continue
         for k, w in enumerate(work):
             entries.append((f, h, c.n_subproblems, k, float(w)))
     costs = np.array([e[4] for e in entries]) + 1.0
@@ -457,10 +470,8 @@ def solve_job(
     options = SolverOptions(**job["solver"])
     t0 = time.perf_counter()
     done = {}
-    pool = None
+    pool = _pool(ex, options)
     try:
-        if ex.solver_workers > 1 and options.batch_bytes is None:
-            pool = make_pool(ex.solver_workers, ex.solver_threads)
         for it in job["items"]:
             f = containers_dir / it["container"]
             h = attr(f, "settings_hash")
@@ -493,10 +504,8 @@ def solve_containers(
     ex = execution or SiloExecution()
     options = ex.solver_options()
     done = {}
-    pool = None
+    pool = _pool(ex, options)
     try:
-        if ex.solver_workers > 1 and options.batch_bytes is None:
-            pool = make_pool(ex.solver_workers, ex.solver_threads)
         for (d, t), f in _containers(session):
             done[f.name] = solve_container(
                 f,
@@ -511,6 +520,16 @@ def solve_containers(
         if pool is not None:
             pool.shutdown()
     return done
+
+
+def _pool(ex: SiloExecution, options):
+    """A pool of solver processes, or None to solve here (one process
+    asked for, or batches), with this process's threads set to
+    ``solver_threads`` then."""
+    if ex.solver_workers > 1 and effective_batch(options) is None:
+        return make_pool(ex.solver_workers, ex.solver_threads)
+    thread_env(ex.solver_threads)
+    return None
 
 
 def thread_env(threads: int) -> None:

@@ -123,9 +123,9 @@ def path_result(
     alignment: list = [None] * n
     peaks: list = [None] * n
     for t in range(n):
-        if session.keep[d, t]:
-            rec = read_localization(session.localize_file(d, t))
-            peaks[t] = rec.peaks
+        f = session.localize_file(d, t)
+        if session.keep[d, t] and f.exists():
+            peaks[t] = read_localization(f).peaks
     plan_hash = attr(pf, "settings_hash")
     science = solve_science(params)
     for t in plan.valid_trials:

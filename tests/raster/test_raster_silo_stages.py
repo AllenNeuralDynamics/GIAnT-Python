@@ -372,6 +372,39 @@ def test_inputs_and_stale_results(tmp_path, fake, monkeypatch):
             silo_collect.collect(s, other, EX)
 
 
+def test_collect_and_dispatch_without_raw_data(tmp_path, fake):
+    """Dispatch and collect need neither the raw data nor the movies; a
+    short trial is one item of no work."""
+    import json
+    import shutil
+
+    table = make_session(tmp_path)
+    s = SiloSession.open(table)
+    silo.localize(s, PARAMS, EX)
+    silo.plan(s, PARAMS, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, PARAMS, EX)
+    shutil.rmtree(tmp_path / "raw")
+    for movie in (tmp_path / "motion_correction").glob("*.tif"):
+        movie.unlink()
+    with pytest.raises(ValueError):
+        SiloSession.open(table)
+    c = SiloSession.open(table, inputs="collect")
+    jobs = silo_solve.dispatch(c, PARAMS, 3, EX)
+    items = [
+        it
+        for j in jobs
+        for it in json.loads(j.read_text(encoding="utf-8"))["items"]
+    ]
+    short = [it for it in items if it["container"] == "path1_trial0003.h5"]
+    assert len(short) == 1 and short[0]["work"] == 0
+    for job in jobs:
+        silo_solve.solve_job(job, execution=EX)
+    silo_collect.collect(c, PARAMS, EX)
+    e = load_struct_h5(c.out_dir / "experiment_summary.h5")
+    frames = e["Path1"]["frame_info"]["trial_num_frames"].ravel()
+    assert frames.tolist() == [FRAMES[0], FRAMES[1], FRAMES[2]]
+
+
 def test_localize_fits_missing_peaks(tmp_path, fake):
     """Localization files without their peaks (a streaming run stopped
     before its background fits) get them from silo-localize."""

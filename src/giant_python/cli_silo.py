@@ -393,9 +393,15 @@ def execution_from_args(args: argparse.Namespace) -> SiloExecution:
 
 
 def _session(args: argparse.Namespace):
-    """The session of the command's trial table and folders."""
+    """The session of the command's trial table and folders (dispatch and
+    collect need neither registered movies nor raw data)."""
     from .pipeline.silo_session import SiloSession
 
+    inputs = (
+        "collect"
+        if args.command in ("silo-dispatch", "silo-collect")
+        else "all"
+    )
     return SiloSession.open(
         args.trial_table,
         args.moco_dir,
@@ -403,6 +409,7 @@ def _session(args: argparse.Namespace):
         args.out_dir,
         args.work_dir,
         args.annotations,
+        inputs=inputs,
     )
 
 

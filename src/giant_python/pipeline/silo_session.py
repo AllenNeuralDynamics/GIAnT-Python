@@ -257,6 +257,7 @@ class SiloSession:
         out_dir=None,
         work_dir=None,
         annotations=None,
+        inputs: str = "all",
     ) -> "SiloSession":
         """Read a trial table and verify the session's files.
 
@@ -271,6 +272,8 @@ class SiloSession:
         annotations : str or Path, optional
             The annotations file (default:
             ``<savedr>/annotations/annotations.h5`` if it exists).
+        inputs : {'all', 'collect'}
+            Which inputs a trial needs to be kept (see :meth:`verify`).
 
         Returns
         -------
@@ -343,7 +346,7 @@ class SiloSession:
             num_channels=0,
             align_hz=0.0,
         )
-        session.verify()
+        session.verify(inputs)
         return session
 
     def movie(self, d: int, t: int) -> Optional[Path]:
@@ -368,21 +371,34 @@ class SiloSession:
         """Trial-path ``(d, t)``'s raw ``.dat`` file."""
         return self.datadr / str(self.filename[d, t])
 
-    def verify(self) -> None:
+    def verify(self, inputs: str = "all") -> None:
         """Set :attr:`keep` as ``verifyFiles.m``: the registered movie, the
         alignment file and the raw file exist, and registration did not
-        fail; read the channels and frame rate of the first kept trial."""
+        fail; read the channels and frame rate of the first kept trial.
+
+        With ``inputs='collect'`` only the alignment files are required
+        (and registration must not have failed): the dispatch and collect
+        stages need neither the registered movies nor the raw data, and
+        take the trials to collect from the stages' files.
+        """
+        if inputs not in ("all", "collect"):
+            raise ValueError("inputs must be 'all' or 'collect'")
         keep = np.zeros(self.filename.shape, bool)
         for d in range(self.n_paths):
             for t in range(self.n_trials):
                 if not str(self.filename[d, t] or ""):
                     continue
-                keep[d, t] = (
-                    self.movie(d, t) is not None
-                    and self.alignment(d, t).exists()
+                ok = (
+                    self.alignment(d, t).exists()
                     and not self.registration_failed[d, t]
-                    and self.raw(d, t).exists()
                 )
+                if inputs == "all":
+                    ok = (
+                        ok
+                        and self.movie(d, t) is not None
+                        and self.raw(d, t).exists()
+                    )
+                keep[d, t] = ok
         if not keep.any():
             raise ValueError(
                 "no trial passes file verification (registered movie, "
