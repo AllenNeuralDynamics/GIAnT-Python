@@ -1936,6 +1936,7 @@ def _neighbours(ctx: dict, cells: list):
     same recording."""
 
     def ranges(t):
+        """``(first, last)`` lines of the other trials of ``t``'s file."""
         out = []
         for u in cells:
             if u != t and ctx["names"][u] == ctx["names"][t]:
