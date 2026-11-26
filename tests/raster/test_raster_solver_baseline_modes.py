@@ -275,3 +275,40 @@ def test_fit_baseline_offset():
     corr = fit_baseline(b0, y, x, h, sub.finv, sub.sel, PARAMS, offset=b0)
     err_from = np.abs(corr - b_true).mean() / b_true.mean()
     assert err_from < 0.03
+
+
+def test_shared_variance_ignores_filled_frames():
+    """Filled-in frames (variance multiplier 1000 x) do not hide a shared
+    change: they are left out of the shared variance and shrunk alone."""
+    rng = np.random.default_rng(8)
+    n_px, n_t = 200, 2000
+    q = np.full((n_px, n_t), 3.0)
+    src = np.zeros((n_px, n_t))
+    finv = np.ones((n_px, n_t))
+    filled = np.zeros(n_t, bool)
+    filled[100:160] = True
+    finv[:, filled] = 1000.0
+    true = 1 + 0.15 * np.sin(np.arange(n_t) / 7.0)
+    y = rng.poisson(q * true[None]).astype(np.float64)
+    y[:, filled] = 3.0  # filled with a smooth value
+    c, rec = shared_time_course(y, q, src, finv)
+    assert rec["s2"] > 0
+    assert _corr(c[~filled], true[~filled]) > 0.85
+    # the filled frames stay near the mean
+    assert np.abs(c[filled] - rec["mean"]).max() < 0.01
+
+
+def test_outside_pixels_ignore_a_source_without_footprint():
+    """A source whose footprint is all zero leaves the outside pixels to
+    the other sources."""
+    sub, _, _ = _synthetic(seed=9)
+    params = replace(PARAMS, baseline_mode="gain_shared")
+    rows, cols = np.nonzero(sub.sel.T)[::-1]
+    h1 = np.exp(-((rows - 6.0) ** 2 + (cols - 6.0) ** 2) / (2 * 1.33**2))
+    h = np.column_stack([h1 / h1.sum(), np.zeros(sub.n_pixels)])
+    x = np.zeros((2, sub.n_frames))
+    b = sub.baseline
+    _, info = fit_network_gain(
+        b, b, sub.y[0], x, h, sub.finv, params, shared=True
+    )
+    assert info["n_outside"] > 100

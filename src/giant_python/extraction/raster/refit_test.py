@@ -112,7 +112,8 @@ def draw_refit_data(
     ``truth_scale`` multiplies the true activity, to map the detection
     threshold. ``truth_baseline(b, sub, rng)``, if given, changes the true
     baseline before the data are drawn (with ``baseline_rng``, so that the
-    data's draws stay those of ``rng``); the true F0 follows it.
+    data's draws stay those of ``rng``); it gets a copy of the fit's
+    baseline, which stays in ``b_fit``. The true F0 follows it.
     """
     if truth.baseline is None:
         raise ValueError(
@@ -127,7 +128,9 @@ def draw_refit_data(
     if truth_baseline is not None:
         b_fit = b
         b = np.asarray(
-            truth_baseline(b, sub, baseline_rng or np.random.default_rng()),
+            truth_baseline(
+                b.copy(), sub, baseline_rng or np.random.default_rng()
+            ),
             dtype=np.float64,
         )
         if b.shape != b_fit.shape:

@@ -290,3 +290,28 @@ def test_refit_keeps_the_subproblems_own_baseline():
     assert r.summary["n_sources"] == 2
     with pytest.raises(ValueError, match="Subproblem.baseline"):
         refit_test([sub], gain, opt, seed=1)
+
+
+def test_truth_baseline_gets_a_copy():
+    """An in-place change of the true baseline leaves the fit unchanged."""
+    with h5py.File(SUBPROBLEM, "r") as f:
+        sub = Subproblem(
+            y=f["in/y"][()][:1].astype(np.float64),
+            finv=f["in/finv"][()].astype(np.float64),
+            sel=f["in/sel"][()].astype(bool),
+            sources_rc=f["in/sources_rc"][()],
+        )
+    fit = solve_subproblem(sub, PARAMS, SolverOptions(keep_baseline=True))
+    before = fit.baseline.copy()
+
+    def in_place(b, sub, rng):
+        """Scale the given array itself."""
+        b *= 1.5
+        return b
+
+    tr = draw_refit_data(
+        sub, fit, PARAMS, np.random.default_rng(0), truth_baseline=in_place
+    )
+    np.testing.assert_array_equal(fit.baseline, before)
+    np.testing.assert_array_equal(tr.b_fit, before[0])
+    np.testing.assert_allclose(tr.b, 1.5 * before[0])

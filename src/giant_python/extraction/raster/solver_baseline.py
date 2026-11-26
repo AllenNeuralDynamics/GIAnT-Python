@@ -637,6 +637,9 @@ GAIN_MAX = 10.0
 # fewest pixels outside the footprints that a shared time course is
 # estimated from ('gain_shared'); with fewer it is held at 1
 MIN_OUTSIDE = 10
+# frames whose shared factor's sampling variance exceeds this multiple of
+# the median do not enter the estimate of the shared variance
+RELIABLE_FACTOR = 4.0
 
 
 def gain_programs(
@@ -734,7 +737,9 @@ def shared_time_course(
     Each frame's factor is then shrunk towards their precision-weighted
     mean ``m`` by the empirical-Bayes weight ``s2 / (s2 + var_t)``, where
     ``s2`` is the variance of the factors about ``m`` beyond their
-    sampling variance (at least 0). Without a shared change the factor is
+    sampling variance (at least 0), estimated from the reliable frames
+    (sampling variance at most ``RELIABLE_FACTOR`` times its median; this
+    leaves out filled-in frames). Without a shared change the factor is
     ``m`` throughout.
 
     Returns
@@ -761,8 +766,12 @@ def shared_time_course(
     alpha = float((w * (r - raw * q) ** 2)[:, ok].sum() / dof)
     var_t = np.full(n_t, np.inf)
     var_t[ok] = alpha / den[ok]
-    spread = float(((raw[ok] - m) ** 2).sum() / max(int(ok.sum()) - 1, 1))
-    s2 = max(0.0, spread - float(var_t[ok].mean()))
+    # the shared variance from the reliable frames only: filled-in frames
+    # (discarded, variance multiplier 1000 x) would inflate the mean
+    # sampling variance without adding spread
+    rel = ok & (var_t <= RELIABLE_FACTOR * np.median(var_t[ok]))
+    spread = float(((raw[rel] - m) ** 2).sum() / max(int(rel.sum()) - 1, 1))
+    s2 = max(0.0, spread - float(var_t[rel].mean()))
     lam = np.zeros(n_t)
     if s2 > 0:
         lam[ok] = s2 / (s2 + var_t[ok])
@@ -817,7 +826,9 @@ def fit_network_gain(
     if not shared:
         return b, info
     n_src = h.shape[1]
-    outside = (h < params.outside_footprint * h.max(0)[None, :]).all(1)
+    peak = h.max(0)
+    live = peak > 0  # a source without a footprint excludes no pixel
+    outside = (h[:, live] < params.outside_footprint * peak[None, live]).all(1)
     info["n_outside"] = int(outside.sum())
     if outside.sum() < MIN_OUTSIDE:
         info["shared"] = np.ones(y.shape[1])

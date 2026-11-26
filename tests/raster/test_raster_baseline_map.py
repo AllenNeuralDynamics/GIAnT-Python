@@ -199,6 +199,11 @@ def test_map_baseline_dropped_frames_are_interpolated_over():
     mapped = map_baseline(bad, rc, ds, fl, 1.0, drop_frames=drop)
     want = truth(4.0, 4.0, fl)
     np.testing.assert_allclose(mapped.values[0], want, rtol=5e-3)
+    kept = map_baseline(stack, rc, ds, fl, 1.0)
+    none = map_baseline(
+        stack, rc, ds, fl, 1.0, drop_frames=np.zeros_like(drop)
+    )
+    np.testing.assert_array_equal(kept.values, none.values)
     with pytest.raises(ValueError, match="drop_frames"):
         map_baseline(bad, rc, ds, fl, 1.0, drop_frames=drop[:-1])
     with pytest.raises(ValueError, match="every registered frame"):

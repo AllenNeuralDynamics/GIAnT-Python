@@ -313,7 +313,10 @@ def map_baseline(
         keep = ~drop
     if not keep.any():
         raise ValueError("every registered frame is dropped")
-    sampled, weight = sample_bilinear(baseline[keep], trial_rc, min_weight)
+    if keep.all():  # no copy of the whole movie
+        sampled, weight = sample_bilinear(baseline, trial_rc, min_weight)
+    else:
+        sampled, weight = sample_bilinear(baseline[keep], trial_rc, min_weight)
     values = interp_frames(sampled, ds_lines[keep], frame_lines)
     values /= photon_scale
     missing = ~np.isfinite(values).any(1)
