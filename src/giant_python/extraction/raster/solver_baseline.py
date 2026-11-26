@@ -640,6 +640,9 @@ MIN_OUTSIDE = 10
 # frames whose shared factor's sampling variance exceeds this multiple of
 # the median do not enter the estimate of the shared variance
 RELIABLE_FACTOR = 4.0
+# samples whose variance multiplier exceeds this multiple of the median are
+# filled in (the loader gives them 1000 x the mean)
+FILLED_FACTOR = 100.0
 
 
 def gain_programs(
@@ -733,8 +736,8 @@ def shared_time_course(
         w = 1 / (F (q + src + 1))  (the solver's loss weights),
 
     whose sampling variance is ``alpha / sum_p w q^2``, with ``alpha`` the
-    mean weighted squared residual over the reliable frames (1 if the
-    loss's variance model holds).
+    mean weighted squared residual of the observed samples (not filled in)
+    of the reliable frames (1 if the loss's variance model holds).
     Each frame's factor is then shrunk towards their precision-weighted
     mean ``m`` by the empirical-Bayes weight ``s2 / (s2 + var_t)``, where
     ``s2`` is the variance of the factors about ``m`` beyond their
@@ -773,9 +776,12 @@ def shared_time_course(
     inv[ok] = 1.0 / den[ok]
     ref = min(np.median(inv[ok]), 10 * np.percentile(inv[ok], 10))
     rel = ok & (inv <= RELIABLE_FACTOR * ref)
-    n_obs = y.shape[0] * int(rel.sum())
-    dof = max(n_obs - int(rel.sum()), 1)
-    alpha = float((w * (r - raw * q) ** 2)[:, rel].sum() / dof)
+    # observed samples: not filled in (variance multiplier far above the
+    # typical); filled ones add no residual and would bias alpha down
+    finv = np.asarray(finv, np.float64)
+    seen = (finv <= FILLED_FACTOR * np.median(finv)) & rel[None, :]
+    dof = max(int(seen.sum()) - int(rel.sum()), 1)
+    alpha = float((w * (r - raw * q) ** 2)[seen].sum() / dof)
     var_t = alpha * inv
     spread = float(((raw[rel] - m) ** 2).sum() / max(int(rel.sum()) - 1, 1))
     s2 = max(0.0, spread - float(var_t[rel].mean()))

@@ -330,6 +330,21 @@ def test_filled_frames_do_not_fake_a_shared_change():
     assert np.ptp(c) < 0.01
 
 
+def test_filled_samples_do_not_count_in_alpha():
+    """Pixels filled in at some frames do not bias the residual scale."""
+    rng = np.random.default_rng(13)
+    n_px, n_t = 200, 2000
+    q = np.full((n_px, n_t), 3.0)
+    finv = np.ones((n_px, n_t))
+    holes = rng.random((n_px, n_t)) < 0.3
+    finv[holes] = 1000.0
+    y = rng.poisson(q).astype(np.float64)
+    y[holes] = 3.0
+    c, rec = shared_time_course(y, q, np.zeros_like(q), finv)
+    assert abs(rec["alpha"] - 0.75) < 0.03
+    assert np.ptp(c) < 0.01
+
+
 def test_shared_change_found_when_most_frames_are_filled():
     """With 70% of the frames filled in, the shared change is still found
     on the others."""
