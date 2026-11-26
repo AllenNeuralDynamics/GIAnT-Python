@@ -249,6 +249,13 @@ def test_streamed_and_staged_runs_agree(tmp_path, fake):
     exp = s1.out_dir / "experiment_summary.h5"
     assert exp.exists() and (s1.out_dir / "per_trial_summary.h5").exists()
     assert report["total"] > 0
+    # timings per trial-path: localization, and each trial's solve span
+    assert len(report["localize_trials"]) == N_PATHS * N_TRIALS
+    assert all(r["seconds"] > 0 for r in report["localize_trials"])
+    loaded = [r for r in report["trials"] if "load" in r]
+    assert loaded and all(
+        0 <= r["submitted"] <= r["solved"] <= report["total"] for r in loaded
+    )
     streamed = _all_results(s1)
     # trial 3 is short: its results file has its record and no subproblems
     short = read_results(s1.results_file(0, 2))
@@ -555,3 +562,25 @@ def test_cli(tmp_path, fake, capsys):
         tmp_path / "s" / "source_extraction" / "experiment_summary.h5"
     ).exists()
     capsys.readouterr()
+
+
+def test_solve_span_is_the_last_subproblem_solved():
+    """A trial's solve span ends when its last subproblem is done, also
+    when it is collected later, and starts when it was submitted."""
+    import concurrent.futures as cf
+    import time
+
+    clock0 = time.perf_counter()
+    with cf.ThreadPoolExecutor(2) as pool:
+        futures = [pool.submit(time.sleep, x) for x in (0.05, 0.2)]
+        p = silo._Pending(0, 0, None, [], futures, [], {}, Path("x"), 0.01)
+        silo._track(p)
+        cf.wait(futures)
+        time.sleep(0.2)  # collected well after the solve ended
+        submitted, solved = silo._solve_span(p, clock0)
+    assert submitted == 0.01
+    assert 0.2 <= solved < 0.35
+    # solved here (no futures): done when tracked
+    q = silo._Pending(0, 1, None, [], [], [1], {}, Path("y"), 0.5)
+    silo._track(q)
+    assert silo._solve_span(q, clock0)[1] >= 0.4
