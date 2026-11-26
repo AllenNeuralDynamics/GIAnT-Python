@@ -328,3 +328,38 @@ def test_subproblem_fixture_starts_as_matlab():
         assert np.array_equal(hs, f["init/Hs"][()])
         _close(h, f["init/H"][()])
         assert np.array_equal(valid, f["init/Hvalid"][()].astype(bool))
+
+
+def test_valid_kernel_widens_the_support_only():
+    """A larger validKernel widens where Hs may go, nothing else; a source
+    at the crop's edge gets the part of the square inside it."""
+    sel = np.ones((15, 15), dtype=bool)
+    rc = np.array([[7, 7], [0, 1]])
+    hs3, h3, v3 = initial_footprints(sel, rc, 1.33)
+    hs5, h5, v5 = initial_footprints(sel, rc, 1.33, valid_kernel=5)
+    assert np.array_equal(hs3, hs5)
+    assert np.array_equal(h3, h5)
+    assert v3.sum(0).tolist() == [9, 6]
+    assert v5.sum(0).tolist() == [25, 12]
+    assert (v3 <= v5).all()
+    rows, cols = sel_coords(sel)
+    inside = (np.abs(rows - 7) <= 2) & (np.abs(cols - 7) <= 2)
+    assert np.array_equal(v5[:, 0], inside)
+
+
+@pytest.mark.parametrize("bad", [0, 2, 4, -3, 3.0, True])
+def test_valid_kernel_must_be_odd_and_positive(bad):
+    """An even, non-positive or non-integer side is rejected."""
+    with pytest.raises(ValueError, match="valid_kernel"):
+        SolverParams(valid_kernel=bad)
+
+
+def test_valid_kernel_from_matlab():
+    """params_from_matlab reads validKernel's side; 3 without one."""
+    with h5py.File("vk.h5", "w", driver="core", backing_store=False) as f:
+        assert params_from_matlab(f.create_group("none")).valid_kernel == 3
+        f.create_group("five")["validKernel"] = np.ones((5, 5), np.uint8)
+        assert params_from_matlab(f["five"]).valid_kernel == 5
+        f.create_group("odd")["validKernel"] = np.ones((3, 2), np.uint8)
+        with pytest.raises(ValueError, match="validKernel"):
+            params_from_matlab(f["odd"])

@@ -452,3 +452,38 @@ def test_conv_same_is_matlabs():
     x = np.array([[1.0, 0.0, 0.0, 2.0]])
     assert np.array_equal(conv_same(x, k), [[1.0, 0.5, 0.25, 2.0]])
     assert np.array_equal(conv_same(x[:, :2], k), [[1.0, 0.5]])
+
+
+def _rms_width(h, rows, cols):
+    """RMS width per axis of a footprint about its centroid."""
+    h = np.clip(h, 0, None) / np.clip(h, 0, None).sum()
+    m = np.array([h @ rows, h @ cols])
+    return float(np.sqrt((h @ ((rows - m[0]) ** 2 + (cols - m[1]) ** 2)) / 2))
+
+
+def test_valid_kernel_lets_a_wide_footprint_be_fit():
+    """A sigma-1.8 source on its true baseline: with the 3 x 3 support the
+    fitted footprint stops near its ceiling (1.56 px), with 5 x 5 it gets
+    close to the truth (1.8 px)."""
+    rng = np.random.default_rng(3)
+    sel = np.ones((13, 13), dtype=bool)
+    rows, cols = sel_coords(sel)
+    rows, cols = rows.astype(float), cols.astype(float)
+    h = np.exp(-((rows - 6) ** 2 + (cols - 6) ** 2) / (2 * 1.8**2))
+    h /= h.sum()
+    n = 8000
+    ev = np.where(rng.random(n) < 0.01, rng.exponential(150.0, n), 0.0)
+    x = np.convolve(ev, PARAMS.k, mode="same")
+    b = np.full((h.size, n), 2.0)
+    y = rng.poisson(b + h[:, None] * x[None]).astype(np.float64)[None]
+    sub = Subproblem(y=y, finv=np.ones(y.shape[1:]), sel=sel,
+                     sources_rc=np.array([[6, 6]]), baseline=b)
+    true_w = _rms_width(h, rows, cols)
+    widths = {}
+    for vk in (3, 5):
+        p = replace(PARAMS, baseline_mode="fixed", valid_kernel=vk)
+        res = solve_subproblem(sub, p)
+        widths[vk] = _rms_width(res.footprints[:, 0], rows, cols)
+    assert widths[3] < 1.57
+    assert abs(widths[5] - true_w) < 0.1
+    assert abs(widths[5] - true_w) < abs(widths[3] - true_w) / 2

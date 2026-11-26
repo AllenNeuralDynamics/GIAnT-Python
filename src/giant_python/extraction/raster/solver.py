@@ -401,7 +401,10 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
 
     # starting values
     t0 = time.perf_counter()
-    init = [initial_footprints(s.sel, s.sources_rc, p.sigma_px) for s in subs]
+    init = [
+        initial_footprints(s.sel, s.sources_rc, p.sigma_px, p.valid_kernel)
+        for s in subs
+    ]
     b_ext = None
     if mode == "fit":
         b_np = [initial_baseline(y, p) for y in y1]

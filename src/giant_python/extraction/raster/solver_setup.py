@@ -155,6 +155,17 @@ class SolverParams:
         'gain_shared': the shared time course is estimated from the pixels
         where every source's footprint is below this share of its largest
         value.
+    valid_kernel : int
+        Side of the square around each source where the footprint fit may
+        put intensity (MATLAB's ``validKernel``, 3 x 3; odd). The footprint
+        is ``hfilter`` blurring that support, so its width (RMS per axis)
+        lies between ``hfilter``'s sigma (0.9 ``sigma_px``) and
+        ``sqrt(sigma**2 + r**2)``, r = (valid_kernel - 1) / 2 (all weight
+        on the corners): 1.20 to 1.56 px for 3 and ``sigma_px`` 1.33, up
+        to 2.33 px for 5. A Gaussian footprint of sigma 1.8 px is matched
+        best at 1.56 px with 3 and at 1.74 px with 5.
+        ``PlanParams.valid_kernel`` is the same quantity for the plan's
+        zones.
     """
 
     analyze_hz: float = 200.0
@@ -176,6 +187,7 @@ class SolverParams:
     tau_full: float | None = None
     baseline_mode: str = "fit"
     outside_footprint: float = 0.1
+    valid_kernel: int = 3
 
     def __post_init__(self) -> None:
         """Reject values the solver cannot run with."""
@@ -192,6 +204,11 @@ class SolverParams:
             )
         if not 0 < self.outside_footprint < 1:
             raise ValueError("outside_footprint must lie in (0, 1)")
+        vk = self.valid_kernel
+        if isinstance(vk, bool) or not isinstance(vk, (int, np.integer)):
+            raise ValueError(f"valid_kernel must be an integer, not {vk!r}")
+        if vk < 1 or vk % 2 == 0:
+            raise ValueError(f"valid_kernel must be odd and positive, not {vk}")
         if self.nmf_iter < 1:
             raise ValueError(f"nmf_iter must be >= 1, not {self.nmf_iter}")
         _check_numbers(self)
@@ -407,7 +424,10 @@ def conv_operator(sel: np.ndarray, filt: np.ndarray) -> sparse.csr_matrix:
 
 
 def initial_footprints(
-    sel: np.ndarray, sources_rc: np.ndarray, sigma_px: float
+    sel: np.ndarray,
+    sources_rc: np.ndarray,
+    sigma_px: float,
+    valid_kernel: int = 3,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Starting footprints of ``extractSources``.
 
@@ -419,9 +439,10 @@ def initial_footprints(
     h : ndarray of shape (pixels, sources)
         ``hs`` blurred with a Gaussian of ``sigma_px`` (replicate padding).
     valid : ndarray of bool, shape (pixels, sources)
-        The 3 x 3 pixels around each source, where the footprint fit may
-        put intensity.
+        The ``valid_kernel`` x ``valid_kernel`` pixels around each source
+        (MATLAB: 3 x 3), where the footprint fit may put intensity.
     """
+    r_v = (int(valid_kernel) - 1) // 2
     sel = np.asarray(sel, dtype=bool)
     rows, cols = sel_coords(sel)
     n_src = len(sources_rc)
@@ -436,7 +457,7 @@ def initial_footprints(
                 tmp[r + dr, c + dc] = 1
         tmp /= tmp.sum()
         ok = np.zeros(sel.shape, dtype=bool)
-        ok[max(r - 1, 0) : r + 2, max(c - 1, 0) : c + 2] = True
+        ok[max(r - r_v, 0) : r + r_v + 1, max(c - r_v, 0) : c + r_v + 1] = True
         hs[:, i] = tmp[rows, cols]
         h[:, i] = gauss_filter(tmp[None], sigma_px)[0][rows, cols]
         valid[:, i] = ok[rows, cols]
@@ -461,6 +482,19 @@ def _mat_str(g: h5py.Group, name: str, default: str) -> str:
         return default
     codes = np.asarray(g[name]).ravel()
     return "".join(chr(int(c)) for c in codes)
+
+
+def _mat_valid_kernel(g: h5py.Group, default: int) -> int:
+    """The side of a saved ``validKernel``: a square of trues, odd side."""
+    if "validKernel" not in g or _is_empty(g["validKernel"]):
+        return default
+    k = np.asarray(g["validKernel"])
+    if k.ndim != 2 or k.shape[0] != k.shape[1] or not k.astype(bool).all():
+        raise ValueError(
+            f"validKernel must be a square of ones; it is {k.shape} with "
+            f"{int(k.astype(bool).sum())} ones"
+        )
+    return int(k.shape[0])
 
 
 def params_from_matlab(g: h5py.Group) -> SolverParams:
@@ -499,6 +533,7 @@ def params_from_matlab(g: h5py.Group) -> SolverParams:
         baseline_knot_factor=num("baselineKnotFactor", 0.5),
         baseline_penalty=num("baselinePenalty", 30.0),
         tau_full=num("tau_full", None),
+        valid_kernel=_mat_valid_kernel(g, d.valid_kernel),
     )
     for name, ours in (
         ("k", p.k),
