@@ -364,6 +364,30 @@ def test_inputs_and_stale_results(tmp_path, fake, monkeypatch):
     frames = e["Path1"]["frame_info"]["trial_num_frames"].ravel()
     assert frames.tolist() == [0, FRAMES[1], FRAMES[2]]
 
+    # a raw file changed after solving: its results are stale
+    raw = s.raw(1, 1)
+    os.utime(raw, ns=(raw.stat().st_atime_ns, raw.stat().st_mtime_ns + 10**9))
+    with pytest.raises(FileNotFoundError, match="current"):
+        with pytest.warns(UserWarning, match="left out"):
+            silo_collect.collect(s, other, EX)
+
+
+def test_localize_fits_missing_peaks(tmp_path, fake):
+    """Localization files without their peaks (a streaming run stopped
+    before its background fits) get them from silo-localize."""
+    from giant_python.extraction.raster.stage_files import localization_attrs
+
+    s = SiloSession.open(make_session(tmp_path))
+    jobs = silo.localize_jobs(s, PARAMS, fit_peaks=False)
+    for job in jobs:
+        silo._localize_job(job)
+    f = s.localize_file(0, 0)
+    assert localization_attrs(f)["peaks_fitted"] == 0
+    done = silo.localize(s, PARAMS, EX)
+    assert len(done) == N_PATHS * N_TRIALS  # peak fits only
+    assert localization_attrs(f)["peaks_fitted"] == 1
+    assert silo.localize(s, PARAMS, EX) == []
+
 
 def test_job_needs_its_container(tmp_path, fake):
     """A job refuses a container other than the one it was made for."""

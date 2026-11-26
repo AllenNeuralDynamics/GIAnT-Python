@@ -37,15 +37,37 @@ def _results_files(session: SiloSession, d: int, t: int) -> list:
     )
 
 
-def _current(files: list, plan_hash: str, science: str) -> list:
-    """The results files made from the plan ``plan_hash`` with the
-    scientific solve settings ``science``; others are left out, with a
-    warning (they are from earlier runs)."""
+def _container_hash(session, params, plan_hash, d, t) -> Optional[str]:
+    """The prepare hash of trial-path ``(d, t)`` from its current inputs;
+    None if its raw recording is not here (a collect machine without the
+    raw data: results are then checked against plan and settings only)."""
+    from .silo import _prepare_hash
+
+    try:
+        return _prepare_hash(session, params, plan_hash, d, t)
+    except OSError:
+        return None
+
+
+def _current(
+    files: list,
+    plan_hash: str,
+    science: str,
+    container_hash: Optional[str] = None,
+) -> list:
+    """The results files made from the plan ``plan_hash`` (and, when
+    given, the container ``container_hash``: the trial's current raw data,
+    lines and alignment) with the scientific solve settings ``science``;
+    others are left out, with a warning (they are from earlier runs)."""
     keep, stale = [], []
     for f in files:
         ok = (
             attr(f, "plan_hash") == plan_hash
             and attr(f, "solve_science") == science
+            and (
+                container_hash is None
+                or attr(f, "container_hash") == container_hash
+            )
         )
         (keep if ok else stale).append(f)
     if stale:
@@ -110,7 +132,12 @@ def path_result(
         t = int(t)
         if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
             continue  # no data at the selected pixels
-        files = _current(_results_files(session, d, t), plan_hash, science)
+        files = _current(
+            _results_files(session, d, t),
+            plan_hash,
+            science,
+            _container_hash(session, params, plan_hash, d, t),
+        )
         if not files:
             raise FileNotFoundError(
                 f"path {d + 1}, trial {t + 1}: no results files made from "

@@ -267,17 +267,26 @@ def localize(
 ) -> list:
     """Stage ``localize``: one localization file per trial-path.
 
+    Units whose files exist with the same settings are kept, but their
+    per-trial peaks are fitted if they are missing.
+
     Returns
     -------
     list of dict
-        Per localized unit: ``unit`` and ``seconds``.
+        Per localized unit (and per peak fit): ``unit`` and ``seconds``.
     """
     ex = execution or SiloExecution()
     jobs = localize_jobs(
         session, params, units, baseline_dir, True, ex.overwrite
     )
     threads = max(1, (os.cpu_count() or 1) // max(1, ex.workers))
-    return run_jobs(_localize_job, jobs, ex.workers, threads)
+    done = run_jobs(_localize_job, jobs, ex.workers, threads)
+    # peaks still missing (e.g. a streaming run stopped before its
+    # background fits ended): fit them now
+    done += run_jobs(
+        _peaks_job, peaks_jobs(session, params, units), ex.workers, threads
+    )
+    return done
 
 
 # ---------------------------------------------------------------- plan
