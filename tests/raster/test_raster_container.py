@@ -193,11 +193,22 @@ def test_subproblem_lists_are_checked(tmp_path):
         ([pixels[0], pixels[1] + 1000], sources, "pixels outside"),
         (pixels, [np.array([0]), np.array([1, 3])], "sources outside"),
         (pixels, [np.array([0]), np.array([2, 1])], "sources must increase"),
+        # fractions are not cut to the index below them
+        ([np.array([-0.5, 3.0]), pixels[1]], sources, "pixels must be whole"),
+        ([pixels[0] + 0.25, pixels[1]], sources, "pixels must be whole"),
+        (pixels, [[np.nan], [1, 2]], "sources must be whole"),
+        (pixels, [[True], [1, 2]], "sources must be whole"),
     ]
     for pix, src, message in cases:
         with pytest.raises(ValueError, match=message):
             write_container(path, trial, sources_rc, pix, src, SHAPE)
         assert not path.exists()
+    # whole numbers held as floating point are indices
+    as_float = [v.astype(np.float64) for v in pixels]
+    write_container(path, trial, sources_rc, as_float, sources, SHAPE)
+    np.testing.assert_array_equal(
+        read_container(path, data=False).subproblem_pixels[1], pixels[1]
+    )
     write_container(path, trial, sources_rc, pixels, sources, SHAPE)
     # the same indices are refused in memory and from the file
     whole = read_container(path)

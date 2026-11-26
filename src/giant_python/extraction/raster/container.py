@@ -261,9 +261,22 @@ def _subproblem(y, finv, pixel_rc, sources_rc, pixels, sources, crop):
     )
 
 
+def _index_list(values, k: int, what: str) -> np.ndarray:
+    """One subproblem's indices as integers; whole numbers only."""
+    a = np.asarray(values).ravel()
+    if a.size == 0:
+        return np.zeros(0, dtype=np.int64)
+    whole = a.dtype != np.bool_ and np.issubdtype(a.dtype, np.integer)
+    if not whole and np.issubdtype(a.dtype, np.floating):
+        whole = bool(np.all(np.isfinite(a)) and np.all(a == np.round(a)))
+    if not whole:
+        raise ValueError(f"subproblem {k}: {what} must be whole numbers")
+    return a.astype(np.int64)
+
+
 def _ragged(lists, n_max: int, what: str):
     """Concatenated index lists and their offsets, checked."""
-    lists = [np.asarray(v, dtype=np.int64).ravel() for v in lists]
+    lists = [_index_list(v, k, what) for k, v in enumerate(lists)]
     for k, v in enumerate(lists):
         if v.size and (v.min() < 0 or v.max() >= n_max):
             raise ValueError(f"subproblem {k}: {what} outside 0..{n_max - 1}")
@@ -351,8 +364,8 @@ def write_container(
     Raises
     ------
     ValueError
-        If the subproblem lists do not match, are not increasing, or point
-        outside the pixel or source lists.
+        If the subproblem lists do not match, are not whole numbers, are
+        not increasing, or point outside the pixel or source lists.
     """
     path = Path(path)
     sources_rc = np.asarray(sources_rc).reshape(-1, 2)

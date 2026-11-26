@@ -922,6 +922,12 @@ def test_load_trial_rejects_bad_inputs(recording, monkeypatch):
         )
     with pytest.raises(ValueError, match="2 channels"):
         load_trial(*args, discard, mean[..., :1], rois)
+    for bad in (2.9, 1.0, True, "1"):  # not cut to a channel below
+        with pytest.raises(ValueError, match="must be an integer"):
+            TrialLoadParams(activity_channel=bad).ordered_channels(2)
+    assert TrialLoadParams(activity_channel=np.int64(2)).ordered_channels(
+        2
+    ) == [1, 0]
 
 
 def test_load_trial_second_activity_channel(recording, monkeypatch):

@@ -90,8 +90,18 @@ class TrialLoadParams:
         return self.baseline_window_s * self.analyze_hz
 
     def ordered_channels(self, num_channels: int) -> list:
-        """Zero-based file channels in analysis order (activity first)."""
-        a = int(self.activity_channel)
+        """Zero-based file channels in analysis order (activity first).
+
+        Raises
+        ------
+        ValueError
+            If ``activity_channel`` is not an integer, or not one of the
+            recording's 1-based channels.
+        """
+        a = self.activity_channel
+        if isinstance(a, bool) or not isinstance(a, (int, np.integer)):
+            raise ValueError(f"activity_channel must be an integer, not {a!r}")
+        a = int(a)
         if not 1 <= a <= num_channels:
             raise ValueError(
                 f"activity_channel {a} is not one of the {num_channels} "
