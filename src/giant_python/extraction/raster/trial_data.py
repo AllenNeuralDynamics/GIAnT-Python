@@ -780,6 +780,7 @@ def frames_at(
     whole = None
     if (
         whole_pixels
+        and r_d.size
         and np.all(r_d == np.round(r_d))
         and np.all(c_d == np.round(c_d))
     ):
@@ -922,7 +923,15 @@ def movmean(a: np.ndarray, window: float) -> np.ndarray:
 
 
 def _fill_passes(ok: np.ndarray, window: float) -> int:
-    """Moving-mean passes until rows with these valid samples are full."""
+    """Moving-mean passes until rows with these valid samples are full.
+
+    Raises
+    ------
+    ValueError
+        If a pass fills nothing: the window is too short to reach across a
+        gap (one of fewer than three frames reaches no frame ahead, so it
+        never fills a gap at the start). MATLAB's loop would not end.
+    """
     back, ahead = _window_reach(window)
     n = ok.shape[-1]
     hi = np.minimum(np.arange(n) + ahead + 1, n)
@@ -934,9 +943,14 @@ def _fill_passes(ok: np.ndarray, window: float) -> int:
             [np.zeros((ok.shape[0], 1), np.int32), np.cumsum(ok, 1, np.int32)],
             1,
         )
-        ok = cnt[:, hi] > cnt[:, lo]
+        filled = cnt[:, hi] > cnt[:, lo]
+        if np.array_equal(filled, ok):
+            raise ValueError(
+                f"a moving mean over {window:g} frames cannot fill the "
+                "missing samples; use a longer baseline window"
+            )
         passes += 1
-        ok = ok[~ok.all(1)]
+        ok = filled[~filled.all(1)]
     return passes
 
 
@@ -1026,9 +1040,18 @@ def finish_pixels(
         Length of the moving mean in frames.
     rows : int
         Pixels processed at a time.
+
+    Raises
+    ------
+    ValueError
+        If no pixel has a sample (MATLAB would give every sample a NaN
+        variance multiplier), or if the window is too short to fill the
+        gaps (MATLAB's loop would not end).
     """
     n_ch, n_px, _ = y.shape
     y[:, :, discard] = np.nan
+    if n_px == 0:
+        return
     blocks = [
         (ch, slice(a, a + rows))
         for ch in range(n_ch)
@@ -1042,7 +1065,9 @@ def finish_pixels(
         part = finv[a : a + rows]
         total += float(np.nansum(part, dtype=np.float64))
         count += int((~np.isnan(part)).sum())
-    fill_finv = 1000.0 * total / count if count else np.nan
+    if count == 0:
+        raise ValueError("none of the selected pixels has a sample")
+    fill_finv = 1000.0 * total / count
     with ThreadPoolExecutor(_threads()) as pool:
         found = list(
             pool.map(
@@ -1296,8 +1321,20 @@ def _ratio(t: torch.Tensor, m: torch.Tensor, mean_gaps: bool) -> torch.Tensor:
     return num / den
 
 
+def _continued(view: np.ndarray, n: int) -> np.ndarray:
+    """The view's positions for ``n`` rows or columns of the consensus
+    frame: beyond the trial's registered frame, continued by unit steps."""
+    extra = np.arange(1, max(0, n - view.size) + 1)
+    return np.concatenate([view, view[-1] + extra])[:n]
+
+
 def _points(need, alignment: TrialAlignment, warp):
     """Where the wanted pixels are read in the trimmed raster image.
+
+    ``need`` marks the wanted pixels of the consensus frame, which shares
+    its top left corner with the trial's registered frame and may be
+    larger: a pixel beyond the registered frame is read where the frame's
+    grid, continued, or the warp puts it.
 
     Returns
     -------
@@ -1308,13 +1345,14 @@ def _points(need, alignment: TrialAlignment, warp):
     centre : (float, float)
         Displacement that the warp adds at the image centre.
     qpos : ndarray of int
-        Point of each pixel of the view (-1: not read).
+        Point of each pixel of ``need`` (-1: not read).
     """
     rq, cq = np.nonzero(need)
     qpos = np.full(need.shape, -1, dtype=np.int64)
     qpos[rq, cq] = np.arange(rq.size)
     if isinstance(warp, RigidShift):
-        r_d, c_d = alignment.view_r[rq], alignment.view_c[cq]
+        r_d = _continued(alignment.view_r, need.shape[0])[rq]
+        c_d = _continued(alignment.view_c, need.shape[1])[cq]
         return r_d, c_d, (warp.row, warp.col), (0.0, 0.0), qpos
     for v in (alignment.view_r, alignment.view_c):
         if np.any(np.diff(v) != 1):
@@ -1322,7 +1360,8 @@ def _points(need, alignment: TrialAlignment, warp):
     r_t, c_t = warp(rq.astype(np.float64), cq.astype(np.float64))
     r_d = alignment.view_r[0] + np.asarray(r_t, dtype=np.float64)
     c_d = alignment.view_c[0] + np.asarray(c_t, dtype=np.float64)
-    x0 = ((need.shape[0] - 1) / 2, (need.shape[1] - 1) / 2)
+    shape = alignment.view_shape
+    x0 = ((shape[0] - 1) / 2, (shape[1] - 1) / 2)
     r_c, c_c = warp(np.array([x0[0]]), np.array([x0[1]]))
     centre = (float(r_c[0]) - x0[0], float(c_c[0]) - x0[1])
     return r_d, c_d, (0.0, 0.0), centre, qpos
@@ -1361,7 +1400,9 @@ def load_trial(  # noqa: C901
         The trial's alignment, or its ``*_ALIGNMENTDATA.h5``.
     sel_pix : ndarray of bool
         ``(rows, cols)`` selected pixels of the path, in the consensus
-        frame. The trial's registered frame shares its top left corner.
+        frame. The trial's registered frame shares its top left corner; a
+        selected pixel beyond it is read where the warp puts it (and is
+        without samples, hence filled in, if that is off the raster).
     warp : RigidShift or callable
         The trial's warp: ``warp(rows, cols)`` gives the zero-based position
         in the trial's registered frame of zero-based consensus points.
@@ -1389,7 +1430,9 @@ def load_trial(  # noqa: C901
     ------
     ValueError
         For recordings with several fast-z planes, an activity channel
-        outside the recording's, or a mean image without all channels.
+        outside the recording's, or a mean image without all channels; if
+        none of the selected pixels has a sample in this trial; or if the
+        baseline window is too short to fill the missing samples.
     """
     p = params or TrialLoadParams()
     dev = torch.device(device)
@@ -1419,27 +1462,34 @@ def load_trial(  # noqa: C901
         kernel,
     )
 
+    # the mean image and the ROI masks are cropped to the trial's registered
+    # frame, as in MATLAB; selected pixels beyond it stay (see _points)
     shape = alignment.view_shape
     sel = np.asarray(sel_pix, dtype=bool)
-    sel_view = _fit(sel, shape, False)
     mean_view = _fit(mean_image, shape, np.nan)[:, :, order]
     masks = [_fit(np.asarray(m, dtype=bool), shape, False) for m in roi_masks]
     labeled = labeled_pixels(mean_view[:, :, 0])
-    need = sel_view | labeled
-    for m in masks:
-        need |= m
+    canvas = (max(shape[0], sel.shape[0]), max(shape[1], sel.shape[1]))
+    need = _fit(sel, canvas, False)
+    for m in [labeled] + masks:
+        need[: shape[0], : shape[1]] |= m
     r_d, c_d, shift, centre, qpos = _points(need, alignment, warp)
     motion_r = upsample_motion(ds, mot_r, lines) + shift[0]
     motion_c = upsample_motion(ds, mot_c, lines) + shift[1]
 
     cols_s, rows_s = np.nonzero(sel.T)  # column-major order of the map
-    inside = (rows_s < shape[0]) & (cols_s < shape[1])
-    q_sel = qpos[rows_s[inside], cols_s[inside]]
-    dest = slice(None) if inside.all() else np.flatnonzero(inside)
     y = np.full((n_ch, rows_s.size, n_f), np.nan, dtype=dtype)
     finv = np.full((rows_s.size, n_f), np.nan, dtype=dtype)
-    traces = _Traces(mean_view, labeled, masks, order, n_f, qpos, dev)
-    q_sel = torch.from_numpy(q_sel).to(dev)
+    traces = _Traces(
+        mean_view,
+        labeled,
+        masks,
+        order,
+        n_f,
+        qpos[: shape[0], : shape[1]],
+        dev,
+    )
+    q_sel = torch.from_numpy(qpos[rows_s, cols_s]).to(dev)
     as_stored = torch.from_numpy(np.empty(0, dtype)).dtype
     timings["setup"] = time.perf_counter() - t0
 
@@ -1463,12 +1513,8 @@ def load_trial(  # noqa: C901
             device,
         ):
             fr = slice(fb[part][0], fb[part][-1] + 1)
-            y[:, dest, fr] = (
-                yq.index_select(1, q_sel).to(as_stored).cpu().numpy()
-            )
-            finv[dest, fr] = (
-                fq.index_select(0, q_sel).to(as_stored).cpu().numpy()
-            )
+            y[:, :, fr] = yq.index_select(1, q_sel).to(as_stored).cpu().numpy()
+            finv[:, fr] = fq.index_select(0, q_sel).to(as_stored).cpu().numpy()
             traces.add(fr, yq)
     timings["frames"] = time.perf_counter() - t0
 

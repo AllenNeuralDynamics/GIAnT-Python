@@ -237,6 +237,30 @@ def test_finish_pixels_without_gaps_changes_nothing():
     np.testing.assert_array_equal(finv, f0)
 
 
+def test_finish_pixels_rejects_what_it_cannot_fill():
+    """A window that reaches no frame ahead never fills a gap at the start
+    (MATLAB's loop would not end), and without any sample there is no
+    variance multiplier to give: both are errors. No pixels: nothing to
+    do."""
+    rng = np.random.default_rng(0)
+    y = 5 + rng.random((2, 4, 30))
+    finv = 1 + rng.random((4, 30))
+    discard = np.zeros(30, dtype=bool)
+    discard[0] = True
+    with pytest.raises(ValueError, match="cannot fill"):
+        finish_pixels(y.copy(), finv.copy(), discard, 2.0)
+    with pytest.raises(ValueError, match="cannot fill"):
+        finish_pixels(y.copy(), finv.copy(), discard, 0.5)
+    finish_pixels(y, finv, discard, 3.0)  # one frame ahead is enough
+    assert np.isfinite(y).all()
+    gap = np.full((1, 2, 30), np.nan)
+    with pytest.raises(ValueError, match="none of the selected pixels"):
+        finish_pixels(gap, np.full((2, 30), np.nan), ~discard, 8.0)
+    empty = np.zeros((2, 0, 30))
+    finish_pixels(empty, np.zeros((0, 30)), discard, 2.0)
+    assert empty.shape == (2, 0, 30)
+
+
 # ------------------------------------------------- frames, by definition
 
 
@@ -451,6 +475,24 @@ def test_frames_at_points_off_the_raster(recording):
     )
     assert y.shape == (1, 3, times.size) and fq.shape == (3, times.size)
     assert np.isnan(y).all() and np.isnan(fq).all()
+    none = np.zeros(0)
+    for whole in (True, False):  # no points at all
+        y, fq = collect(
+            frames_at(
+                layout,
+                [0, 1],
+                times,
+                8,
+                trim_rows,
+                trim_cols,
+                none,
+                none,
+                motion,
+                motion,
+                whole_pixels=whole,
+            )
+        )
+        assert y.shape == (2, 0, times.size) and fq.shape == (0, times.size)
 
 
 def test_frames_at_compensated_matches_definition(online_recording):
@@ -794,6 +836,60 @@ def test_load_trial_with_a_general_warp(recording, monkeypatch):
     ignored = image[tuple(warped.pixel_rc.T)]  # as if the map did nothing
     err = np.abs(got[used] - want[used]).mean()
     assert err < 0.5 * np.abs(got[used] - ignored[used]).mean()
+
+
+def test_load_trial_reads_selected_pixels_beyond_the_frame(
+    recording, monkeypatch
+):
+    """The consensus frame may be larger than a trial's registered frame. A
+    selected pixel beyond the frame is read where the warp puts it: with a
+    shift of nine rows up it stays on the raster under the motion, and has
+    data."""
+    layout, _, truth = recording
+    monkeypatch.setattr(trial_data, "raster_layout", lambda path: layout)
+    shift = (-9.3, 0.2)
+    alignment, sel, mean, rois, discard, image = loader_inputs(
+        layout, truth, shift
+    )
+    beyond = (alignment.view_shape[0] + 1, 5)
+    assert sel[beyond] and np.isfinite(image[beyond])
+    args = (layout.files[0], 10.0, 3000.0, alignment, sel)
+    rest = (discard, mean, rois[:1], TrialLoadParams(baseline_window_s=0.2))
+    td = load_trial(*args, RigidShift(*shift), *rest, dtype=np.float64)
+    k = np.flatnonzero((td.pixel_rc == beyond).all(1))[0]
+    np.testing.assert_allclose(td.trial_rc[k], np.add(beyond, shift))
+    keep = ~td.discard
+    assert (td.finv[k, keep] < 100 * np.median(td.finv[k])).all()
+    np.testing.assert_allclose(
+        td.y[0, k, keep].mean() * 25.0, image[beyond], rtol=0.1
+    )
+
+    def as_function(r, c):
+        """The shift as a general coordinate map."""
+        return r + shift[0], c + shift[1]
+
+    general = load_trial(*args, as_function, *rest, dtype=np.float64)
+    np.testing.assert_allclose(general.y, td.y, rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(general.finv, td.finv, rtol=1e-8)
+
+
+def test_load_trial_without_selected_pixels(recording, monkeypatch):
+    """No selected pixel, no ROI and no labeled pixel: empty data, and the
+    traces are missing. A selection that is never sampled is an error."""
+    layout, _, truth = recording
+    monkeypatch.setattr(trial_data, "raster_layout", lambda path: layout)
+    alignment, sel, mean, _, discard, _ = loader_inputs(layout, truth)
+    args = (layout.files[0], 10.0, 2000.0, alignment)
+    dark = np.full(mean.shape, np.nan)
+    td = load_trial(*args, np.zeros_like(sel), RigidShift(), discard, dark)
+    n_f = td.frame_lines.size
+    assert td.y.shape == (2, 0, n_f) and td.finv.shape == (0, n_f)
+    assert td.pixel_rc.shape == td.trial_rc.shape == (0, 2)
+    assert np.isnan(td.global_f).all() and td.roi_f.shape == (0, 2, n_f)
+    margin = np.zeros_like(sel)
+    margin[0, :3] = True  # never on the raster
+    with pytest.raises(ValueError, match="none of the selected pixels"):
+        load_trial(*args, margin, RigidShift(), discard, mean)
 
 
 def test_load_trial_rejects_bad_inputs(recording, monkeypatch):

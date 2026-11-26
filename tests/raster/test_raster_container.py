@@ -256,3 +256,11 @@ def test_interrupted_write_leaves_the_old_container(tmp_path, monkeypatch):
     assert path.read_bytes() == before
     assert not list(tmp_path.glob("*.partial"))
     np.testing.assert_array_equal(read_container(path).y, trial.y)
+    # the write completes but the file cannot take its name (a folder has
+    # it): the temporary file is removed too
+    monkeypatch.undo()
+    taken = tmp_path / "taken.h5"
+    taken.mkdir()
+    with pytest.raises(OSError):
+        write_container(taken, other, *rest[:3], SHAPE)
+    assert taken.is_dir() and not list(tmp_path.glob("*.partial"))

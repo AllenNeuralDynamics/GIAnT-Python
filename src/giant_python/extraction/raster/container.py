@@ -394,11 +394,11 @@ def write_container(
             _reserve_baseline(
                 f, n_px, chunk_pixels, compression, compression_opts
             )
+        os.replace(tmp, path)
     except BaseException:
         if tmp.exists():
             tmp.unlink()
         raise
-    os.replace(tmp, path)
     return path
 
 
