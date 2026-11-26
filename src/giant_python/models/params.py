@@ -687,11 +687,6 @@ class SiloParams:
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a bool")
-        _choice(
-            "localization_baseline",
-            self.localization_baseline,
-            ("median", "network"),
-        )
         _choice("debias_variance", self.debias_variance, ("fixed", "model"))
         _choice(
             "footprint_variance", self.footprint_variance, ("model", "fixed")
@@ -706,6 +701,27 @@ class SiloParams:
                 f"peakMethod {self.peak_method!r} is not ported yet; only "
                 "'getactimpeaks'"
             )
+        self._check_localization()
+        # the stages' own types check the rest
+        self.localization_params(80.0)
+        self.solver_params()
+
+    def _check_localization(self) -> None:
+        """Checks of the localization options that their type cannot do."""
+        _choice(
+            "localization_baseline",
+            self.localization_baseline,
+            ("median", "network"),
+        )
+        if (
+            not self.localization_variance_floor
+            and self.localization_baseline != "network"
+        ):
+            # localization needs an external baseline without the floor
+            raise ValueError(
+                "localization_variance_floor=False needs "
+                "localization_baseline='network'"
+            )
         seed = self.localization_null_seed
         if (
             isinstance(seed, bool)
@@ -715,9 +731,6 @@ class SiloParams:
             raise ValueError(
                 "localization_null_seed must be a nonnegative integer"
             )
-        # the stages' own types check the rest
-        self.localization_params(80.0)
-        self.solver_params()
 
     @property
     def sel_radius(self) -> int:

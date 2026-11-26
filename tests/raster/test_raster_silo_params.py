@@ -144,6 +144,10 @@ def test_one_setting_reaches_every_stage():
         == 8.0
     )
     assert p.localization_params(123.0).align_hz == 123.0
+    net = SiloParams(
+        localization_baseline="network", localization_variance_floor=False
+    )
+    assert net.localization_params(80).variance_floor is False
 
 
 def test_to_matlab_has_matlabs_fields_types_and_values(tmp_path):
@@ -210,6 +214,8 @@ def test_python_only_settings_are_recorded_when_not_matlabs():
         {"localization_null_seed": -1},
         {"localization_null_seed": 1.5},
         {"localization_null_seed": True},
+        # without the variance floor localization needs the network baseline
+        {"localization_variance_floor": False},
         {"min_kinetic_score": float("nan")},
         # the solver needs a baseline window longer than the denoise window
         {"baseline_window_s": 0.1},
