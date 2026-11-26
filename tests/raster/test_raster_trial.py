@@ -117,7 +117,7 @@ def test_localize_trial_retries_numerical_failures(monkeypatch):
     monkeypatch.setattr(trial_mod, "load_registered_trial", lambda *a: fake)
     seen = []
 
-    def flaky(mov, *args):
+    def flaky(mov, *args, **kwargs):
         """Fails like a numerical error unless the edges are NaN."""
         seen.append(bool(np.isnan(mov[:, 0, :]).all()))
         if not seen[-1]:
