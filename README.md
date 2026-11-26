@@ -86,7 +86,7 @@ Annotations are stored beneath the table's `savedr` in `annotations/annotations.
 
 ## Run SILo on raster recordings
 
-`giant silo` extracts sources from registered SLAP2 multi-ROI (raster) recordings as GIAnT-MATLAB's `SILo.m` does, and writes the same files in MATLAB's schema: `source_extraction/experiment_summary.h5`, `source_extraction/per_trial_summary.h5` and the trial table's `source_extraction` fields. MATLAB's algorithm is the default (moving-median localization, fitted baseline, rigid across-trial alignment, the kinetics test), except that the fits run to convergence instead of stopping at MATLAB's iteration caps and by default the footprint fit holds its variance at its start (the solver's default, `footprint_variance='fixed'`; `--set footprint_variance=model` gives MATLAB's loss).
+`giant silo` extracts sources from registered SLAP2 multi-ROI (raster) recordings as GIAnT-MATLAB's `SILo.m` does, and writes the same files in MATLAB's schema: `source_extraction/experiment_summary.h5`, `source_extraction/per_trial_summary.h5` and the trial table's `source_extraction` fields. MATLAB's algorithm is the default (moving-median localization, fitted baseline, rigid across-trial alignment, the kinetics test), except that the fits run to convergence instead of stopping at MATLAB's iteration caps, by default the footprint fit holds its variance at its start (the solver's default, `footprint_variance='fixed'`; `--set footprint_variance=model` gives MATLAB's loss), and by default the seeding is faster and does not seed one source twice (below).
 
 ```bash
 giant register path/to/trial_table.h5
@@ -97,7 +97,7 @@ or `run_silo(table, SiloParams(), SiloExecution(...))` from `giant_python.pipeli
 
 The stages also run on their own, for any subset of their units, with file contracts between them, so that a pipeline can scatter them over machines: `giant silo-localize`, `silo-plan`, `silo-prepare` (one container per trial-path), `silo-dispatch --machines N` (job files of about equal work), `silo-solve JOB` (needs only the job file and its containers) and `silo-collect`. Every output records a settings hash; units whose outputs exist with the same settings are skipped. Results do not depend on how the work is split. See [SILo for SLAP2 raster recordings](docs/source/silo.rst).
 
-Two seeding options are not MATLAB's (both off by default): `--set seed_fit=local` runs the Gaussian seed fits locally and to convergence, which takes seconds per path instead of minutes; `--set seed_merge_px=1.5` rejects a residual peak that ends within 1.5 pixels of another one, so a source that falls between pixels is not seeded two or three times.
+Two seeding settings are not MATLAB's and are on by default: `seed_fit='local'` runs the Gaussian seed fits locally and to convergence, which takes seconds per path instead of minutes; `seed_merge_px=1.5` rejects a residual peak that ends within 1.5 pixels of another one, so a source that falls between pixels is not seeded two or three times. `--set seed_fit=matlab --set seed_merge_px=0` gives MATLAB's seeding.
 
 ## Raster SILo localization (multi-ROI)
 

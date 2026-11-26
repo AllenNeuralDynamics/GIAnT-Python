@@ -449,6 +449,9 @@ def _matlab_case(case):
             min_peak_distance=int(a["minPeakDistance"]),
             d_xy=float(a["dXY"]),
             sigma_px=float(a["sigma_px"]),
+            # MATLAB's algorithm (the defaults are the local fit, merging)
+            seed_fit="matlab",
+            seed_merge_px=0.0,
         )
     keep = ref["keep_trials"].astype(bool)
     trials = [
@@ -540,3 +543,33 @@ def test_own_seeds_are_close_to_matlabs(case, same_pixel):
     assert abs(len(mine) - len(matlab)) <= 1
     assert (apart.min(axis=1) == 0).mean() >= same_pixel
     assert (apart.min(axis=1) <= 1).all() and (apart.min(axis=0) <= 1).all()
+
+
+@pytest.mark.parametrize("case", ["all_trials", "one_trial_out"])
+def test_default_seeding_on_matlabs_window(case):
+    """The default seeding (local fits, merging residual peaks within
+    1.5 px) on MATLAB's combined activity image: every MATLAB source is
+    within 1 px of a source here, and every source here within 1 px of a
+    MATLAB source; only sources next to another are merged (all trials: 16
+    of MATLAB's 21). Without merging the local fit gives MATLAB's count."""
+    import dataclasses
+
+    trials, params, ref = _matlab_case(case)
+    matlab = np.column_stack([ref["source_rows"], ref["source_cols"]])
+    plan = plan_path(
+        trials,
+        params=dataclasses.replace(
+            params,
+            seed_fit=PlanParams.seed_fit,
+            seed_merge_px=PlanParams.seed_merge_px,
+        ),
+    )
+    mine = np.column_stack([plan.source_rows, plan.source_cols])
+    apart = np.abs(matlab[:, None] - mine[None]).max(axis=2)
+    assert len(mine) <= len(matlab)
+    assert (apart.min(axis=1) <= 1).all() and (apart.min(axis=0) <= 1).all()
+    unmerged = plan_path(
+        trials,
+        params=dataclasses.replace(params, seed_fit="local", seed_merge_px=0),
+    )
+    assert abs(unmerged.n_sources - len(matlab)) <= 1

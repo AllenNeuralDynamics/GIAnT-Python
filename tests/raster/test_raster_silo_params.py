@@ -37,6 +37,12 @@ from giant_python.models.params import (
 
 # GIAnT-MATLAB's /params of a SLAP2 SILo run (main 5a0673b): name, MATLAB
 # size and class. Values of the scalars are checked below.
+# the settings that make SiloParams MATLAB's algorithm (the defaults differ
+# from it in the footprint fit and the seed fit)
+MATLAB_ALGORITHM = dict(
+    footprint_variance="model", seed_fit="matlab", seed_merge_px=0.0
+)
+
 MATLAB_FIELDS = {
     "Bfilter": ((25, 25, 3), np.float64),
     "Hfilter": ((9, 9), np.float64),
@@ -175,7 +181,7 @@ def test_one_setting_reaches_every_stage():
 def test_to_matlab_has_matlabs_fields_types_and_values(tmp_path):
     """Written as saveStructToH5 would, the struct of MATLAB's algorithm
     has MATLAB's schema."""
-    m = SiloParams(footprint_variance="model").to_matlab(2, 80.0, 12, "a", "b")
+    m = SiloParams(**MATLAB_ALGORITHM).to_matlab(2, 80.0, 12, "a", "b")
     assert set(m) == set(MATLAB_FIELDS)
     path = tmp_path / "p.h5"
     with h5py.File(path, "w") as f:
@@ -203,14 +209,22 @@ def test_to_matlab_has_matlabs_fields_types_and_values(tmp_path):
 
 def test_python_only_settings_are_recorded_when_not_matlabs():
     """MATLAB's algorithm has MATLAB's fields only; other settings add one
-    each, the default fixed-variance footprint fit too."""
+    each, the defaults (fixed-variance footprint fit, local seed fit with
+    merging) too."""
+    assert set(SiloParams(**MATLAB_ALGORITHM).to_matlab(2, 80.0)) == set(
+        MATLAB_FIELDS
+    )
     assert set(SiloParams().to_matlab(2, 80.0)) - set(MATLAB_FIELDS) == {
-        "footprintVariance"
+        "footprintVariance",
+        "seedFit",
+        "seedMergePx",
     }
     m = SiloParams(
         localization_baseline="network",
         trial_peaks=False,
         localization_peak_th=8.0,
+        seed_fit="matlab",
+        seed_merge_px=0.0,
     ).to_matlab(2, 80.0)
     assert m["footprintVariance"] == "fixed"
     assert m["localizationBaseline"] == "network"
@@ -280,24 +294,35 @@ def test_stage_settings_change_only_with_their_fields():
 
 
 def test_seed_fit_settings_reach_the_plan_and_keep_old_hashes():
-    """The seed fit's options reach the plan and the per-trial peaks'
-    stage; at their defaults (MATLAB's) they leave the stage settings, and
-    so the outputs made before the options existed, as they were."""
+    """The seed fit's defaults (local fits, merging within 1.5 px) are the
+    plan stage's; they reach the plan and the per-trial peaks' stage and
+    are in those stages' settings, so outputs made with MATLAB's fit (the
+    behaviour before the options existed) are not current. Asking for
+    MATLAB's fit leaves those stages' settings as they were then."""
     a = SiloParams()
-    b = SiloParams(seed_fit="local", seed_merge_px=1.5)
-    assert (b.plan_params().seed_fit, b.plan_params().seed_merge_px) == (
+    assert (
+        (a.seed_fit, a.seed_merge_px)
+        == (
+            PlanParams.seed_fit,
+            PlanParams.seed_merge_px,
+        )
+        == ("local", 1.5)
+    )
+    assert (a.plan_params().seed_fit, a.plan_params().seed_merge_px) == (
         "local",
         1.5,
     )
+    matlab = SiloParams(seed_fit="matlab", seed_merge_px=0.0)
     for stage in ("localize", "plan"):
-        assert "seed_fit" not in a.stage_settings(stage)
-        assert b.stage_settings(stage)["seed_fit"] == "local"
-        assert b.stage_settings(stage)["seed_merge_px"] == 1.5
+        assert a.stage_settings(stage)["seed_fit"] == "local"
+        assert a.stage_settings(stage)["seed_merge_px"] == 1.5
+        assert "seed_fit" not in matlab.stage_settings(stage)
+        assert "seed_merge_px" not in matlab.stage_settings(stage)
     for stage in ("prepare", "solve", "collect"):
-        assert a.stage_settings(stage) == b.stage_settings(stage)
-    m = b.to_matlab(2, 80.0)
+        assert a.stage_settings(stage) == matlab.stage_settings(stage)
+    m = a.to_matlab(2, 80.0)
     assert (m["seedFit"], m["seedMergePx"]) == ("local", 1.5)
-    assert "seedFit" not in a.to_matlab(2, 80.0)
+    assert "seedFit" not in matlab.to_matlab(2, 80.0)
 
 
 def test_execution_options():

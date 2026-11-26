@@ -9,9 +9,12 @@ same files: ``source_extraction/experiment_summary.h5``,
 ``h5read`` sees them, classes, ``/row_major = 0``). MATLAB's algorithm is the
 default (moving-median localization, the fitted baseline, rigid
 across-trial alignment, ``getActImPeaks`` seeding, the kinetics test), with
-two differences in the solver: its fits run to convergence, and by default
+these differences: the solver's fits run to convergence, and by default
 the footprint fit holds its variance term at its start (the solver's
-default, ``footprint_variance='fixed'``; ``'model'`` is MATLAB's loss).
+default, ``footprint_variance='fixed'``; ``'model'`` is MATLAB's loss);
+the seeding's Gaussian fits are local and converged, and a residual peak
+that ends within 1.5 pixels of another is rejected (``seed_fit='local'``,
+``seed_merge_px=1.5``; ``'matlab'`` and ``0`` are MATLAB's).
 
 .. code-block:: bash
 
@@ -49,15 +52,18 @@ have their own options (``--peak-th``, ``--min-kinetic-score``,
 processes and threads, device, precision); it does not change results.
 
 Settings that MATLAB does not have are fields too: ``footprint_variance``
-(default: the solver's, now ``'fixed'``), the localization options of the F0-network work
-(``localization_baseline='network'`` with ``--baseline-dir``,
+(default: the solver's, now ``'fixed'``), the seeding options below
+(defaults: the plan stage's), the localization options of the F0-network
+work (``localization_baseline='network'`` with ``--baseline-dir``,
 ``localization_surround``, ``localization_null``, ...; their defaults are
 MATLAB's), and ``trial_peaks``. They are added to the saved ``params`` (in
-camelCase) when they differ from MATLAB's algorithm: a default run now
-records ``footprintVariance = 'fixed'``, and a run with
-``--set footprint_variance=model`` has MATLAB's fields exactly.
+camelCase) when they differ from MATLAB's algorithm: a default run records
+``footprintVariance = 'fixed'``, ``seedFit = 'local'`` and
+``seedMergePx = 1.5``, and a run with ``--set footprint_variance=model
+--set seed_fit=matlab --set seed_merge_px=0`` has MATLAB's fields exactly.
 
-Two seeding options are not MATLAB's either (both off by default):
+Two seeding options are not MATLAB's (both on by default since the user's
+decision of 2026-11-26):
 
 * ``seed_fit='local'`` runs the Gaussian fits of the seeding and of the
   per-trial peaks locally: each Gaussian only within 10 pixels of where it
@@ -76,8 +82,11 @@ Two seeding options are not MATLAB's either (both off by default):
   seed within 2 px keeps one, but with elongated or wide injected
   footprints 3 of 60 end 1-2 px from the truth instead of within 1 px.
 
-Changing either reruns the localization and plan stages (outputs made with
-the defaults keep their settings hashes).
+Either one reruns the localization and plan stages of outputs made before
+these options existed (with MATLAB's fit); ``seed_fit='matlab'`` with
+``seed_merge_px=0`` keeps those current. The ported function
+:func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`, and the
+standalone per-trial localization, keep MATLAB's fit as their own default.
 
 Stages
 ------
@@ -189,7 +198,9 @@ Differences from MATLAB
   MATLAB's ``lsqcurvefit`` stops at its evaluation limit; parity runs pass
   MATLAB's seeds (``--seeds``). The capped fit's result also depends on the
   number of BLAS threads (on 780125 path 1: 262 seeds with the pipeline's
-  threads, 280 with one); ``seed_fit='local'`` much less so.
+  threads, 280 with one); ``seed_fit='local'`` much less so. By default the
+  seeding is the local fit with merging (above), which seeds fewer sources
+  than MATLAB where MATLAB seeds one source two or three times.
 * The per-trial peak fits run in the background; ``--no-trial-peaks``
   leaves ``per_trial_act_im_peaks`` and ``per_trial_num_peaks`` out.
 * A trial without any sample at the selected pixels is skipped (MATLAB

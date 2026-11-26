@@ -144,7 +144,10 @@ def written(tmp_path):
         n_events=np.array([10, 7, 2, 6]),
     )
     params = SiloParams(
-        activity_channel=2, footprint_variance="model"
+        activity_channel=2,
+        footprint_variance="model",
+        seed_fit="matlab",
+        seed_merge_px=0.0,
     ).to_matlab(C, 80.0, 4, "a", "b")
     exp, per = tmp_path / "experiment_summary.h5", tmp_path / "per.h5"
     write_summaries(exp, per, [result, None], params, N_TRIALS, C, 2)

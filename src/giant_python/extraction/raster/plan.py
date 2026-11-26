@@ -86,12 +86,12 @@ class PlanParams:
     peak_method : str
         ``"getactimpeaks"``; ``"wmf"`` is not ported yet (``peakMethod``).
     seed_fit : str
-        ``"matlab"`` (MATLAB's Gaussian fits) or ``"local"`` (faster local
-        fits run to convergence; not in MATLAB). See
+        ``"local"`` (the default: local Gaussian fits run to convergence,
+        seconds per path) or ``"matlab"`` (MATLAB's capped joint fits). See
         :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`.
     seed_merge_px : float
         Reject a residual peak that ends closer than this to another peak
-        (0: MATLAB's rule only).
+        (default 1.5; 0: MATLAB's rule only).
     peak_th : float
         Seed threshold in robust SDs of the combined activity image
         (``peakth``: 3 for SLAP2, 8 otherwise).
@@ -115,8 +115,8 @@ class PlanParams:
     max_corr_thresh: float = 0.90
     inter_trial_alignment: str = "rigid"
     peak_method: str = "getactimpeaks"
-    seed_fit: str = "matlab"
-    seed_merge_px: float = 0.0
+    seed_fit: str = "local"
+    seed_merge_px: float = 1.5
     peak_th: float = 3.0
     min_peak_distance: int = 1
     d_xy: float = 3.0
