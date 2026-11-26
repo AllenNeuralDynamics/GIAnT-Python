@@ -293,7 +293,9 @@ def _bvls_fallback(g, c, lb, ub):
     except linalg.LinAlgError:
         # in units of the linear term, so that the tolerance means the same
         # whatever the program's scale
-        scale = max(np.abs(cf).max(), np.finfo(float).tiny)
+        scale = np.abs(cf).max()
+        if scale == 0:
+            scale = 1.0  # no linear term: G's unit diagonal sets the scale
 
         def objective(v):
             """The objective and its gradient, over the linear term's scale."""

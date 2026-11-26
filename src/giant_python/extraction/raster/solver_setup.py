@@ -292,6 +292,9 @@ class Subproblem:
         )
         if not inside.all():
             raise ValueError("sources_rc lies outside the crop")
+        if np.unique(self.sources_rc, axis=0).shape[0] != len(r):
+            # two footprints would be the same: no unique activity
+            raise ValueError("two sources share a position")
 
     @property
     def n_pixels(self) -> int:

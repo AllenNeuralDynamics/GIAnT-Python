@@ -138,6 +138,33 @@ def test_batch_matches_single_solves(fixture, solved):
         assert got.baseline is None
 
 
+def test_batches_count_the_footprint_filter(fixture, monkeypatch):
+    """The size of a batch counts each member's data and its dense
+    pixels x pixels filter arrays."""
+    import giant_python.extraction.raster.solver as solver
+
+    sub, _ = fixture
+    sizes = []
+    monkeypatch.setattr(
+        solver,
+        "_solve_batch",
+        lambda subs, p, o: sizes.append(len(subs)) or subs,
+    )
+    n_px, n_t = sub.n_pixels, sub.n_frames
+    member = (n_px * n_t + 4 * n_px**2) * 8
+    solve_subproblems([sub] * 5, PARAMS, SolverOptions(batch_bytes=2 * member))
+    assert sizes == [2, 2, 1]
+    sizes.clear()
+    # the data alone would let three through
+    solve_subproblems(
+        [sub] * 3, PARAMS, SolverOptions(batch_bytes=3 * n_px * n_t * 8)
+    )
+    assert sizes == [2, 1]
+    sizes.clear()
+    solve_subproblems([sub] * 3, PARAMS)  # the CPU's default: one at a time
+    assert sizes == [1, 1, 1]
+
+
 def test_trials_of_different_length_are_grouped(fixture, solved):
     """Subproblems with other numbers of frames or channels are solved in
     batches of their own, and returned in the order given."""
@@ -310,7 +337,7 @@ def _placed(pixels, sources, n_t):
         y=np.zeros((2, n_px, n_t), np.float32),
         finv=np.ones((n_px, n_t), np.float32),
         sel=np.ones((1, n_px), dtype=bool),
-        sources_rc=[[0, 0]] * len(sources),
+        sources_rc=[[0, j] for j in range(len(sources))],
         pixels=np.array(pixels),
         sources=np.array(sources),
     )

@@ -78,8 +78,11 @@ class SolverOptions:
     cg_iter : int
         Cap on the conjugate-gradient iterations of a Newton step.
     batch_bytes : float or None
-        Subproblems are fitted together while their padded data stay
-        below this size. None: one at a time on the CPU, where batches
+        Subproblems are fitted together while their padded data (one
+        pixels x frames array and the four dense pixels x pixels arrays
+        of the footprint filter, per member) stay below this size; the
+        fits hold about 15 times as much. None: one at a time on the
+        CPU, where batches
         are slower (every member is evaluated until the last one
         converges), and 2e8 on a GPU.
     keep_baseline : bool
@@ -480,13 +483,10 @@ def solve_subproblems(
         while start < len(idx):
             stop = start + 1
             while stop < len(idx):
-                size = (
-                    (stop - start + 1)
-                    * subs[idx[stop]].n_pixels
-                    * subs[idx[stop]].n_frames
-                    * itemsize
-                )
-                if size > limit:
+                # sorted by size: the candidate is the batch's largest
+                n_px = subs[idx[stop]].n_pixels
+                per_member = n_px * subs[idx[stop]].n_frames + 4 * n_px**2
+                if (stop - start + 1) * per_member * itemsize > limit:
                     break
                 stop += 1
             chunk = idx[start:stop]

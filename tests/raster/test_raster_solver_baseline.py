@@ -294,6 +294,13 @@ def test_box_qp_fallback_keeps_the_objective():
                 x, info = sb.solve_box_qp(g, c, lb, ub, max_iter=max_iter)
             assert x.tolist() == [[2.0, -2.0]], (c, max_iter)
             assert info["kkt"].max() < 1e-9
+    # no linear term at all: the quadratic alone, pushed to the bounds
+    ones = np.ones((1, 4, 4))
+    zero = np.zeros((1, 4))
+    x, info = sb.solve_box_qp(
+        ones, zero, np.full((1, 4), 1.0), np.full((1, 4), 2.0), max_iter=0
+    )
+    assert x.tolist() == [[1.0] * 4] and np.isfinite(info["kkt"]).all()
     # a positive semidefinite program with its minimum inside the bounds
     c = np.array([[1.0, 1.0]])
     x, info = sb.solve_box_qp(g, c, lb, ub, max_iter=0)

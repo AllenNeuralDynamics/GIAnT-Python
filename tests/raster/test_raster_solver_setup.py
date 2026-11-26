@@ -162,6 +162,8 @@ def test_subproblem_checks_its_arrays():
         Subproblem(y=y, finv=finv, sel=sel, sources_rc=[[1, 3]])
     with pytest.raises(ValueError, match="channels"):
         Subproblem(y=y[0], finv=finv, sel=sel, sources_rc=[[1, 1]])
+    with pytest.raises(ValueError, match="share a position"):
+        Subproblem(y=y, finv=finv, sel=sel, sources_rc=[[1, 1], [1, 1]])
 
 
 def _write_matlab_params(g, params: SolverParams, **extra):
