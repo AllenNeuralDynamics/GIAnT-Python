@@ -57,6 +57,9 @@ def temporal_kernel(tau: float) -> np.ndarray:
     return k / k.sum()
 
 
+# the solver's ways of finding the baseline (SolverParams.baseline_mode)
+BASELINE_MODES = ("fit", "fixed", "gain", "gain_shared", "fit_from")
+
 _POSITIVE = (
     "analyze_hz",
     "tau_s",
@@ -139,6 +142,19 @@ class SolverParams:
         of data weight.
     tau_full : float or None
         ``tau_s`` in frames; None for ``tau_s * analyze_hz``.
+    baseline_mode : str
+        How the activity channel's baseline is found (the variants of the
+        baseline test; see :mod:`~giant_python.extraction.raster.solver`):
+        'fit' (MATLAB's: ``splitFreq`` start, then ``fitB``; R0), 'fixed'
+        (an external baseline, held; N0), 'gain' (the external baseline
+        times one gain per pixel; N1), 'gain_shared' (N1 times a time
+        course shared by the subproblem's pixels; N2) or 'fit_from'
+        (``fitB`` of the correction to the external baseline; N3). All but
+        'fit' need ``Subproblem.baseline``. Not a MATLAB option.
+    outside_footprint : float
+        'gain_shared': the shared time course is estimated from the pixels
+        where every source's footprint is below this share of its largest
+        value.
     """
 
     analyze_hz: float = 200.0
@@ -158,6 +174,8 @@ class SolverParams:
     baseline_knot_factor: float = 0.5
     baseline_penalty: float = 30.0
     tau_full: float | None = None
+    baseline_mode: str = "fit"
+    outside_footprint: float = 0.1
 
     def __post_init__(self) -> None:
         """Reject values the solver cannot run with."""
@@ -167,6 +185,13 @@ class SolverParams:
                     f"{name} must be 'fixed' or 'model', not "
                     f"{getattr(self, name)!r}"
                 )
+        if self.baseline_mode not in BASELINE_MODES:
+            raise ValueError(
+                f"baseline_mode must be one of {BASELINE_MODES}, not "
+                f"{self.baseline_mode!r}"
+            )
+        if not 0 < self.outside_footprint < 1:
+            raise ValueError("outside_footprint must lie in (0, 1)")
         if self.nmf_iter < 1:
             raise ValueError(f"nmf_iter must be >= 1, not {self.nmf_iter}")
         _check_numbers(self)
@@ -263,6 +288,11 @@ class Subproblem:
         Indices of the sources in the path's source list.
     row0, col0 : int
         Origin of the crop in the consensus frame (zero-based).
+    baseline : ndarray of shape (pixels, frames) or None
+        An external baseline of the activity channel in the data's units
+        (the F0 network's, mapped by
+        :func:`~giant_python.extraction.raster.baseline_map.map_baseline`),
+        for ``SolverParams.baseline_mode`` other than 'fit'.
     """
 
     y: np.ndarray
@@ -273,6 +303,7 @@ class Subproblem:
     sources: np.ndarray | None = None
     row0: int = 0
     col0: int = 0
+    baseline: np.ndarray | None = None
     _coords: tuple | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -304,6 +335,14 @@ class Subproblem:
         if np.unique(self.sources_rc, axis=0).shape[0] != len(r):
             # two footprints would be the same: no unique activity
             raise ValueError("two sources share a position")
+        if self.baseline is not None:
+            if np.shape(self.baseline) != self.y.shape[1:]:
+                raise ValueError(
+                    f"the baseline is {np.shape(self.baseline)}; the data "
+                    f"have {self.y.shape[1:]} pixels and frames"
+                )
+            if not np.isfinite(self.baseline).all():
+                raise ValueError("the baseline holds NaN or infinite values")
 
     @property
     def n_pixels(self) -> int:

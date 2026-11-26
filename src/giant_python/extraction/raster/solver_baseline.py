@@ -467,11 +467,16 @@ def baseline_programs(
     sel: np.ndarray,
     params: SolverParams,
     operators: list | None = None,
+    offset: np.ndarray | None = None,
 ) -> dict:
     """The per-pixel quadratic programs of ``fitB``.
 
     Each pixel's coefficients are those of its sources' contributions,
     the three surround predictors and the baseline spline, in that order.
+    With ``offset`` (pixels x frames), the programs fit ``y - offset``:
+    the baseline is then the offset plus the surround and spline parts
+    (``SolverParams.baseline_mode`` 'fit_from'). The coefficients' bounds
+    still scale with the mean of ``y``.
 
     Returns
     -------
@@ -485,7 +490,10 @@ def baseline_programs(
     n_px, n_t = y.shape
     n_src = h.shape[1]
     hx = h @ x
-    _, hp = split_freq(y - hx, 2 * params.denoise_window, params.lp_factor)
+    target = y if offset is None else y - offset
+    _, hp = split_freq(
+        target - hx, 2 * params.denoise_window, params.lp_factor
+    )
     hp[np.isnan(hp)] = 0
     if operators is None:
         operators = surround_operators(sel, params)
@@ -499,7 +507,7 @@ def baseline_programs(
 
     scale = np.fmax(1e-3, y.mean(1))
     w = (1.0 / finv) * (b0 / (b0 + hx)) ** 2
-    wy = w * y
+    wy = w * target
 
     g = np.zeros((n_px, n, n))
     c = np.zeros((n_px, n))
@@ -519,7 +527,7 @@ def baseline_programs(
             v = (wsur[f] * sur[f2]).sum(1)
             g[:, n_src + f, n_src + f2] = v
             g[:, n_src + f2, n_src + f] = v
-        c[:, n_src + f] = (wsur[f] * y).sum(1)
+        c[:, n_src + f] = (wsur[f] * target).sum(1)
         gbf = (bs.T @ wsur[f].T).T
         g[:, d:, n_src + f] = gbf
         g[:, n_src + f, d:] = gbf
@@ -547,14 +555,20 @@ def baseline_programs(
 
 
 def baseline_from_coef(
-    coef: np.ndarray, programs: dict, min_baseline: float
+    coef: np.ndarray,
+    programs: dict,
+    min_baseline: float,
+    offset: np.ndarray | None = None,
 ) -> np.ndarray:
-    """The baseline of ``fitB`` from its coefficients: surround + spline."""
+    """The baseline of ``fitB`` from its coefficients: surround + spline
+    (plus the offset the programs were formed with, if any)."""
     n_src = programs["n_sources"]
     sur, bs = programs["surround"], programs["spline"]
     d = n_src + sur.shape[0]
     fast = np.einsum("pf,fpt->pt", coef[:, n_src:d], sur)
     slow = (bs @ coef[:, d:].T).T
+    if offset is not None:
+        return np.fmax(min_baseline, offset + fast + slow)
     return np.fmax(min_baseline, fast + slow)
 
 
@@ -568,6 +582,7 @@ def fit_baseline(
     params: SolverParams,
     operators: list | None = None,
     return_info: bool = False,
+    offset: np.ndarray | None = None,
 ):
     """MATLAB's ``fitB``: the baseline given the activity, per pixel.
 
@@ -591,6 +606,12 @@ def fit_baseline(
         The crop of selected pixels.
     operators : list, optional
         :func:`surround_operators` of ``sel``, to reuse them.
+    return_info : bool
+        Also return the coefficients and the programs' convergence.
+    offset : ndarray of shape (pixels, frames), optional
+        A baseline to fit the correction to (not a MATLAB option): the
+        result is the offset plus the fitted surround and spline parts
+        (see :func:`baseline_programs`).
 
     Returns
     -------
@@ -599,14 +620,242 @@ def fit_baseline(
         ``coef`` (pixels x (sources + 3 + spline coefficients)), and
         ``converged`` and ``kkt`` of :func:`solve_box_qp`.
     """
-    programs = baseline_programs(b0, y, x, h, finv, sel, params, operators)
+    programs = baseline_programs(
+        b0, y, x, h, finv, sel, params, operators, offset
+    )
     coef, info = solve_box_qp(
         programs["g"], programs["c"], programs["lb"], programs["ub"]
     )
-    b = baseline_from_coef(coef, programs, params.min_baseline)
+    b = baseline_from_coef(coef, programs, params.min_baseline, offset)
     if return_info:
         return b, dict(coef=coef, **info)
     return b
+
+
+# upper bound of a pixel's gain on an external baseline (the 'gain' modes)
+GAIN_MAX = 10.0
+# fewest pixels outside the footprints that a shared time course is
+# estimated from ('gain_shared'); with fewer it is held at 1
+MIN_OUTSIDE = 10
+# frames whose shared factor's sampling variance exceeds this multiple of
+# the median do not enter the estimate of the shared variance
+RELIABLE_FACTOR = 4.0
+# samples whose variance multiplier exceeds this multiple of the median are
+# filled in (the loader gives them 1000 x the mean)
+FILLED_FACTOR = 100.0
+
+
+def gain_programs(
+    b0: np.ndarray,
+    y: np.ndarray,
+    x: np.ndarray,
+    h: np.ndarray,
+    finv: np.ndarray,
+    predictor: np.ndarray,
+) -> dict:
+    """Per-pixel programs of the gain fit, ``fitB``'s with one predictor.
+
+    Each pixel's data are fitted by its sources' contributions (each with
+    a coefficient >= 0, as in :func:`baseline_programs`) and a gain times
+    ``predictor`` (pixels x frames; an external baseline), with ``fitB``'s
+    weights ``(1 / F) (b0 / (b0 + H x))^2`` and no penalty. The sources'
+    coefficients are bounded as in ``fitB``, the gain to
+    ``[0, GAIN_MAX]``.
+
+    Returns
+    -------
+    dict
+        ``g`` (pixels x n x n), ``c`` (pixels x n), ``lb``, ``ub`` with
+        ``n = sources + 1`` (the gain last), and ``n_sources``.
+    """
+    n_px, _ = y.shape
+    n_src = h.shape[1]
+    hx = h @ x
+    w = (1.0 / finv) * (b0 / (b0 + hx)) ** 2
+    n = n_src + 1
+    g = np.zeros((n_px, n, n))
+    c = np.zeros((n_px, n))
+    live = (h != 0).astype(np.float64)
+    jj, ll = np.nonzero(np.triu(live.T @ live > 0))
+    gss = (w @ (x[jj] * x[ll]).T) * h[:, jj] * h[:, ll]
+    g[:, jj, ll] = gss
+    g[:, ll, jj] = gss
+    wq = w * predictor
+    gq = (wq @ x.T) * h
+    g[:, :n_src, n_src] = gq
+    g[:, n_src, :n_src] = gq
+    g[:, n_src, n_src] = (wq * predictor).sum(1)
+    c[:, :n_src] = ((w * y) @ x.T) * h
+    c[:, n_src] = (wq * y).sum(1)
+    g = (g + g.transpose(0, 2, 1)) / 2
+    scale = np.fmax(1e-3, y.mean(1))
+    lb = np.zeros((n_px, n))
+    ub = 10 * scale[:, None] * np.ones((1, n))
+    ub[:, n_src] = GAIN_MAX
+    return dict(g=g, c=c, lb=lb, ub=ub, n_sources=n_src)
+
+
+def fit_gain(
+    b0: np.ndarray,
+    y: np.ndarray,
+    x: np.ndarray,
+    h: np.ndarray,
+    finv: np.ndarray,
+    predictor: np.ndarray,
+    min_baseline: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The baseline ``max(min_baseline, gain * predictor)`` per pixel.
+
+    The gains come from :func:`gain_programs`, solved by
+    :func:`solve_box_qp`.
+
+    Returns
+    -------
+    b : ndarray of shape (pixels, frames)
+    coef : ndarray of shape (pixels, sources + 1)
+        The sources' coefficients and the gain (last).
+    """
+    programs = gain_programs(b0, y, x, h, finv, predictor)
+    coef, _ = solve_box_qp(
+        programs["g"], programs["c"], programs["lb"], programs["ub"]
+    )
+    b = np.fmax(min_baseline, coef[:, -1:] * predictor)
+    return b, coef
+
+
+def shared_time_course(
+    y: np.ndarray, q: np.ndarray, src: np.ndarray, finv: np.ndarray
+) -> tuple[np.ndarray, dict]:
+    """A factor per frame shared by pixels, and how it was shrunk.
+
+    From pixels (outside the footprints) with data ``y``, predicted
+    baseline ``q`` and sources' part ``src`` (all pixels x frames): per
+    frame, the weighted least-squares factor of ``q`` in ``y - src``,
+
+        c_t = sum_p w r q / sum_p w q^2,  r = y - src,
+        w = 1 / (F (q + src + 1))  (the solver's loss weights),
+
+    whose sampling variance is ``alpha / sum_p w q^2``, with ``alpha`` the
+    mean weighted squared residual of the observed samples (not filled in)
+    of the reliable frames (1 if the loss's variance model holds).
+    Each frame's factor is then shrunk towards their precision-weighted
+    mean ``m`` by the empirical-Bayes weight ``s2 / (s2 + var_t)``, where
+    ``s2`` is the variance of the factors about ``m`` beyond their
+    sampling variance (at least 0), estimated from the reliable frames
+    (sampling variance at most ``RELIABLE_FACTOR`` times its median, or
+    times ten times its 10th percentile if that is lower; this leaves out
+    filled-in frames, also where they are most of the trial). Without a
+    shared change the factor is ``m`` throughout.
+
+    Returns
+    -------
+    c : ndarray of shape (frames,)
+    info : dict
+        ``raw`` (the unshrunk factors), ``mean`` (m), ``alpha``, ``s2``.
+    """
+    y, q, src = (np.asarray(a, np.float64) for a in (y, q, src))
+    w = 1.0 / (np.asarray(finv, np.float64) * (q + src + 1))
+    r = y - src
+    den = (w * q * q).sum(0)
+    num = (w * r * q).sum(0)
+    ok = den > 0
+    n_t = y.shape[1]
+    raw = np.ones(n_t)
+    raw[ok] = num[ok] / den[ok]
+    if not ok.any():
+        return raw, dict(raw=raw, mean=1.0, alpha=float("nan"), s2=0.0)
+    m = float(num[ok].sum() / den[ok].sum())
+    raw[~ok] = m
+    # reliable frames: sampling variance (proportional to 1 / den) at most
+    # RELIABLE_FACTOR times its median. Filled-in frames (discarded,
+    # variance multiplier 1000 x) would otherwise inflate the mean sampling
+    # variance without adding spread, and count in alpha's degrees of
+    # freedom without adding residual. The median is capped at 10 times
+    # the 10th percentile, for trials where most frames are filled in
+    inv = np.full(n_t, np.inf)
+    inv[ok] = 1.0 / den[ok]
+    ref = min(np.median(inv[ok]), 10 * np.percentile(inv[ok], 10))
+    rel = ok & (inv <= RELIABLE_FACTOR * ref)
+    # observed samples: not filled in (variance multiplier far above the
+    # typical); filled ones add no residual and would bias alpha down
+    finv = np.asarray(finv, np.float64)
+    seen = (finv <= FILLED_FACTOR * np.median(finv)) & rel[None, :]
+    dof = max(int(seen.sum()) - int(rel.sum()), 1)
+    alpha = float((w * (r - raw * q) ** 2)[seen].sum() / dof)
+    var_t = alpha * inv
+    spread = float(((raw[rel] - m) ** 2).sum() / max(int(rel.sum()) - 1, 1))
+    s2 = max(0.0, spread - float(var_t[rel].mean()))
+    lam = np.zeros(n_t)
+    if s2 > 0:
+        lam[ok] = s2 / (s2 + var_t[ok])
+    c = m + lam * (raw - m)
+    return c, dict(raw=raw, mean=m, alpha=alpha, s2=s2)
+
+
+def fit_network_gain(
+    b0: np.ndarray,
+    b_ext: np.ndarray,
+    y: np.ndarray,
+    x: np.ndarray,
+    h: np.ndarray,
+    finv: np.ndarray,
+    params: SolverParams,
+    shared: bool = False,
+) -> tuple[np.ndarray, dict]:
+    """The baseline step of the 'gain' and 'gain_shared' modes.
+
+    'gain': ``B = g_p * b_ext`` with one gain per pixel
+    (:func:`fit_gain`). 'gain_shared' (``shared``): ``B = g_p * b_ext *
+    c_t``. The gains are fitted first with ``c = 1``; ``c`` is then
+    estimated from the pixels where every footprint is below
+    ``params.outside_footprint`` of its largest value
+    (:func:`shared_time_course`; held at 1 with fewer than
+    ``MIN_OUTSIDE`` such pixels), and the gains are fitted again with
+    ``b_ext * c`` as the predictor.
+
+    Parameters
+    ----------
+    b0 : ndarray of shape (pixels, frames)
+        Current baseline (sets ``fitB``'s weights).
+    b_ext : ndarray of shape (pixels, frames)
+        The external baseline.
+    y, finv : ndarray of shape (pixels, frames)
+    x : ndarray of shape (sources, frames)
+        Activity (thresholded, as for ``fitB``).
+    h : ndarray of shape (pixels, sources)
+    params : SolverParams
+    shared : bool
+        Also fit the shared time course.
+
+    Returns
+    -------
+    b : ndarray of shape (pixels, frames)
+    info : dict
+        ``gain`` (pixels); with ``shared``: ``shared`` (frames, c),
+        ``n_outside``, and the :func:`shared_time_course` record.
+    """
+    b, coef = fit_gain(b0, y, x, h, finv, b_ext, params.min_baseline)
+    info = dict(gain=coef[:, -1].copy())
+    if not shared:
+        return b, info
+    n_src = h.shape[1]
+    peak = h.max(0)
+    live = peak > 0  # a source without a footprint excludes no pixel
+    outside = (h[:, live] < params.outside_footprint * peak[None, live]).all(1)
+    info["n_outside"] = int(outside.sum())
+    if outside.sum() < MIN_OUTSIDE:
+        info["shared"] = np.ones(y.shape[1])
+        return b, info
+    src = (coef[:, :n_src] * h) @ x
+    q = coef[:, -1:] * b_ext
+    c, record = shared_time_course(
+        y[outside], q[outside], src[outside], finv[outside]
+    )
+    b, coef = fit_gain(
+        b0, y, x, h, finv, b_ext * c[None, :], params.min_baseline
+    )
+    info.update(gain=coef[:, -1].copy(), shared=c, **record)
+    return b, info
 
 
 def source_f0(h: np.ndarray, b: np.ndarray) -> np.ndarray:

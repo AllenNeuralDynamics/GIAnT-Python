@@ -1,5 +1,6 @@
 """Tests of the ground-truth refit test of the subproblem solver."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import h5py
@@ -8,17 +9,23 @@ import pytest
 
 from giant_python.extraction.raster.refit_test import (
     RefitTruth,
+    blur_error,
     by_size,
     draw_refit_data,
+    drift_error,
+    edge_error,
     find_events,
     refit_test,
+    scale_error,
     score_refit,
+    shared_component,
     summarize,
 )
 from giant_python.extraction.raster.solver import (
     SolverOptions,
     solve_subproblem,
 )
+from giant_python.extraction.raster.solver_baseline import source_f0
 from giant_python.extraction.raster.solver_setup import (
     SolverParams,
     Subproblem,
@@ -142,3 +149,169 @@ def test_refit_test_on_a_real_subproblem():
     fit = solve_subproblem(sub, PARAMS)
     with pytest.raises(ValueError, match="keep_baseline"):
         draw_refit_data(sub, fit, PARAMS, np.random.default_rng(0))
+
+
+def _crop_truth(n_t=40):
+    """A truth on a 4 x 5 crop with a baseline that varies over pixels."""
+    sel = np.ones((4, 5), bool)
+    sub = Subproblem(
+        y=np.ones((1, 20, n_t)),
+        finv=np.ones((20, n_t)),
+        sel=sel,
+        sources_rc=np.array([[1, 2]]),
+    )
+    b = np.outer(np.arange(1.0, 21.0), np.ones(n_t))
+    truth = RefitTruth(
+        h=np.full((20, 1), 0.05),
+        x=np.zeros((1, n_t)),
+        b=b,
+        f0=np.full((1, n_t), 4.0),
+        z=np.zeros((20, n_t)),
+    )
+    return sub, truth
+
+
+def test_baseline_errors():
+    """Scale, drift, trial-edge and blur errors of the true baseline."""
+    sub, truth = _crop_truth()
+    rng = np.random.default_rng(0)
+    b = truth.b
+    np.testing.assert_allclose(scale_error(-0.05)(truth, sub, rng), 0.95 * b)
+    d = drift_error(0.1)(truth, sub, rng)
+    np.testing.assert_allclose(d[:, 0], 0.95 * b[:, 0])
+    np.testing.assert_allclose(d[:, -1], 1.05 * b[:, -1])
+    np.testing.assert_allclose(d.mean(1), b.mean(1))
+    e = edge_error(0.03, 5)(truth, sub, rng)
+    np.testing.assert_allclose(e[:, :5], 1.03 * b[:, :5])
+    np.testing.assert_allclose(e[:, -5:], 1.03 * b[:, -5:])
+    np.testing.assert_allclose(e[:, 5:-5], b[:, 5:-5])
+    # a flat baseline stays flat when blurred, edges included
+    flat = RefitTruth(truth.h, truth.x, np.full_like(b, 3.0), truth.f0, b)
+    np.testing.assert_allclose(blur_error(1.0)(flat, sub, rng), 3.0)
+    blurred = blur_error(1.0)(truth, sub, rng)
+    assert blurred.shape == b.shape
+    assert np.ptp(blurred[:, 0]) < np.ptp(b[:, 0])
+    np.testing.assert_allclose(blurred.mean(), b.mean(), rtol=0.05)
+
+
+def test_shared_component():
+    """A shared fast change of the given root mean square, the same for
+    every pixel, reproducible from its generator."""
+    sub, truth = _crop_truth(n_t=4000)
+    change = shared_component(0.02)
+    b1 = change(truth.b, sub, np.random.default_rng(5))
+    course = b1 / truth.b - 1
+    np.testing.assert_allclose(course, course[:1].repeat(20, 0))
+    assert np.sqrt(np.mean(course[0] ** 2)) == pytest.approx(0.02)
+    # smoothed: neighbouring frames are correlated
+    assert np.corrcoef(course[0, :-1], course[0, 1:])[0, 1] > 0.6
+    b2 = change(truth.b, sub, np.random.default_rng(5))
+    np.testing.assert_array_equal(b1, b2)
+
+
+def test_refit_test_with_a_given_baseline():
+    """The refit can get the true baseline, or one with an error; the
+    truth's baseline can carry a shared change that the given one lacks;
+    the truth fits can be passed in."""
+    with h5py.File(SUBPROBLEM, "r") as f:
+        sub = Subproblem(
+            y=f["in/y"][()][:1].astype(np.float64),
+            finv=f["in/finv"][()].astype(np.float64),
+            sel=f["in/sel"][()].astype(bool),
+            sources_rc=f["in/sources_rc"][()],
+        )
+    opt = SolverOptions(keep_baseline=True)
+    fit = solve_subproblem(sub, PARAMS, opt)
+    fixed = replace(PARAMS, baseline_mode="fixed")
+    exact = refit_test(
+        [sub],
+        PARAMS,
+        opt,
+        refit_params=fixed,
+        seed=2,
+        fits=[fit],
+        given_baseline=scale_error(0.0),
+        keep_truths=True,
+    )
+    plain = refit_test([sub], PARAMS, opt, seed=2, keep_truths=True)
+    # the same draws whatever the refit gets
+    np.testing.assert_array_equal(exact.truths[0].z, plain.truths[0].z)
+    high = refit_test(
+        [sub],
+        PARAMS,
+        opt,
+        refit_params=fixed,
+        seed=2,
+        fits=[fit],
+        given_baseline=scale_error(0.1),
+    )
+    assert high.summary["pooled"] < exact.summary["pooled"]
+    assert high.summary["f0_ratio"] > exact.summary["f0_ratio"] + 0.01
+    shared = refit_test(
+        [sub],
+        PARAMS,
+        opt,
+        refit_params=fixed,
+        seed=2,
+        fits=[fit],
+        truth_baseline=shared_component(0.05),
+        keep_truths=True,
+    )
+    tr = shared.truths[0]
+    np.testing.assert_array_equal(tr.b_fit, fit.baseline[0])
+    assert not np.allclose(tr.b, tr.b_fit)
+    np.testing.assert_allclose(tr.f0, source_f0(tr.h, tr.b))
+    with pytest.raises(ValueError, match="fits for"):
+        refit_test([sub], PARAMS, opt, fits=[fit, fit])
+
+
+def test_edge_error_scales_overlapping_ends_once():
+    """In a trial shorter than both windows, every frame is scaled once."""
+    sub, truth = _crop_truth(n_t=10)
+    b = edge_error(0.1, 6)(truth, sub, np.random.default_rng(0))
+    np.testing.assert_allclose(b, 1.1 * truth.b)
+
+
+def test_refit_keeps_the_subproblems_own_baseline():
+    """Without a given_baseline the refit keeps each subproblem's own
+    external baseline, so network modes can be refitted."""
+    with h5py.File(SUBPROBLEM, "r") as f:
+        sub = Subproblem(
+            y=f["in/y"][()][:1].astype(np.float64),
+            finv=f["in/finv"][()].astype(np.float64),
+            sel=f["in/sel"][()].astype(bool),
+            sources_rc=f["in/sources_rc"][()],
+        )
+    opt = SolverOptions(keep_baseline=True)
+    fit = solve_subproblem(sub, PARAMS, opt)
+    own = replace(sub, baseline=fit.baseline[0], _coords=None)
+    gain = replace(PARAMS, baseline_mode="gain")
+    r = refit_test([own], gain, opt, seed=1)
+    assert r.summary["n_sources"] == 2
+    with pytest.raises(ValueError, match="Subproblem.baseline"):
+        refit_test([sub], gain, opt, seed=1)
+
+
+def test_truth_baseline_gets_a_copy():
+    """An in-place change of the true baseline leaves the fit unchanged."""
+    with h5py.File(SUBPROBLEM, "r") as f:
+        sub = Subproblem(
+            y=f["in/y"][()][:1].astype(np.float64),
+            finv=f["in/finv"][()].astype(np.float64),
+            sel=f["in/sel"][()].astype(bool),
+            sources_rc=f["in/sources_rc"][()],
+        )
+    fit = solve_subproblem(sub, PARAMS, SolverOptions(keep_baseline=True))
+    before = fit.baseline.copy()
+
+    def in_place(b, sub, rng):
+        """Scale the given array itself."""
+        b *= 1.5
+        return b
+
+    tr = draw_refit_data(
+        sub, fit, PARAMS, np.random.default_rng(0), truth_baseline=in_place
+    )
+    np.testing.assert_array_equal(fit.baseline, before)
+    np.testing.assert_array_equal(tr.b_fit, before[0])
+    np.testing.assert_allclose(tr.b, 1.5 * before[0])
