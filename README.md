@@ -5,11 +5,11 @@
 
 GIAnT-Python is a Python package for processing glutamate imaging data, with advanced capabilities for SLAP2 recordings.
 
-Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's MultiRoiRegistration, on the CPU or a CUDA GPU), the per-trial **localization of SILo for raster (multi-ROI) recordings**, and **SLAP2 Band Scan processing**: **BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
+Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's MultiRoiRegistration, on the CPU or a CUDA GPU), **SILo source extraction for SLAP2 raster (multi-ROI) recordings** (a port of GIAnT-MATLAB's SILo, on one machine or as stages to scatter), and **SLAP2 Band Scan processing**: **BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
 
 ## Requirements and scope
 
-Provide a trial table (SLAP2 trial tables can be built in Python, below), raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. Standard SILo (apart from its per-trial raster localization, below), standalone deconvolution, general trial-table writing, config-file loading, and checkpoint/resume are not supported.
+Provide a trial table (SLAP2 trial tables can be built in Python, below), raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered and source-extracted in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. SILo for recordings other than SLAP2 raster, its affine and patchwise across-trial alignment and WMF seeding, standalone deconvolution, general trial-table writing and config-file loading are not supported.
 
 Analysis trials come from the supplied table; Python does not split or merge them.
 
@@ -84,9 +84,22 @@ Annotations are disabled by default. Use `BandSiloParams` for scientific setting
 
 Annotations are stored beneath the table's `savedr` in `annotations/annotations.h5`.
 
+## Run SILo on raster recordings
+
+`giant silo` extracts sources from registered SLAP2 multi-ROI (raster) recordings as GIAnT-MATLAB's `SILo.m` does, and writes the same files in MATLAB's schema: `source_extraction/experiment_summary.h5`, `source_extraction/per_trial_summary.h5` and the trial table's `source_extraction` fields. MATLAB's algorithm is the default (moving-median localization, fitted baseline, rigid across-trial alignment, the kinetics test); the fits run to convergence instead of stopping at MATLAB's iteration caps.
+
+```bash
+giant register path/to/trial_table.h5
+giant silo path/to/trial_table.h5 --verbose
+```
+
+or `run_silo(table, SiloParams(), SiloExecution(...))` from `giant_python.pipeline.silo`. Per path, trials are localized in parallel (`--workers`), the path is planned, and each trial is loaded at the selected pixels while the previous trial's subproblems are solved (`--solver-workers` processes of `--solver-threads` threads). `SiloParams` (in `giant_python.models.params`) is the one parameter set of all stages, with MATLAB's SLAP2 defaults; set fields with `--set name=value` or `--params file.json`. Existing annotations (`annotations/annotations.h5`: soma masks and user ROIs) are read; ROIs are not drawn.
+
+The stages also run on their own, for any subset of their units, with file contracts between them, so that a pipeline can scatter them over machines: `giant silo-localize`, `silo-plan`, `silo-prepare` (one container per trial-path), `silo-dispatch --machines N` (job files of about equal work), `silo-solve JOB` (needs only the job file and its containers) and `silo-collect`. Every output records a settings hash; units whose outputs exist with the same settings are skipped. Results do not depend on how the work is split. See [SILo for SLAP2 raster recordings](docs/source/silo.rst).
+
 ## Raster SILo localization (multi-ROI)
 
-`giant_python.extraction.raster` ports the per-trial localization of GIAnT-MATLAB's SILo for SLAP2 raster (multi-ROI) recordings: `loadAndProcessTrialAsync`, `localizeSources_vIM` and `getActImPeaks`. Extraction (NMF, traces) is not ported. It reads GIAnT-MATLAB's registered 80 Hz movies and returns each trial's activity image, the summary image that is seeded, and the seeds:
+The per-trial localization of SILo (`loadAndProcessTrialAsync`, `localizeSources_vIM` and `getActImPeaks`) can also be used on its own. It reads GIAnT-MATLAB's registered 80 Hz movies and returns each trial's activity image, the summary image that is seeded, and the seeds:
 
 ```python
 from giant_python.extraction.raster.localization import RasterLocalizationParams
@@ -123,6 +136,7 @@ Documentation provenance.[^documentation]
 - [Trace estimation, controls, and scientific caveats](docs/source/traces.rst)
 - [File formats, coordinates, and MATLAB interoperability](docs/source/file_formats.rst)
 - [Architecture and module ownership](docs/source/architecture.rst)
+- [SILo for SLAP2 raster recordings: commands, stages and file contracts](docs/source/silo.rst)
 
 ## Support
 
