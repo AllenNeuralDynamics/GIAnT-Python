@@ -573,3 +573,25 @@ def test_default_seeding_on_matlabs_window(case):
         params=dataclasses.replace(params, seed_fit="local", seed_merge_px=0),
     )
     assert abs(unmerged.n_sources - len(matlab)) <= 1
+
+
+def test_plans_written_before_the_seed_options_read_as_matlabs(
+    tmp_path, synthetic_plan
+):
+    """A plan file without the seed fields (written before they existed)
+    reads back with MATLAB's seed fit and no merging, the settings it was
+    made with; a current plan keeps its own."""
+    import json
+
+    import h5py
+
+    plan, _ = synthetic_plan
+    fn = tmp_path / "plan.h5"
+    write_plan(fn, plan)
+    assert read_plan(fn).params.seed_fit == plan.params.seed_fit
+    with h5py.File(fn, "r+") as f:
+        saved = json.loads(f.attrs["params"])  # a one-path plan: the root
+        del saved["seed_fit"], saved["seed_merge_px"]
+        f.attrs["params"] = json.dumps(saved)
+    old = read_plan(fn).params
+    assert (old.seed_fit, old.seed_merge_px) == ("matlab", 0.0)

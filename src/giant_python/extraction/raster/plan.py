@@ -600,6 +600,20 @@ def combined_activity_image(
     return act_im - med_im, med_im, nan_frac
 
 
+# fields added to PlanParams after plans were first written, with the value
+# that describes plans written before them (MATLAB's seed fit, no merging)
+_PLAN_FIELDS_ADDED = {"seed_fit": "matlab", "seed_merge_px": 0.0}
+
+
+def _saved_params(text: str) -> dict:
+    """A plan file's saved PlanParams; fields it predates get the values
+    it was made with, not today's defaults."""
+    saved = json.loads(text)
+    for name, before in _PLAN_FIELDS_ADDED.items():
+        saved.setdefault(name, before)
+    return saved
+
+
 def _soma_canvas(soma_mask, shape, warp=None, trial=None) -> np.ndarray:
     """The soma mask on the consensus canvas (top left).
 
@@ -1010,7 +1024,7 @@ def read_plan(path: str | Path, group: str = "/") -> ExtractionPlan:
             return out
 
         return ExtractionPlan(
-            params=PlanParams(**json.loads(g.attrs["params"])),
+            params=PlanParams(**_saved_params(g.attrs["params"])),
             keep_trials=a["keep_trials"][()].astype(bool),
             template=a["template"][()],
             template_trials=a["template_trials"][()].astype(np.int64),
