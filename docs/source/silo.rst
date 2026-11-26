@@ -71,8 +71,10 @@ Two seeding options are not MATLAB's either (both off by default):
   1.5 pixels of another peak. An activity image's peak is narrower than a
   pixel; a source between pixels is otherwise fitted as two or three peaks
   less than a pixel apart, and each becomes a source. On injected ground
-  truth this removes the duplicate sources (a quarter to a third of the
-  sources) without losing injected ones.
+  truth (GFP and 780125 copies) this removes the duplicate sources (a
+  quarter to a third of the sources); every injected source that had a
+  seed within 2 px keeps one, but with elongated or wide injected
+  footprints 3 of 60 end 1-2 px from the truth instead of within 1 px.
 
 Changing either reruns the localization and plan stages (outputs made with
 the defaults keep their settings hashes).
