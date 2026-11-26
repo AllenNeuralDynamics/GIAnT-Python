@@ -798,8 +798,7 @@ def shared_time_course(
     # the 10th percentile, for trials where most frames are filled in
     inv = np.full(n_t, np.inf)
     inv[ok] = 1.0 / den[ok]
-    ref = min(np.median(inv[ok]), 10 * np.percentile(inv[ok], 10))
-    rel = ok & (inv <= RELIABLE_FACTOR * ref)
+    rel = reliable_frames(den)
     # observed samples: not filled in (variance multiplier far above the
     # typical); filled ones add no residual and would bias alpha down
     finv = np.asarray(finv, np.float64)
@@ -836,17 +835,40 @@ def _shared_variance_halves(w, r, q, rel, halves):
     if a.sum() < MIN_HALF or b.sum() < MIN_HALF:
         return 0.0, float("nan")
     fac = []
+    both = rel.copy()
     for m in (a, b):
         den = (w[m] * q[m] * q[m]).sum(0)
         num = (w[m] * r[m] * q[m]).sum(0)
         fac.append((num, den))
-    both = rel & (fac[0][1] > 0) & (fac[1][1] > 0)
+        # each half's frames must be reliable too (a half can be filled
+        # in where the whole is not)
+        both &= reliable_frames(den)
     if both.sum() < 2:
         return 0.0, float("nan")
     ca = fac[0][0][both] / fac[0][1][both]
     cb = fac[1][0][both] / fac[1][1][both]
-    cov = float(np.mean((ca - ca.mean()) * (cb - cb.mean())))
+    # sample covariance, normalized as the factors' variance
+    cov = float(((ca - ca.mean()) * (cb - cb.mean())).sum() / (both.sum() - 1))
     return max(cov, 0.0), cov
+
+
+def reliable_frames(den: np.ndarray) -> np.ndarray:
+    """Frames whose factor is reliable, from its precision ``den``.
+
+    A frame is reliable if ``den`` is positive and its sampling variance
+    (proportional to ``1 / den``) is at most ``RELIABLE_FACTOR`` times its
+    median over those frames, or times ten times its 10th percentile if
+    that is lower (for trials where most frames are filled in).
+    """
+    den = np.asarray(den, dtype=np.float64)
+    ok = den > 0
+    out = np.zeros(den.shape, dtype=bool)
+    if not ok.any():
+        return out
+    inv = 1.0 / den[ok]
+    ref = min(np.median(inv), 10 * np.percentile(inv, 10))
+    out[ok] = inv <= RELIABLE_FACTOR * ref
+    return out
 
 
 def outside_halves(sel: np.ndarray, outside: np.ndarray, gap: float = 1.0):

@@ -408,3 +408,34 @@ def test_outside_halves_are_apart():
     rows, cols = np.nonzero(sel.T)[::-1]
     assert cols[a].max() < cols[b].min() - 2
     assert a.sum() > 15 and b.sum() > 15
+
+
+def test_halves_skip_frames_where_one_half_is_filled():
+    """Frames where one half is filled in (and the whole is not) do not
+    enter the halves' covariance."""
+    rng = np.random.default_rng(15)
+    n_px, n_t = 200, 3000
+    q = np.full((n_px, n_t), 3.0)
+    finv = np.ones((n_px, n_t))
+    half_a = np.arange(n_px) < 90
+    half_b = np.arange(n_px) >= 110
+    holes = rng.random(n_t) < 0.4
+    finv[np.ix_(half_a, holes)] = 1000.0
+    true = 1 + 0.15 * np.sin(np.arange(n_t) / 7.0)
+    y = rng.poisson(q * true[None]).astype(np.float64)
+    y[np.ix_(half_a, holes)] = 3.0
+    c, rec = shared_time_course(y, q, np.zeros_like(q), finv, (half_a, half_b))
+    assert rec["s2"] == pytest.approx(np.var(true), rel=0.25)
+    assert _corr(c, true) > 0.85
+
+
+def test_halves_do_not_shrink_noiseless_factors():
+    """Identical noiseless factors in both halves are kept as they are,
+    also with few frames."""
+    q = np.ones((20, 2))
+    y = q * np.array([0.8, 1.2])[None]
+    halves = (np.arange(20) < 8, np.arange(20) >= 12)
+    c, rec = shared_time_course(
+        y, q, np.zeros_like(q), np.ones_like(q), halves
+    )
+    np.testing.assert_allclose(c, [0.8, 1.2])
