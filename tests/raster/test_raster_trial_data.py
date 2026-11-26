@@ -426,6 +426,33 @@ def test_frames_at_matches_definition(recording):
     assert np.isnan(want[0]).any() and not np.isnan(want[0]).all()
 
 
+def test_frames_at_points_off_the_raster(recording):
+    """Points whose neighbours are all outside the image need no sample:
+    every value is missing."""
+    layout, _, _ = recording
+    trim_rows, trim_cols = raster_window(layout)
+    r_d = np.array([-40.0, -41.0, trim_rows.size + 30.0])
+    c_d = np.array([5.0, -7.0, 3.0])
+    times = np.arange(300, 900, 50)
+    motion = np.linspace(-1.5, 1.5, times.size)
+    y, fq = collect(
+        frames_at(
+            layout,
+            [0],
+            times,
+            8,
+            trim_rows,
+            trim_cols,
+            r_d,
+            c_d,
+            motion,
+            motion,
+        )
+    )
+    assert y.shape == (1, 3, times.size) and fq.shape == (3, times.size)
+    assert np.isnan(y).all() and np.isnan(fq).all()
+
+
 def test_frames_at_compensated_matches_definition(online_recording):
     """With compensation, each line's samples move by its online offset
     relative to the block's reference, also past the trimmed raster."""
