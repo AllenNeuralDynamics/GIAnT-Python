@@ -144,6 +144,10 @@ def test_one_setting_reaches_every_stage():
         == 8.0
     )
     assert p.localization_params(123.0).align_hz == 123.0
+    net = SiloParams(
+        localization_baseline="network", localization_variance_floor=False
+    )
+    assert net.localization_params(80).variance_floor is False
 
 
 def test_to_matlab_has_matlabs_fields_types_and_values(tmp_path):
@@ -207,6 +211,11 @@ def test_python_only_settings_are_recorded_when_not_matlabs():
         {"localization_null": "other"},
         {"trial_peaks": 1},
         {"min_frames": 0},
+        {"localization_null_seed": -1},
+        {"localization_null_seed": 1.5},
+        {"localization_null_seed": True},
+        # without the variance floor localization needs the network baseline
+        {"localization_variance_floor": False},
         {"min_kinetic_score": float("nan")},
         # the solver needs a baseline window longer than the denoise window
         {"baseline_window_s": 0.1},
@@ -250,12 +259,17 @@ def test_execution_options():
     for bad in (
         {"solver_threads": 0},
         {"device": "gpu"},
+        {"device": "cudax"},
+        {"device": "cuda:"},
+        {"device": "cuda:-1"},
+        {"loader_device": "cpu:0"},
         {"dtype": "float16"},
         {"batch_bytes": -1.0},
         {"overwrite": 1},
     ):
         with pytest.raises(ValueError):
             SiloExecution(**bad)
+    assert SiloExecution(device="cuda:1").device == "cuda:1"
     p, e = resolve_silo_options({"lam": 0.5}, {"workers": 2})
     assert p.lam == 0.5 and e.workers == 2
     with pytest.raises(TypeError):

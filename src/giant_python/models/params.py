@@ -10,6 +10,7 @@ the existing algorithm.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass, fields
 from numbers import Integral, Real
 from typing import Optional, Union
@@ -686,11 +687,6 @@ class SiloParams:
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a bool")
-        _choice(
-            "localization_baseline",
-            self.localization_baseline,
-            ("median", "network"),
-        )
         _choice("debias_variance", self.debias_variance, ("fixed", "model"))
         _choice(
             "footprint_variance", self.footprint_variance, ("model", "fixed")
@@ -705,9 +701,36 @@ class SiloParams:
                 f"peakMethod {self.peak_method!r} is not ported yet; only "
                 "'getactimpeaks'"
             )
+        self._check_localization()
         # the stages' own types check the rest
         self.localization_params(80.0)
         self.solver_params()
+
+    def _check_localization(self) -> None:
+        """Checks of the localization options that their type cannot do."""
+        _choice(
+            "localization_baseline",
+            self.localization_baseline,
+            ("median", "network"),
+        )
+        if (
+            not self.localization_variance_floor
+            and self.localization_baseline != "network"
+        ):
+            # localization needs an external baseline without the floor
+            raise ValueError(
+                "localization_variance_floor=False needs "
+                "localization_baseline='network'"
+            )
+        seed = self.localization_null_seed
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, Integral)
+            or seed < 0
+        ):
+            raise ValueError(
+                "localization_null_seed must be a nonnegative integer"
+            )
 
     @property
     def sel_radius(self) -> int:
@@ -1015,6 +1038,9 @@ _PYTHON_ONLY = {
 }
 
 
+_DEVICE = re.compile(r"cpu|cuda(:\d+)?")
+
+
 @dataclass
 class SiloExecution:
     """How SILo runs on one machine; never changes the results.
@@ -1061,10 +1087,10 @@ class SiloExecution:
             _positive(name, getattr(self, name), integer=True)
         for name in ("device", "loader_device"):
             value = getattr(self, name)
-            if not isinstance(value, str) or not (
-                value == "cpu" or value.startswith("cuda")
-            ):
-                raise ValueError(f"{name} must be 'cpu' or 'cuda[:N]'")
+            if not isinstance(value, str) or not _DEVICE.fullmatch(value):
+                raise ValueError(
+                    f"{name} must be 'cpu', 'cuda' or 'cuda:N', not {value!r}"
+                )
         _choice("dtype", self.dtype, ("float64", "float32"))
         if self.batch_bytes is not None:
             _positive("batch_bytes", self.batch_bytes)
