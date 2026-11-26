@@ -1,6 +1,7 @@
 """Scientific configuration and independent execution and annotation policy.
 
-``BandSiloParams`` contains only band science.
+``BandSiloParams`` contains only band science; ``SiloParams`` is the science
+of raster SILo (SLAP2 multi-ROI) and ``SiloExecution`` how it runs.
 ``ExecutionOptions`` controls scheduling/debug limits; ``AnnotationOptions``
 controls ROI use and GUI policy. Resolution copies inputs without retuning
 the existing algorithm.
@@ -9,9 +10,12 @@ the existing algorithm.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass, fields
 from numbers import Integral, Real
 from typing import Optional, Union
+
+import numpy as np
 
 
 def _positive(name: str, value: object, *, integer: bool = False) -> None:
@@ -388,6 +392,8 @@ def _option_values(
             ExecutionOptions,
             AnnotationOptions,
             MultiRoiRegistrationParams,
+            SiloParams,
+            SiloExecution,
         ]
     ],
 ) -> dict:
@@ -458,4 +464,681 @@ def resolve_registration_options(
             **_option_values(params, MultiRoiRegistrationParams)
         ),
         ExecutionOptions(**_option_values(execution, ExecutionOptions)),
+    )
+
+
+_SILO_STAGES = ("localize", "plan", "prepare", "solve", "collect")
+
+
+def _choice(name: str, value: object, allowed: tuple) -> None:
+    """Reject a value that is not one of ``allowed``."""
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {allowed}, not {value!r}")
+
+
+@dataclass(frozen=True)
+class SiloParams:
+    """Scientific settings of SILo for SLAP2 multi-ROI raster recordings.
+
+    One parameter set for every stage of source extraction (localization,
+    plan, trial loading, subproblem solving, collection). The defaults are
+    GIAnT-MATLAB main's ``setParams('SILo')`` for SLAP2 (``isSLAP2``), with
+    its modality defaults resolved (``peakth`` 3, ``minKineticScore`` 0.2,
+    ``photonScale`` 25), and the solver's fixed-variance footprint fit
+    (``footprint_variance='model'`` gives MATLAB's). MATLAB's names are
+    given in brackets; :meth:`to_matlab` returns the ``params`` struct
+    that SILo saves. The stages' own parameter types are derived with
+    :meth:`plan_params`,
+    :meth:`load_params`, :meth:`solver_params` and
+    :meth:`localization_params`.
+
+    Attributes
+    ----------
+    activity_channel : int
+        One-based channel of the activity signal (``activityChannel``).
+    analyze_hz : float
+        Frame rate of extraction (``analyzeHz``).
+    sigma_px : float
+        Gaussian sigma of the PSF, pixels (``sigma_px``).
+    d_xy : float
+        How large sources can be, pixels (``dXY``); the selected disk around
+        a source has radius ``ceil(2 d_xy)`` (``selRadius``).
+    tau_s, tau2_s : float
+        Decay time constants of the activity channel and of channel 2
+        (``tau_s``, ``tau2_s``).
+    baseline_window_s : float
+        Timescale of the baseline (``baselineWindow_Glu_s``).
+    baseline_window_ca_s : float
+        ``baselineWindow_Ca_s``; recorded only, as in MATLAB's SILo.
+    denoise_window_s : float
+        Timescale over which signals may be smoothed (``denoiseWindow_s``).
+    vif : float
+        Variance inflation factor of localization (``VIF``).
+    motion_thresh : float
+        Registered frames whose motion error exceeds this are discarded
+        (``motionThresh``).
+    discard_initial_s : float
+        Seconds discarded at the start of each trial (``discardInitial_s``).
+    nan_thresh : float
+        Largest share of missing samples of an included pixel
+        (``nanThresh``).
+    peak_th : float
+        Seed threshold, robust SDs of the activity image (``peakth``; 3 for
+        SLAP2). Used by the plan's seeding and, unless
+        ``localization_peak_th`` is set, by the per-trial peaks.
+    min_peak_distance : int
+        Minimum Chebyshev distance of seeds (``minPeakDistance``).
+    localization_baseline : {'median', 'network'}
+        Baseline of localization: MATLAB's moving median, or the F0
+        network's ``*_BASELINE-80Hz.h5`` files (``slap2-f0
+        predict-registered``), whose folder is given at run time. Not a
+        MATLAB option.
+    localization_surround : bool
+        Subtract the surround in the localization score (MATLAB's).
+    localization_null : {'none', 'bootstrap'}
+        Null calibration of the localization score.
+    localization_null_draws, localization_null_seed : int
+        Noise movies per trial of the bootstrap null, and the first seed.
+    localization_null_scale : {'tail', 'sd'}
+        Calibration of the bootstrap null.
+    localization_variance_floor : bool
+        Add the variance floor ``Vb`` to the score's variance (MATLAB's).
+    localization_score : {'squared_maxima', 'soft_threshold'}
+        Localization score (MATLAB's: ``'squared_maxima'``).
+    localization_soft_th : float
+        Threshold of the soft-threshold score, robust SDs.
+    localization_peak_th : float or None
+        Threshold of the per-trial peaks; None uses ``peak_th``.
+    trial_peaks : bool
+        Fit each trial's peaks (Gaussians at the per-trial activity image's
+        maxima). They feed only the per-trial summary's
+        ``per_trial_act_im_peaks`` and ``per_trial_num_peaks``; False
+        leaves those out of the file.
+    inter_trial_alignment : {'rigid'}
+        Across-trial alignment (``interTrialAlignment``); affine and
+        patchwise are not ported yet.
+    align_patch_px : int
+        ``alignPatchPx`` (patchwise alignment only; recorded).
+    peak_method : {'getactimpeaks'}
+        Seeding (``peakMethod``); WMF is not ported yet.
+    wmf_peak_th, wmf_dip, wmf_deblend_th : float
+        ``wmfPeakth``, ``wmfDip``, ``wmfDeblendth`` (WMF only; recorded).
+    photon_scale : float
+        Raw counts per unit of the data (``photonScale``; 25 for SLAP2).
+    lam : float
+        L1 penalty of the activity fit (``lambda``).
+    phi : float
+        Share of ``lam`` kept in the debias refit (``phi``).
+    nmf_iter : int
+        Outer iterations of the solver (``nmfIter``).
+    min_baseline : float
+        Lower bound of the baseline, normalized units (``minBaseline``).
+    debias_variance : {'fixed', 'model'}
+        Variance term of the debias refit (``debiasVariance``).
+    footprint_variance : {'fixed', 'model'}
+        Variance term of the footprint fit: held at the fit's start
+        ('fixed', the default since GIAnT-Python#23) or following the model
+        as in MATLAB ('model'). Not a MATLAB option.
+    baseline_knot_factor, baseline_penalty : float
+        The solver's baseline spline (MATLAB's fixed values).
+    min_kinetic_score : float
+        Sources whose transients score below this in the kinetics test are
+        removed after extraction (``minKineticScore``; 0 keeps all).
+    min_frames : int
+        Trials with fewer frames are loaded but not source-extracted
+        (MATLAB's ``minFrames``).
+    user_rois : bool
+        Read the session's ``annotations/annotations.h5`` (soma masks and
+        user ROIs; ``drawUserRois``). ROIs are never drawn here: without a
+        file the session has no user ROIs, as MATLAB's SILo without the
+        GUI.
+    """
+
+    activity_channel: int = 1
+    analyze_hz: float = 200.0
+    sigma_px: float = 1.33
+    d_xy: float = 3.0
+    tau_s: float = 0.024
+    tau2_s: float = 0.15
+    baseline_window_s: float = 4.0
+    baseline_window_ca_s: float = 4.0
+    denoise_window_s: float = 0.2
+    vif: float = 1.67
+    motion_thresh: float = 2.0
+    discard_initial_s: float = 0.0
+    nan_thresh: float = 0.33
+    peak_th: float = 3.0
+    min_peak_distance: int = 1
+    localization_baseline: str = "median"
+    localization_surround: bool = True
+    localization_null: str = "none"
+    localization_null_draws: int = 1
+    localization_null_seed: int = 0
+    localization_null_scale: str = "tail"
+    localization_variance_floor: bool = True
+    localization_score: str = "squared_maxima"
+    localization_soft_th: float = 2.0
+    localization_peak_th: Optional[float] = None
+    trial_peaks: bool = True
+    inter_trial_alignment: str = "rigid"
+    align_patch_px: int = 1500
+    peak_method: str = "getactimpeaks"
+    wmf_peak_th: float = 3.0
+    wmf_dip: float = 3.0
+    wmf_deblend_th: float = 8.0
+    photon_scale: float = 25.0
+    lam: float = 0.9
+    phi: float = 0.0
+    nmf_iter: int = 2
+    min_baseline: float = 0.01
+    debias_variance: str = "fixed"
+    footprint_variance: str = "fixed"
+    baseline_knot_factor: float = 0.5
+    baseline_penalty: float = 30.0
+    min_kinetic_score: float = 0.2
+    min_frames: int = 100
+    user_rois: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate values; reject modes that are not ported."""
+        for name in (
+            "analyze_hz",
+            "sigma_px",
+            "d_xy",
+            "tau_s",
+            "tau2_s",
+            "baseline_window_s",
+            "baseline_window_ca_s",
+            "denoise_window_s",
+            "vif",
+            "motion_thresh",
+            "nan_thresh",
+            "peak_th",
+            "photon_scale",
+            "min_baseline",
+            "baseline_knot_factor",
+        ):
+            _positive(name, getattr(self, name))
+        for name in (
+            "activity_channel",
+            "min_peak_distance",
+            "nmf_iter",
+            "align_patch_px",
+            "localization_null_draws",
+            "min_frames",
+        ):
+            _positive(name, getattr(self, name), integer=True)
+        for name in (
+            "discard_initial_s",
+            "lam",
+            "phi",
+            "baseline_penalty",
+            "min_kinetic_score",
+            "wmf_peak_th",
+            "wmf_dip",
+            "wmf_deblend_th",
+            "localization_soft_th",
+        ):
+            _nonnegative(name, getattr(self, name))
+        if self.localization_peak_th is not None:
+            _positive("localization_peak_th", self.localization_peak_th)
+        for name in (
+            "localization_surround",
+            "localization_variance_floor",
+            "trial_peaks",
+            "user_rois",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a bool")
+        _choice("debias_variance", self.debias_variance, ("fixed", "model"))
+        _choice(
+            "footprint_variance", self.footprint_variance, ("model", "fixed")
+        )
+        if self.inter_trial_alignment != "rigid":
+            raise NotImplementedError(
+                f"interTrialAlignment {self.inter_trial_alignment!r} is not "
+                "ported yet; only 'rigid'"
+            )
+        if self.peak_method != "getactimpeaks":
+            raise NotImplementedError(
+                f"peakMethod {self.peak_method!r} is not ported yet; only "
+                "'getactimpeaks'"
+            )
+        if not self.nan_thresh <= 1:
+            # a share of missing samples: above 1 pixels without any sample
+            # would pass
+            raise ValueError("nan_thresh must not be above 1")
+        self._check_localization()
+        # the stages' own types check the rest
+        self.localization_params(80.0)
+        self.solver_params()
+
+    def _check_localization(self) -> None:
+        """Checks of the localization options that their type cannot do."""
+        _choice(
+            "localization_baseline",
+            self.localization_baseline,
+            ("median", "network"),
+        )
+        if (
+            not self.localization_variance_floor
+            and self.localization_baseline != "network"
+        ):
+            # localization needs an external baseline without the floor
+            raise ValueError(
+                "localization_variance_floor=False needs "
+                "localization_baseline='network'"
+            )
+        seed = self.localization_null_seed
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, Integral)
+            or seed < 0
+        ):
+            raise ValueError(
+                "localization_null_seed must be a nonnegative integer"
+            )
+
+    @property
+    def sel_radius(self) -> int:
+        """Radius of a source's selected pixels (``selRadius``)."""
+        return math.ceil(2 * self.d_xy)
+
+    def plan_params(self):
+        """The plan stage's parameters
+        (:class:`~giant_python.extraction.raster.plan.PlanParams`)."""
+        from ..extraction.raster.plan import PlanParams
+
+        return PlanParams(
+            nan_thresh=self.nan_thresh,
+            inter_trial_alignment=self.inter_trial_alignment,
+            peak_method=self.peak_method,
+            peak_th=self.peak_th,
+            min_peak_distance=self.min_peak_distance,
+            d_xy=self.d_xy,
+            sigma_px=self.sigma_px,
+        )
+
+    def load_params(self):
+        """The trial loader's parameters
+        (:class:`~giant_python.extraction.raster.trial_data.TrialLoadParams`).
+        """
+        from ..extraction.raster.trial_data import TrialLoadParams
+
+        return TrialLoadParams(
+            analyze_hz=self.analyze_hz,
+            activity_channel=self.activity_channel,
+            photon_scale=self.photon_scale,
+            baseline_window_s=self.baseline_window_s,
+            nan_thresh=self.nan_thresh,
+        )
+
+    def solver_params(self):
+        """The subproblem solver's parameters
+        (:class:`~giant_python.extraction.raster.solver_setup.SolverParams`).
+        """
+        from ..extraction.raster.solver_setup import SolverParams
+
+        return SolverParams(
+            analyze_hz=self.analyze_hz,
+            tau_s=self.tau_s,
+            tau2_s=self.tau2_s,
+            sigma_px=self.sigma_px,
+            sel_radius=self.sel_radius,
+            baseline_window_s=self.baseline_window_s,
+            denoise_window_s=self.denoise_window_s,
+            min_baseline=self.min_baseline,
+            lam=self.lam,
+            phi=self.phi,
+            nmf_iter=self.nmf_iter,
+            photon_scale=self.photon_scale,
+            debias_variance=self.debias_variance,
+            footprint_variance=self.footprint_variance,
+            baseline_knot_factor=self.baseline_knot_factor,
+            baseline_penalty=self.baseline_penalty,
+        )
+
+    def localization_params(self, align_hz: float):
+        """The per-trial localization's parameters (a
+        :class:`~giant_python.extraction.raster.localization.RasterLocalizationParams`).
+
+        Parameters
+        ----------
+        align_hz : float
+            Frame rate of the registered movies (from the alignment files).
+        """
+        from ..extraction.raster.localization import RasterLocalizationParams
+
+        th = self.localization_peak_th
+        return RasterLocalizationParams(
+            align_hz=float(align_hz),
+            tau_s=self.tau_s,
+            sigma_px=self.sigma_px,
+            baseline_window_s=self.baseline_window_s,
+            denoise_window_s=self.denoise_window_s,
+            vif=self.vif,
+            peak_th=self.peak_th if th is None else th,
+            min_peak_distance=self.min_peak_distance,
+            nan_thresh=self.nan_thresh,
+            surround=self.localization_surround,
+            null=self.localization_null,
+            null_draws=self.localization_null_draws,
+            null_seed=self.localization_null_seed,
+            null_scale=self.localization_null_scale,
+            variance_floor=self.localization_variance_floor,
+            score=self.localization_score,
+            soft_th=self.localization_soft_th,
+        )
+
+    def stage_settings(self, stage: str) -> dict:
+        """The settings one stage's outputs depend on.
+
+        Each stage records a hash of these (with its inputs' identities),
+        so that a rerun keeps outputs made with the same settings.
+
+        Parameters
+        ----------
+        stage : {'localize', 'plan', 'prepare', 'solve', 'collect'}
+
+        Returns
+        -------
+        dict
+            Field names and values (JSON types).
+        """
+        _choice("stage", stage, _SILO_STAGES)
+        return {n: getattr(self, n) for n in _STAGE_FIELDS[stage]}
+
+    def to_matlab(
+        self,
+        num_channels: int,
+        align_hz: float,
+        n_workers: int = 1,
+        start_time: str = "",
+        end_time: str = "",
+        save_subproblems_dir: str = "",
+    ) -> dict:
+        """The ``params`` struct that GIAnT-MATLAB's SILo saves.
+
+        Names, values and classes as in ``experiment_summary.h5``'s
+        ``/params`` (and the trial table's
+        ``source_extraction/analysis_params``), including the fields that
+        SILo and ``setParamsExtractTrial`` derive (filters, kernels,
+        windows in frames). Numbers are doubles, logicals ``np.bool_``
+        (saved as int8), strings ``str``; arrays are in MATLAB's
+        orientation. A setting without a MATLAB name is added (in
+        camelCase) when it differs from MATLAB's algorithm, so that a run
+        with MATLAB's algorithm has MATLAB's fields exactly. With the
+        defaults that is ``footprintVariance = 'fixed'`` alone.
+
+        Parameters
+        ----------
+        num_channels : int
+            Channels of the recording (``numChannels``).
+        align_hz : float
+            Frame rate of the registered movies (``alignHz``).
+        n_workers : int
+            ``nWorkers`` (recorded).
+        start_time, end_time : str
+            ``startTime`` and ``endTime`` (ISO 8601 with milliseconds and
+            the UTC offset, as MATLAB writes them).
+        save_subproblems_dir : str
+            ``saveSubproblemsDir``.
+
+        Returns
+        -------
+        dict
+        """
+        sp = self.solver_params()
+        out = {
+            "isSLAP2": np.bool_(True),
+            "includeIntegrationROIs": np.bool_(False),
+            "sigma_px": float(self.sigma_px),
+            "nmfIter": float(self.nmf_iter),
+            "dXY": float(self.d_xy),
+            "photonScale": float(self.photon_scale),
+            "lambda": float(self.lam),
+            "phi": float(self.phi),
+            "debiasVariance": self.debias_variance,
+            "denoiseWindow_s": float(self.denoise_window_s),
+            "baselineWindow_Glu_s": float(self.baseline_window_s),
+            "baselineWindow_Ca_s": float(self.baseline_window_ca_s),
+            "activityChannel": float(self.activity_channel),
+            "tau_s": float(self.tau_s),
+            "tau2_s": float(self.tau2_s),
+            "VIF": float(self.vif),
+            "peakMethod": self.peak_method,
+            "peakth": float(self.peak_th),
+            "minPeakDistance": float(self.min_peak_distance),
+            "interTrialAlignment": self.inter_trial_alignment,
+            "alignPatchPx": float(self.align_patch_px),
+            "wmfPeakth": float(self.wmf_peak_th),
+            "wmfDip": float(self.wmf_dip),
+            "wmfDeblendth": float(self.wmf_deblend_th),
+            "minKineticScore": float(self.min_kinetic_score),
+            "nWorkers": float(n_workers),
+            "drawUserRois": np.bool_(self.user_rois),
+            "allowAnnotationGUI": np.bool_(False),
+            "motionThresh": float(self.motion_thresh),
+            "analyzeHz": float(self.analyze_hz),
+            "nanThresh": float(self.nan_thresh),
+            "discardInitial_s": float(self.discard_initial_s),
+            "saveSubproblemsDir": save_subproblems_dir,
+            "minBaseline": float(self.min_baseline),
+            "startTime": start_time,
+            "endTime": end_time,
+            "numChannels": float(num_channels),
+            "alignHz": float(align_hz),
+            "selRadius": float(self.sel_radius),
+            "tau_full": float(sp.tau_frames),
+            "tau2_samps": float(sp.tau2_frames),
+            "baselineWindow_samps": float(sp.baseline_window),
+            "denoiseWindow_samps": float(
+                self.denoise_window_s * self.analyze_hz
+            ),
+            "k": np.asarray(sp.k, dtype=np.float64),
+            "k2": np.asarray(sp.k2, dtype=np.float64),
+            "Hfilter": np.asarray(sp.hfilter, dtype=np.float64),
+            # MATLAB's Bfilter is size x size x 3
+            "Bfilter": np.ascontiguousarray(sp.bfilter.transpose(1, 2, 0)),
+            "validKernel": np.ones((3, 3), dtype=np.bool_),
+        }
+        for name, (key, matlab) in _PYTHON_ONLY.items():
+            value = getattr(self, name)
+            if value == matlab:
+                continue
+            if isinstance(value, bool):
+                out[key] = np.bool_(value)
+            elif isinstance(value, str):
+                out[key] = value
+            else:
+                out[key] = float(value)
+        return out
+
+
+_STAGE_FIELDS = {
+    "localize": (
+        "activity_channel",
+        "tau_s",
+        "sigma_px",
+        "baseline_window_s",
+        "denoise_window_s",
+        "vif",
+        "motion_thresh",
+        "discard_initial_s",
+        "nan_thresh",
+        "peak_th",
+        "min_peak_distance",
+        "localization_baseline",
+        "localization_surround",
+        "localization_null",
+        "localization_null_draws",
+        "localization_null_seed",
+        "localization_null_scale",
+        "localization_variance_floor",
+        "localization_score",
+        "localization_soft_th",
+        "localization_peak_th",
+        "trial_peaks",
+    ),
+    "plan": (
+        "nan_thresh",
+        "inter_trial_alignment",
+        "peak_method",
+        "peak_th",
+        "min_peak_distance",
+        "d_xy",
+        "sigma_px",
+        "user_rois",
+    ),
+    "prepare": (
+        "analyze_hz",
+        "activity_channel",
+        "photon_scale",
+        "baseline_window_s",
+        "nan_thresh",
+    ),
+    "solve": (
+        "analyze_hz",
+        "tau_s",
+        "tau2_s",
+        "sigma_px",
+        "d_xy",
+        "baseline_window_s",
+        "denoise_window_s",
+        "min_baseline",
+        "lam",
+        "phi",
+        "nmf_iter",
+        "photon_scale",
+        "debias_variance",
+        "footprint_variance",
+        "baseline_knot_factor",
+        "baseline_penalty",
+        "min_frames",
+    ),
+    "collect": (
+        "analyze_hz",
+        "activity_channel",
+        "tau_s",
+        "tau2_s",
+        "min_kinetic_score",
+    ),
+}
+
+# settings without a MATLAB name: their names in the saved params, and the
+# value that is MATLAB's algorithm
+_PYTHON_ONLY = {
+    "footprint_variance": ("footprintVariance", "model"),
+    "localization_baseline": ("localizationBaseline", "median"),
+    "localization_surround": ("localizationSurround", True),
+    "localization_null": ("localizationNull", "none"),
+    "localization_null_draws": ("localizationNullDraws", 1),
+    "localization_null_seed": ("localizationNullSeed", 0),
+    "localization_null_scale": ("localizationNullScale", "tail"),
+    "localization_variance_floor": ("localizationVarianceFloor", True),
+    "localization_score": ("localizationScore", "squared_maxima"),
+    "localization_soft_th": ("localizationSoftTh", 2.0),
+    "localization_peak_th": ("localizationPeakth", None),
+    "trial_peaks": ("trialPeaks", True),
+    "baseline_knot_factor": ("baselineKnotFactor", 0.5),
+    "baseline_penalty": ("baselinePenalty", 30.0),
+    "min_frames": ("minFrames", 100),
+}
+
+
+_DEVICE = re.compile(r"cpu|cuda(:\d+)?")
+
+
+@dataclass
+class SiloExecution:
+    """How SILo runs on one machine; never changes the results.
+
+    Attributes
+    ----------
+    workers : int
+        Processes that localize trials at once (each holds one registered
+        trial in memory: a few GB for a 30-s SLAP2 trial).
+    solver_workers : int
+        Processes that solve subproblems at once.
+    solver_threads : int
+        Threads of each solver process (``OMP_NUM_THREADS`` and torch's);
+        with several processes, 4 to 8 each.
+    device : str
+        Torch device of the solver ('cpu', 'cuda', 'cuda:N').
+    dtype : {'float64', 'float32'}
+        Precision of the solver's fits (float64: MATLAB's).
+    batch_bytes : float or None
+        Solve subproblems in padded batches of this size (pays off on a
+        GPU only); None solves them one at a time.
+    loader_device : str
+        Torch device of the trial loader.
+    overwrite : bool
+        Redo units whose outputs exist and were made with the same
+        settings.
+    verbose : bool
+        Print progress messages.
+    """
+
+    workers: int = 6
+    solver_workers: int = 3
+    solver_threads: int = 4
+    device: str = "cpu"
+    dtype: str = "float64"
+    batch_bytes: Optional[float] = None
+    loader_device: str = "cpu"
+    overwrite: bool = False
+    verbose: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate the options."""
+        for name in ("workers", "solver_workers", "solver_threads"):
+            _positive(name, getattr(self, name), integer=True)
+        for name in ("device", "loader_device"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not _DEVICE.fullmatch(value):
+                raise ValueError(
+                    f"{name} must be 'cpu', 'cuda' or 'cuda:N', not {value!r}"
+                )
+        _choice("dtype", self.dtype, ("float64", "float32"))
+        if self.batch_bytes is not None:
+            _positive("batch_bytes", self.batch_bytes)
+        for name in ("overwrite", "verbose"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a bool")
+
+    def solver_options(self):
+        """The solver's options
+        (:class:`~giant_python.extraction.raster.solver.SolverOptions`)."""
+        from ..extraction.raster.solver import SolverOptions
+
+        return SolverOptions(
+            device=self.device, dtype=self.dtype, batch_bytes=self.batch_bytes
+        )
+
+
+SiloParamsInput = Optional[Union[SiloParams, dict]]
+SiloExecutionInput = Optional[Union[SiloExecution, dict]]
+
+
+def resolve_silo_options(
+    params: SiloParamsInput = None,
+    execution: SiloExecutionInput = None,
+) -> tuple[SiloParams, SiloExecution]:
+    """Resolve SILo's science and execution options.
+
+    Parameters
+    ----------
+    params : SiloParams, dict or None
+        Scientific settings; unknown fields raise ``TypeError``.
+    execution : SiloExecution, dict or None
+        Run options; unknown fields raise ``TypeError``.
+
+    Returns
+    -------
+    tuple of SiloParams, SiloExecution
+        Fresh validated objects.
+    """
+    return (
+        SiloParams(**_option_values(params, SiloParams)),
+        SiloExecution(**_option_values(execution, SiloExecution)),
     )

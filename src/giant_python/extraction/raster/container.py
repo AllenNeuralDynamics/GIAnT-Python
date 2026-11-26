@@ -56,7 +56,18 @@ import h5py
 import numpy as np
 
 from ... import __version__
+from .solver_setup import Subproblem
 from .trial_data import TrialData
+
+__all__ = [
+    "Container",
+    "Subproblem",
+    "crop_of",
+    "read_container",
+    "read_subproblem",
+    "settings_hash",
+    "write_container",
+]
 
 FORMAT = "giant-silo-container"
 FORMAT_VERSION = 1
@@ -101,40 +112,6 @@ def settings_hash(params) -> str:
     record = {"format_version": FORMAT_VERSION, "params": _jsonable(params)}
     text = json.dumps(record, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-@dataclass
-class Subproblem:
-    """One subproblem's inputs, in the convention shared by the SILo stages.
-
-    Attributes
-    ----------
-    y : ndarray of float32
-        ``(channels, pixels, frames)`` data in counts / photonScale, channel
-        0 the activity channel.
-    finv : ndarray
-        ``(pixels, frames)`` variance multiplier.
-    sel : ndarray of bool
-        The subproblem's pixels in its crop of the consensus map; its true
-        elements in column-major order are the rows of ``y``.
-    sources_rc : ndarray of int
-        ``(n, 2)`` zero-based row and column of its sources in the crop.
-    pixels : ndarray of int
-        Its pixels, as indices into the trial's selected-pixel list.
-    sources : ndarray of int
-        Its sources, as indices into the path's source list.
-    row0, col0 : int
-        Zero-based origin of the crop in the consensus frame.
-    """
-
-    y: np.ndarray
-    finv: np.ndarray
-    sel: np.ndarray
-    sources_rc: np.ndarray
-    pixels: np.ndarray
-    sources: np.ndarray
-    row0: int
-    col0: int
 
 
 @dataclass
@@ -254,8 +231,8 @@ def _subproblem(y, finv, pixel_rc, sources_rc, pixels, sources, crop):
         finv=finv,
         sel=sel,
         sources_rc=sources_rc[sources] - np.array([row0, col0]),
-        pixels=np.asarray(pixels),
-        sources=np.asarray(sources),
+        pixels=np.asarray(pixels, dtype=np.int64),
+        sources=np.asarray(sources, dtype=np.int64),
         row0=row0,
         col0=col0,
     )
