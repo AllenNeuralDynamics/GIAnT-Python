@@ -438,3 +438,25 @@ def test_halves_do_not_shrink_noiseless_factors():
     for finv in (np.ones_like(q), np.ones_like(q) * np.array([1.0, 4.0])):
         c, rec = shared_time_course(y, q, np.zeros_like(q), finv, halves)
         np.testing.assert_allclose(c, [0.8, 1.2])
+
+
+def test_halves_use_the_same_frames_for_both_variances():
+    """When one half is filled in during the quiet part of a shared
+    change, the shared variance does not exceed the factors' variance on
+    the same frames, and the change is followed."""
+    rng = np.random.default_rng(16)
+    n_px, n_t = 200, 3000
+    q = np.full((n_px, n_t), 3.0)
+    finv = np.ones((n_px, n_t))
+    half_a = np.arange(n_px) < 90
+    half_b = np.arange(n_px) >= 110
+    true = 1 + 0.15 * np.sin(np.arange(n_t) / 7.0)
+    quiet = true < 1
+    finv[np.ix_(half_a, quiet)] = 1000.0
+    y = rng.poisson(q * true[None]).astype(np.float64)
+    y[np.ix_(half_a, quiet)] = 3.0
+    c, rec = shared_time_course(y, q, np.zeros_like(q), finv, (half_a, half_b))
+    assert 0 < rec["s2"] <= rec["var_used"]
+    # on these frames the change is half a sine, a smaller variance
+    assert rec["s2"] == pytest.approx(np.var(true[~quiet]), rel=0.4)
+    assert _corr(c[~quiet], true[~quiet]) > 0.6

@@ -811,14 +811,16 @@ def shared_time_course(
     if halves is None:
         s2 = max(0.0, spread - float(var_t[rel].mean()))
     else:
-        s2, cov = _shared_variance_halves(w, r, q, rel, halves)
+        s2, cov, both = _shared_variance_halves(w, r, q, rel, halves)
         record["cov_halves"] = cov
         # the rest of the factors' variance is their sampling variance,
-        # apportioned to the frames by their precision; centred on the
-        # arithmetic mean, as the halves' covariance
-        sample_var = float(np.var(raw[rel], ddof=1)) if rel.sum() > 1 else 0.0
+        # apportioned to the frames by their precision; over the frames of
+        # the halves' covariance and centred as it is
+        use = both if both.sum() > 1 else rel
+        sample_var = float(np.var(raw[use], ddof=1)) if use.sum() > 1 else 0.0
+        record["var_used"] = sample_var
         noise = max(sample_var - s2, 0.0)
-        var_t = noise * inv / float(inv[rel].mean())
+        var_t = noise * inv / float(inv[use].mean())
     lam = np.zeros(n_t)
     if s2 > 0:
         lam[ok] = s2 / (s2 + var_t[ok])
@@ -830,12 +832,14 @@ def shared_time_course(
 def _shared_variance_halves(w, r, q, rel, halves):
     """Covariance of two halves' factors over the reliable frames (>= 0).
 
-    Returns ``(s2, cov)``; ``s2`` is 0 when a half has fewer than
-    ``MIN_HALF`` pixels or no reliable frame has a factor in both.
+    Returns ``(s2, cov, both)``: ``both`` are the frames reliable for the
+    whole set and for each half, over which the covariance is taken.
+    ``s2`` is 0 when a half has fewer than ``MIN_HALF`` pixels or fewer
+    than two frames are reliable in both.
     """
     a, b = (np.asarray(x, dtype=bool) for x in halves)
     if a.sum() < MIN_HALF or b.sum() < MIN_HALF:
-        return 0.0, float("nan")
+        return 0.0, float("nan"), np.zeros_like(rel)
     fac = []
     both = rel.copy()
     for m in (a, b):
@@ -846,12 +850,12 @@ def _shared_variance_halves(w, r, q, rel, halves):
         # in where the whole is not)
         both &= reliable_frames(den)
     if both.sum() < 2:
-        return 0.0, float("nan")
+        return 0.0, float("nan"), both
     ca = fac[0][0][both] / fac[0][1][both]
     cb = fac[1][0][both] / fac[1][1][both]
     # sample covariance, normalized as the factors' variance
     cov = float(((ca - ca.mean()) * (cb - cb.mean())).sum() / (both.sum() - 1))
-    return max(cov, 0.0), cov
+    return max(cov, 0.0), cov, both
 
 
 def reliable_frames(den: np.ndarray) -> np.ndarray:
