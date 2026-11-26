@@ -33,8 +33,12 @@ from typing import Optional
 import h5py
 import numpy as np
 
-STAGE_VERSION = 1
-"""Changes when a stage's outputs change for the same settings."""
+STAGE_VERSION = 2
+"""Changes when a stage's outputs change for the same settings.
+
+2: pool workers are spawned on every platform, so on Linux their BLAS
+thread counts are the ones asked for (forked workers used all cores).
+"""
 
 NO_DATA = "none of the selected pixels has a sample"
 """The trial loader's error for a trial without data (the trial is skipped)."""

@@ -28,11 +28,17 @@ or, from Python:
    from giant_python.models.params import SiloExecution, SiloParams
    from giant_python.pipeline.silo import run_silo
 
-   run_silo(
-       "path/to/trial_table.h5",
-       SiloParams(),  # MATLAB's SILo defaults for SLAP2
-       SiloExecution(workers=5, solver_workers=4, solver_threads=4),
-   )
+   if __name__ == "__main__":
+       run_silo(
+           "path/to/trial_table.h5",
+           SiloParams(),  # the SLAP2 defaults (see Settings)
+           SiloExecution(workers=5, solver_workers=4, solver_threads=4),
+       )
+
+The worker processes are spawned (a fresh interpreter each, on every
+platform, so that their thread counts apply), and a spawned worker imports
+the calling script: in a script, call ``run_silo`` under
+``if __name__ == "__main__":`` as above.
 
 Settings
 --------
