@@ -16,6 +16,15 @@ so that they can be scattered over machines:
 Scientific settings are :class:`~giant_python.models.params.SiloParams`
 fields: a few have their own options, any can be set with ``--set
 name=value`` or a JSON file (``--params``).
+
+The baseline: ``--baseline network`` localizes and extracts with the F0
+network's baselines (``*_BASELINE-80Hz.h5``) from ``--baseline-dir``, or
+predicts the missing ones with ``--f0-ckpt PATH`` (``slap2-f0
+predict-registered``; GPU). It is the default when ``--baseline-dir`` or
+``--f0-ckpt`` is given, the moving median (MATLAB's) otherwise. Staged runs
+give every stage the same settings: the stages without those options
+(``silo-plan``, ``silo-dispatch``, ``silo-collect``) need ``--baseline
+network`` too, and refuse to run on files made with another baseline.
 """
 
 from __future__ import annotations
@@ -83,10 +92,21 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         help="One-based activity channel (default 1).",
     )
     g.add_argument(
+        "--baseline",
+        choices=("median", "network"),
+        default=None,
+        help="Baseline of the run (SiloParams.baseline_source): MATLAB's "
+        "moving median and baseline fit, or the F0 network's baselines "
+        "(no surround, bootstrap null, peak-th 8, network baseline times "
+        "one gain per pixel). Default: network with --baseline-dir or "
+        "--f0-ckpt, median otherwise.",
+    )
+    g.add_argument(
         "--peak-th",
         type=float,
         default=None,
-        help="Seed threshold, robust SDs (MATLAB peakth; default 3).",
+        help="Seed threshold, robust SDs (MATLAB peakth; default 3, 8 with "
+        "the network's baseline).",
     )
     g.add_argument(
         "--min-kinetic-score",
@@ -105,8 +125,8 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         "--localization-baseline",
         choices=("median", "network"),
         default=None,
-        help="Localization baseline: MATLAB's moving median (default) or "
-        "the F0 network's *_BASELINE-80Hz.h5 files (--baseline-dir).",
+        help="Localization baseline alone: MATLAB's moving median or the F0 "
+        "network's *_BASELINE-80Hz.h5 files (default: that of --baseline).",
     )
     g.add_argument(
         "--no-trial-peaks",
@@ -146,6 +166,37 @@ def _add_session(parser: argparse.ArgumentParser) -> None:
         "--annotations",
         default=None,
         help="annotations.h5 (default <savedr>/annotations/annotations.h5).",
+    )
+
+
+def _add_baseline_files(parser: argparse.ArgumentParser, predict: bool):
+    """The network's baselines: their folder and, if ``predict``, the
+    prediction of missing ones."""
+    g = parser.add_argument_group("the F0 network's baselines")
+    g.add_argument(
+        "--baseline-dir",
+        default=None,
+        help="Folder of the network's *_BASELINE-80Hz.h5 files (default "
+        "<work-dir>/baselines).",
+    )
+    if not predict:
+        return
+    g.add_argument(
+        "--f0-ckpt",
+        default=None,
+        help="slap2-f0 checkpoint: predict the missing baselines with "
+        "'slap2-f0 predict-registered' (needs slap2-F0-network installed).",
+    )
+    g.add_argument(
+        "--f0-device",
+        default="cuda",
+        help="Device of the prediction: cuda (default), cpu (many times "
+        "slower), auto.",
+    )
+    g.add_argument(
+        "--f0-command",
+        default=None,
+        help="The slap2-f0 executable (default: slap2-f0 on the PATH).",
     )
 
 
@@ -221,11 +272,7 @@ def add_silo_commands(subparsers) -> None:
         default=None,
         help="Seeds file used instead of the plan's seeding (parity runs).",
     )
-    run.add_argument(
-        "--baseline-dir",
-        default=None,
-        help="Folder of the network's *_BASELINE-80Hz.h5 files.",
-    )
+    _add_baseline_files(run, predict=True)
     run.add_argument(
         "--save-subproblems",
         default=None,
@@ -251,11 +298,7 @@ def add_silo_commands(subparsers) -> None:
     _add_science(loc)
     _add_execution(loc, solver=False)
     _add_units(loc)
-    loc.add_argument(
-        "--baseline-dir",
-        default=None,
-        help="Folder of the network's *_BASELINE-80Hz.h5 files.",
-    )
+    _add_baseline_files(loc, predict=True)
 
     pl = subparsers.add_parser(
         "silo-plan", help="SILo stage: one extraction plan per path."
@@ -277,6 +320,7 @@ def add_silo_commands(subparsers) -> None:
     _add_science(prep)
     _add_execution(prep, solver=False)
     _add_units(prep)
+    _add_baseline_files(prep, predict=False)
 
     disp = subparsers.add_parser(
         "silo-dispatch", help="SILo stage: solver job files."
@@ -322,6 +366,7 @@ def add_silo_commands(subparsers) -> None:
         action="store_true",
         help="Leave the trial table's source_extraction fields as they are.",
     )
+    _add_baseline_files(col, predict=False)
 
 
 def _add_units(parser: argparse.ArgumentParser) -> None:
@@ -366,8 +411,13 @@ def params_from_args(args: argparse.Namespace) -> SiloParams:
         v = getattr(args, name, None)
         if v is not None:
             values[name] = v
+    if getattr(args, "baseline", None) is not None:
+        values["baseline_source"] = args.baseline
     if getattr(args, "no_trial_peaks", False):
         values["trial_peaks"] = False
+    if getattr(args, "baseline_dir", None) or getattr(args, "f0_ckpt", None):
+        # the network's baselines given: they are the default
+        values.setdefault("baseline_source", "network")
     known = {f.name for f in fields(SiloParams)}
     unknown = set(values) - known
     if unknown:
@@ -456,20 +506,31 @@ def run_silo_command(args: argparse.Namespace) -> int:  # noqa: C901
                 save_subproblems=args.save_subproblems,
                 update_table=not args.no_table_update,
                 peak_workers=args.peak_workers,
+                f0_ckpt=args.f0_ckpt,
+                f0_device=args.f0_device,
+                f0_command=args.f0_command,
             )
         )
         return 0
     session = _session(args)
     if args.command == "silo-localize":
-        _print(
-            silo.localize(
+        units = _selected_units(session, args)
+        report = {}
+        if args.f0_ckpt and params.localization_baseline == "network":
+            from .pipeline.silo_baseline import predict_baselines
+
+            report["predict"] = predict_baselines(
                 session,
                 params,
-                ex,
-                _selected_units(session, args),
-                args.baseline_dir,
+                silo.baseline_folder(session, args.baseline_dir),
+                args.f0_ckpt,
+                units,
+                args.f0_device,
+                args.f0_command,
+                ex.verbose,
             )
-        )
+        done = silo.localize(session, params, ex, units, args.baseline_dir)
+        _print({**report, "localize": done} if report else done)
     elif args.command == "silo-plan":
         from .extraction.raster.stage_files import read_seeds
 
@@ -486,7 +547,13 @@ def run_silo_command(args: argparse.Namespace) -> int:  # noqa: C901
         )
     elif args.command == "silo-prepare":
         _print(
-            silo.prepare(session, params, ex, _selected_units(session, args))
+            silo.prepare(
+                session,
+                params,
+                ex,
+                _selected_units(session, args),
+                args.baseline_dir,
+            )
         )
     elif args.command == "silo-dispatch":
         files = silo_solve.dispatch(session, params, args.machines, ex)
@@ -494,7 +561,11 @@ def run_silo_command(args: argparse.Namespace) -> int:  # noqa: C901
     elif args.command == "silo-collect":
         _print(
             silo_collect.collect(
-                session, params, ex, update_table=not args.no_table_update
+                session,
+                params,
+                ex,
+                update_table=not args.no_table_update,
+                baseline_dir=args.baseline_dir,
             )
         )
     return 0

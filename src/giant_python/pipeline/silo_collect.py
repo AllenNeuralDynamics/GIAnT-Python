@@ -6,6 +6,13 @@ kinetics test, and writes ``experiment_summary.h5`` and
 ``per_trial_summary.h5`` in GIAnT-MATLAB's schema, then the trial table's
 ``source_extraction`` fields (``analysis_params``, ``fn_raw``), as
 ``SILo.m`` does at its end.
+
+With the network's baseline, ``experiment_summary.h5`` also gets the
+attributes ``baseline_source``, ``baseline_mode``, ``localization_baseline``
+and ``network_baseline`` (JSON: per trial-path, the baseline file and the
+network's checkpoint that extraction used); the ``params`` struct records
+the settings that differ from MATLAB's (``baselineSource``,
+``baselineMode``, ``peakth``, ``localizationSurround``, ...).
 """
 
 from __future__ import annotations
@@ -37,14 +44,25 @@ def _results_files(session: SiloSession, d: int, t: int) -> list:
     )
 
 
-def _container_hash(session, params, plan_hash, d, t) -> Optional[str]:
+def _container_hash(
+    session, params, plan_hash, d, t, baseline_dir=None
+) -> Optional[str]:
     """The prepare hash of trial-path ``(d, t)`` from its current inputs;
-    None if its raw recording is not here (a collect machine without the
-    raw data: results are then checked against plan and settings only)."""
-    from .silo import _prepare_hash
+    None if its raw recording or its network baseline is not here (a
+    collect machine without them: results are then checked against plan
+    and settings only)."""
+    from .silo import _baseline_file, _prepare_hash, baseline_folder
 
+    base = None
+    if params.baseline_mode != "fit":
+        movie = session.movie(d, t)
+        if movie is None:
+            return None
+        base = _baseline_file(baseline_folder(session, baseline_dir), movie)
+        if not base.exists():
+            return None
     try:
-        return _prepare_hash(session, params, plan_hash, d, t)
+        return _prepare_hash(session, params, plan_hash, d, t, base)
     except OSError:
         return None
 
@@ -91,7 +109,7 @@ def _outcome_loader(files: list, solver_params):
 
 
 def path_result(
-    session: SiloSession, params: SiloParams, d: int
+    session: SiloSession, params: SiloParams, d: int, baseline_dir=None
 ) -> Optional[object]:
     """Everything the summaries need of path ``d``, read from its files.
 
@@ -110,11 +128,17 @@ def path_result(
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.stage_files import read_localization
     from ..extraction.raster.summary import PathResult, read_alignment_record
-    from .silo import read_user_rois
+    from .silo import _check_same, _recorded, read_user_rois
 
     pf = session.plan_file(d)
     if not pf.exists():
         return None
+    _check_same(
+        f"the plan {pf.name}",
+        _recorded(pf, "baseline_source"),
+        params.baseline_source,
+        "baseline_source",
+    )
     plan = read_plan(pf)
     labels, masks = read_user_rois(pf)
     sp = params.solver_params()
@@ -136,7 +160,7 @@ def path_result(
             _results_files(session, d, t),
             plan_hash,
             science,
-            _container_hash(session, params, plan_hash, d, t),
+            _container_hash(session, params, plan_hash, d, t, baseline_dir),
         )
         if not files:
             raise FileNotFoundError(
@@ -182,6 +206,7 @@ def collect(
     update_table: bool = True,
     start_time: Optional[str] = None,
     save_subproblems_dir: str = "",
+    baseline_dir=None,
 ) -> dict:
     """Stage ``collect``: the summaries and the trial table's fields.
 
@@ -197,6 +222,10 @@ def collect(
         ``startTime`` to record (default: now).
     save_subproblems_dir : str
         ``saveSubproblemsDir`` to record.
+    baseline_dir : str or Path, optional
+        Folder of the network's baselines (default: the session's), to
+        check the results against them; without the files there the
+        results are checked against plan and settings only.
 
     Returns
     -------
@@ -209,7 +238,10 @@ def collect(
     ex = execution or SiloExecution()
     start_time = start_time or now()
     t0 = time.perf_counter()
-    results = [path_result(session, params, d) for d in range(session.n_paths)]
+    results = [
+        path_result(session, params, d, baseline_dir)
+        for d in range(session.n_paths)
+    ]
     kept = {}
     for d, r in enumerate(results):
         if r is None:
@@ -238,11 +270,23 @@ def collect(
         session.num_channels,
         params.activity_channel,
     )
+    used = network_baselines(session)
+    if params.needs_network_baseline or params.baseline_source != "median":
+        # MATLAB's algorithm leaves the file as MATLAB writes it
+        with h5py.File(session.out_dir / "experiment_summary.h5", "a") as f:
+            f.attrs["baseline_source"] = params.baseline_source
+            f.attrs["baseline_mode"] = params.baseline_mode
+            f.attrs["localization_baseline"] = params.localization_baseline
+            if used:
+                f.attrs["network_baseline"] = json.dumps(used, sort_keys=True)
     t2 = time.perf_counter()
     if update_table:
         update_trial_table(session, pm)
     record = {
         "created": pm["endTime"],
+        "baseline_source": params.baseline_source,
+        "baseline_mode": params.baseline_mode,
+        "network_baseline": used,
         "kept_sources": kept,
         "kinetics_seconds": t1 - t0,
         "write_seconds": t2 - t1,
@@ -253,6 +297,23 @@ def collect(
     tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
     os.replace(tmp, path)
     return record
+
+
+def network_baselines(session: SiloSession) -> dict:
+    """The network baselines the results were extracted with: per
+    trial-path (``path<d>_trial<tttt>``), the identity recorded in its
+    results files (empty without the network)."""
+    out = {}
+    for d in range(session.n_paths):
+        for t in range(session.n_trials):
+            for f in _results_files(session, d, t):
+                value = attr(f, "network_baseline")
+                if value:
+                    if isinstance(value, bytes):
+                        value = value.decode()
+                    out[f"path{d + 1}_trial{t + 1:04d}"] = json.loads(value)
+                    break
+    return out
 
 
 def read_kept(path) -> dict:
