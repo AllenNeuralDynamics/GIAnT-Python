@@ -720,3 +720,18 @@ def test_sizes_are_peaks_in_frames(online, injected):
                     ratios.append(np.nanmax(tf[j, sel]) / a)
     assert len(ratios) > 20
     assert np.mean(ratios) == pytest.approx(1.0, abs=0.06)
+
+
+def test_refuses_to_write_into_the_original(online, registered, monkeypatch):
+    """The copy's folder cannot be the original's data folder."""
+    layout, _, _ = online
+    src = Path(layout.files[0])
+    out = src.parent.parent / "same"
+    with pytest.raises(ValueError, match="original's data folder"):
+        run_injection(
+            online,
+            registered[True],
+            out,
+            monkeypatch,
+            data_dir=out / "raw",
+        )

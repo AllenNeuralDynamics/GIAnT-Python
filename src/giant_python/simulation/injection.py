@@ -1974,6 +1974,11 @@ def inject_session(
     adata = np.atleast_2d(
         np.asarray(table["motion_correction"]["fn_adata"], dtype=object)
     )
+    if (out_dir / "raw").resolve() == data_dir.resolve():
+        raise ValueError(
+            f"{out_dir / 'raw'} is the original's data folder; the copy "
+            "must go elsewhere"
+        )
     base = {
         "settings": settings,
         "placement": placement or PlacementSettings(),
