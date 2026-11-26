@@ -1,9 +1,9 @@
-function make_kinetics_fixture(out)
+function make_matlab_kinetics(out)
 % Reference values of islocalmax and sourceKinetics/rejectFastSources for
 % GIAnT-Python's tests (GIAnT-MATLAB main 5a0673b, read-only).
 % Writes a v7.3 .mat; make_matlab_kinetics_h5.py turns it into the test's
 % matlab_kinetics.h5:
-%   make_kinetics_fixture('kinetics_fixture.mat')   (dependencies on the path)
+%   make_matlab_kinetics('kinetics_fixture.mat')   (GIAnT-MATLAB dependencies on the path)
 %   python make_matlab_kinetics_h5.py kinetics_fixture.mat matlab_kinetics.h5
 rng(7);
 % islocalmax with plateaus and MinSeparation
