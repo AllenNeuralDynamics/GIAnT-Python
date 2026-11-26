@@ -360,6 +360,11 @@ def _write_path(  # noqa: C901
             if rec.roi_fsvd.size:
                 rfs[:, ordered[: rec.roi_fsvd.shape[1]], idx] = rec.roi_fsvd
         act = out.activity
+        if act is None and temporal:
+            # a trial loaded but not extracted: NaN, as MATLAB's arrays
+            slab = np.full((n, num_channels, n_kept), np.nan)
+            for key in temporal:
+                temporal[key][idx] = slab
         if act is not None and write_sources:
             if temporal:
                 for key, arr in (

@@ -355,6 +355,30 @@ def test_short_trial_and_no_peaks(tmp_path):
     assert "sources" not in p
 
 
+def test_trial_without_sources_is_nan(tmp_path):
+    """Frames of a trial loaded but not extracted are NaN in the sources'
+    traces when other trials have sources."""
+    plan = make_plan()
+    result = PathResult(
+        plan=plan,
+        trials=[
+            None,
+            outcome(1, plan.n_pixels, extracted=False),
+            outcome(2, plan.n_pixels),
+        ],
+        alignment=[None, alignment(1), alignment(2)],
+    )
+    kinetics_test(result, 0.024, 200.0, 0.0)
+    exp, per = tmp_path / "e.h5", tmp_path / "p.h5"
+    write_summaries(exp, per, [result], {"x": 1.0}, N_TRIALS, C, 1)
+    temporal = load_struct_h5(exp)["Path1"]["sources"]["temporal"]
+    for key in ("dF_ls", "dF_denoised", "events", "F0"):
+        assert np.isnan(temporal[key][:, :, :30]).all()
+        assert not np.isnan(temporal[key][:, 0, 30:]).all()
+    snr = load_struct_h5(per)["Path1"]["sources"]["temporal"]["per_trial_SNR"]
+    assert np.isnan(snr[1]).all()
+
+
 def test_nearest_interpolation():
     """MATLAB's interp1 'nearest' with 'extrap': ties go right."""
     ds = np.array([1.0, 5.0, 9.0])

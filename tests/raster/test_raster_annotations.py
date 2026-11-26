@@ -87,6 +87,7 @@ def test_read_annotations(tmp_path, zero_indexed):
     assert a.rois[0].radius == 1.5
     assert a.rois[0].is_soma and not a.rois[1].is_soma
     assert paths[1].fn == "" and paths[1].rois == []
+    assert [a.path for a in paths] == [1, 2]
 
 
 def test_annotation_trial():
@@ -139,3 +140,20 @@ def test_soma_mask_and_session(tmp_path):
     write_annotations(path)
     got = session_annotations(path, 3)
     assert isinstance(got[0], PathAnnotations) and got[2] is None
+    # paths are placed by their numbers, not by their order in the file
+    with h5py.File(path, "a") as f:
+        f.move("Path1", "Path3")
+    got = session_annotations(path, 3)
+    assert got[0] is None and got[1].path == 2 and got[2].path == 3
+
+
+def test_text_is_utf16(tmp_path):
+    """MATLAB stores text as UTF-16 code units, surrogate pairs included."""
+    label = "soma é😀"
+    codes = np.frombuffer(label.encode("utf-16-le"), dtype="<u2")
+    with h5py.File(tmp_path / "a.h5", "w") as f:
+        f.create_dataset("Path1/n_rois", data=np.uint32([[1]]))
+        f.create_dataset("Path1/roi_001/label", data=codes[:, None])
+        f.create_dataset("Path1/roi_001/mask", data=np.ones((2, 2), np.uint8))
+    roi = read_annotations(tmp_path / "a.h5")[0].rois[0]
+    assert roi.label == label
