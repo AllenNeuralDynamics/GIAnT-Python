@@ -363,3 +363,13 @@ def test_valid_kernel_from_matlab():
         f.create_group("odd")["validKernel"] = np.ones((3, 2), np.uint8)
         with pytest.raises(ValueError, match="validKernel"):
             params_from_matlab(f["odd"])
+        # entries other than 1 are rejected, not read as a full support
+        for name, value in (("twos", 2.0), ("minus", -1.0), ("nan", np.nan)):
+            f.create_group(name)["validKernel"] = np.full((5, 5), value)
+            with pytest.raises(ValueError, match="square of ones"):
+                params_from_matlab(f[name])
+        f.create_group("plus")["validKernel"] = np.array(
+            [[0, 1, 0], [1, 1, 1], [0, 1, 0]], np.uint8
+        )
+        with pytest.raises(ValueError, match="5 ones"):
+            params_from_matlab(f["plus"])

@@ -489,10 +489,11 @@ def _mat_valid_kernel(g: h5py.Group, default: int) -> int:
     if "validKernel" not in g or _is_empty(g["validKernel"]):
         return default
     k = np.asarray(g["validKernel"])
-    if k.ndim != 2 or k.shape[0] != k.shape[1] or not k.astype(bool).all():
+    ones = k == 1  # not astype(bool): 2, -1 or NaN are not ones
+    if k.ndim != 2 or k.shape[0] != k.shape[1] or not ones.all():
         raise ValueError(
             f"validKernel must be a square of ones; it is {k.shape} with "
-            f"{int(k.astype(bool).sum())} ones"
+            f"{int(ones.sum())} ones"
         )
     return int(k.shape[0])
 
