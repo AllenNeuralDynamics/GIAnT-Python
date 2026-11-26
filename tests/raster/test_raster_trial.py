@@ -1,13 +1,19 @@
 """Tests of loading a registered SLAP2 trial for raster localization."""
 
+from pathlib import Path
+
 import h5py
 import numpy as np
 import pytest
 
 from giant_python.extraction.raster.trial import (
     discard_frames,
+    half_mean_images,
     load_registered_trial,
+    trial_halves,
 )
+
+PLAN_FIXTURE = Path(__file__).parent / "data" / "matlab_plan.h5"
 
 
 def test_discard_frames_around_a_motion_event():
@@ -163,3 +169,59 @@ def test_page_count_not_a_multiple_of_channels(tmp_path):
             tmp_path, f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif", 2
         )
     assert tr.movie.shape == (n, rows, cols)
+
+
+def test_trial_halves_match_matlab():
+    """trialHalves.m of GIAnT-MATLAB: alternating blocks, then the larger
+    half's last frames move over until the halves are equal to a frame."""
+    cases = {
+        (10, 3): [1, 1, 1, 2, 2, 2, 1, 1, 2, 2],
+        (7, 2): [1, 1, 2, 2, 1, 1, 2],
+        (12, 4): [1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2],
+        (9, 40): [1, 1, 1, 1, 1, 2, 2, 2, 2],
+        (5, 1): [1, 2, 1, 2, 1],
+        (1, 3): [1],
+        (23, 5): [1] * 5 + [2] * 5 + [1] * 5 + [2] * 5 + [1, 1, 2],
+    }
+    for (n, block), matlab in cases.items():
+        half = trial_halves(n, block)
+        np.testing.assert_array_equal(half + 1, matlab)
+        assert abs(int((half == 0).sum()) - int((half == 1).sum())) <= 1
+
+
+def test_half_mean_images_match_matlab():
+    """The half-trial mean images of MATLAB's loadAndProcessTrialAsync on
+    a small movie with missing pixels (exactly: sums of whole counts)."""
+    with h5py.File(PLAN_FIXTURE, "r") as f:
+        g = f["halves"]
+        stack, half, ref = g["stack"][()], g["half"][()], g["half_ims"][()]
+        nan_thresh, block = g.attrs["nanThresh"], int(g.attrs["block_len"])
+    np.testing.assert_array_equal(trial_halves(stack.shape[0], block), half)
+    out = half_mean_images(stack, half, nan_thresh)
+    assert out.dtype == np.float32 and np.isnan(ref).any()
+    np.testing.assert_array_equal(out, ref)
+
+
+def test_load_registered_trial_half_images(tmp_path):
+    """Half images are returned only when asked for; their mean is the
+    trial's mean image where nothing is missing."""
+    n, rows, cols = 120, 5, 6
+    rng = np.random.default_rng(3)
+    data = rng.poisson(20, (2 * n, cols, rows)).astype(np.float32)
+    stem = "E1T1DMD1"
+    name = f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.h5"
+    with h5py.File(tmp_path / name, "w") as f:
+        f["data"] = data
+    with h5py.File(tmp_path / f"{stem}_ALIGNMENTDATA.h5", "w") as f:
+        f["alignHz"] = np.array([[80.0]])
+        f["recNegErr"] = np.full((1, n), -0.5)
+    assert load_registered_trial(tmp_path, name, 2).half_ims is None
+    tr = load_registered_trial(tmp_path, name, 2, half_ims=True)
+    assert tr.half_ims.shape == (2, rows, cols, 2)
+    # 40-frame blocks of 120 frames: the halves hold 60 frames each
+    np.testing.assert_allclose(tr.half_ims.mean(axis=0), tr.mean_im, rtol=1e-6)
+    stack = data.transpose(0, 2, 1).reshape(n, 2, rows, cols)
+    first = np.r_[0:40, 80:100]
+    np.testing.assert_allclose(
+        tr.half_ims[0, :, :, 1], stack[first, 1].mean(axis=0), rtol=1e-6
+    )
