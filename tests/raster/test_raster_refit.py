@@ -263,3 +263,30 @@ def test_refit_test_with_a_given_baseline():
     np.testing.assert_allclose(tr.f0, source_f0(tr.h, tr.b))
     with pytest.raises(ValueError, match="fits for"):
         refit_test([sub], PARAMS, opt, fits=[fit, fit])
+
+
+def test_edge_error_scales_overlapping_ends_once():
+    """In a trial shorter than both windows, every frame is scaled once."""
+    sub, truth = _crop_truth(n_t=10)
+    b = edge_error(0.1, 6)(truth, sub, np.random.default_rng(0))
+    np.testing.assert_allclose(b, 1.1 * truth.b)
+
+
+def test_refit_keeps_the_subproblems_own_baseline():
+    """Without a given_baseline the refit keeps each subproblem's own
+    external baseline, so network modes can be refitted."""
+    with h5py.File(SUBPROBLEM, "r") as f:
+        sub = Subproblem(
+            y=f["in/y"][()][:1].astype(np.float64),
+            finv=f["in/finv"][()].astype(np.float64),
+            sel=f["in/sel"][()].astype(bool),
+            sources_rc=f["in/sources_rc"][()],
+        )
+    opt = SolverOptions(keep_baseline=True)
+    fit = solve_subproblem(sub, PARAMS, opt)
+    own = replace(sub, baseline=fit.baseline[0], _coords=None)
+    gain = replace(PARAMS, baseline_mode="gain")
+    r = refit_test([own], gain, opt, seed=1)
+    assert r.summary["n_sources"] == 2
+    with pytest.raises(ValueError, match="Subproblem.baseline"):
+        refit_test([sub], gain, opt, seed=1)

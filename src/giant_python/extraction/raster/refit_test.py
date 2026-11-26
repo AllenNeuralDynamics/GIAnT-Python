@@ -347,8 +347,9 @@ def refit_test(
         refit gets (``Subproblem.baseline``, for a ``baseline_mode`` of
         ``refit_params`` that uses one), e.g. the true baseline with an
         error (:func:`scale_error` etc.); its generator is
-        ``default_rng((seed + i, 2))``. Default with ``truth_baseline``:
-        the fit's baseline, without the change.
+        ``default_rng((seed + i, 2))``. Default: each subproblem's own
+        ``baseline`` (None if it has none); with ``truth_baseline``, the
+        fit's baseline, without the change.
     """
     opt = replace(options or SolverOptions(), keep_baseline=True)
     refit_params = refit_params or params
@@ -371,7 +372,8 @@ def refit_test(
     ]
     if given_baseline is None and truth_baseline is not None:
         given_baseline = fit_baseline_given
-    given = [None] * len(one)
+    # the subproblems' own external baselines, unless replaced
+    given = [sb.baseline for sb in one]
     if given_baseline is not None:
         given = [
             np.asarray(
@@ -432,14 +434,17 @@ def drift_error(drift: float):
 
 def edge_error(error: float, frames: int):
     """``given_baseline``: the true baseline times ``1 + error`` in the
-    first and last ``frames`` frames (a trial-edge error)."""
+    first and last ``frames`` frames (a trial-edge error; frames in both
+    windows of a short trial are scaled once)."""
 
     def given(truth, sub, rng):
         """The true baseline with its ends scaled."""
         b = truth.b.copy()
-        m = min(int(frames), b.shape[1])
-        b[:, :m] *= 1 + error
-        b[:, b.shape[1] - m :] *= 1 + error
+        n = b.shape[1]
+        ends = np.zeros(n, dtype=bool)
+        ends[: int(frames)] = True
+        ends[max(n - int(frames), 0) :] = True
+        b[:, ends] *= 1 + error
         return b
 
     return given
