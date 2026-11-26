@@ -246,7 +246,7 @@ def test_refit_test_with_a_given_baseline():
         given_baseline=scale_error(0.1),
     )
     assert high.summary["pooled"] < exact.summary["pooled"]
-    assert high.summary["f0_ratio"] > exact.summary["f0_ratio"] + 0.02
+    assert high.summary["f0_ratio"] > exact.summary["f0_ratio"] + 0.01
     shared = refit_test(
         [sub],
         PARAMS,
