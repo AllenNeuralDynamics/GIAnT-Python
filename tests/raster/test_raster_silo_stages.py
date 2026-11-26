@@ -621,3 +621,16 @@ def test_solve_span_is_the_last_subproblem_solved(monkeypatch):
     now[0] = 1.5
     q = silo._Pending(0, 1, None, [], [], results, {}, Path("y"), 0.7, done)
     assert silo._solve_span(q, 0.0) == (0.7, 0.9)
+
+
+def test_pool_workers_are_spawned_with_their_thread_counts():
+    """Pool workers start a fresh interpreter (not a fork of this one), so
+    the thread variables are set before numpy loads its BLAS."""
+    import os
+
+    from giant_python.pipeline.silo_session import make_pool
+
+    with make_pool(1, 2) as pool:
+        assert pool._mp_context.get_start_method() == "spawn"
+        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            assert pool.submit(os.getenv, name).result() == "2"
