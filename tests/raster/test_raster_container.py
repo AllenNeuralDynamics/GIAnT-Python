@@ -199,8 +199,12 @@ def test_subproblem_lists_are_checked(tmp_path):
             write_container(path, trial, sources_rc, pix, src, SHAPE)
         assert not path.exists()
     write_container(path, trial, sources_rc, pixels, sources, SHAPE)
-    with pytest.raises(IndexError, match="not one of 2"):
-        read_subproblem(path, 2)
+    # the same indices are refused in memory and from the file
+    whole = read_container(path)
+    for k in (2, -1):
+        for source in (path, whole):
+            with pytest.raises(IndexError, match="not one of 2"):
+                read_subproblem(source, k)
 
 
 def test_empty_grouping_and_foreign_files(tmp_path):
@@ -232,6 +236,47 @@ def test_empty_grouping_and_foreign_files(tmp_path):
     with h5py.File(path, "r+") as f:
         f.attrs["format_version"] = FORMAT_VERSION + 1
     with pytest.raises(ValueError, match="container format"):
+        read_subproblem(path, 0)
+
+
+@pytest.mark.parametrize("compression", ["lzf", None])
+def test_trial_without_selected_pixels_round_trips(tmp_path, compression):
+    """A path without sources has no selected pixels: its container holds
+    the frames and traces, and empty data."""
+    full, *_ = make_trial()
+    n_f = full.frame_lines.size
+    trial = TrialData(
+        y=np.zeros((2, 0, n_f), np.float32),
+        finv=np.zeros((0, n_f), np.float32),
+        frame_lines=full.frame_lines,
+        motion_r=full.motion_r,
+        motion_c=full.motion_c,
+        discard=full.discard,
+        global_f=full.global_f,
+        roi_f=np.zeros((0, 2, n_f)),
+        roi_fsvd=np.zeros((0, 2, n_f)),
+        pixel_rc=np.zeros((0, 2), np.int64),
+        trial_rc=np.zeros((0, 2)),
+        photon_scale=25.0,
+    )
+    path = write_container(
+        tmp_path / "empty.h5",
+        trial,
+        np.zeros((0, 2), int),
+        [],
+        [],
+        SHAPE,
+        compression=compression,
+    )
+    c = read_container(path)
+    assert c.y.shape == (2, 0, n_f) and c.finv.shape == (0, n_f)
+    assert c.pixel_rc.shape == (0, 2) and c.roi_f.shape == (0, 2, n_f)
+    assert c.n_subproblems == 0 and not c.baseline_filled
+    np.testing.assert_array_equal(c.global_f, full.global_f)
+    np.testing.assert_array_equal(c.frame_lines, full.frame_lines)
+    with h5py.File(path, "r") as f:
+        assert f["baseline/values"].shape == (0, 0)
+    with pytest.raises(IndexError, match="not one of 0"):
         read_subproblem(path, 0)
 
 

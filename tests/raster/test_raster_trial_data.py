@@ -205,6 +205,24 @@ def test_roi_svd_trace_matches_matlab(ref):
     assert np.isnan(roi_svd_trace(sparse, 0.33)).all()
 
 
+def test_nansvd_selects_until_the_choice_is_stable():
+    """Rows and columns are left out until the choice no longer changes:
+    leaving a column out can bring a row back, and the rows and columns
+    kept each miss less than the threshold among the other kept ones."""
+    rng = np.random.default_rng(3)
+    d = rng.standard_normal((8, 30)) + 5
+    d[0, :12] = np.nan  # misses 40%: out, until ...
+    d[:5, :6] = np.nan  # ... columns 0-5, missing in most rows, go
+    u, s, v, bg = nansvd(d, 3, 10, 0.33)
+    rows, cols = ~np.isnan(u[:, 0]), ~np.isnan(v[:, 0])
+    assert not cols[:6].any() and cols[6:].all()
+    gaps = np.isnan(d)
+    assert (gaps[np.ix_(rows, cols)].mean(1) < 0.33).all()
+    assert (gaps[np.ix_(rows, cols)].mean(0) < 0.33).all()
+    assert (gaps[~rows][:, cols].mean(1) >= 0.33).all() or rows.all()
+    assert np.isfinite(s).all() and np.isnan(bg[:, :6]).all()
+
+
 @pytest.mark.parametrize(
     "dtype, rtol", [(np.float64, 1e-12), (np.float32, 2e-6)]
 )

@@ -205,9 +205,19 @@ class Container:
         return len(self.subproblem_pixels)
 
     def subproblem(self, k: int) -> Subproblem:
-        """Subproblem ``k`` of a container read with its data."""
+        """Subproblem ``k`` (zero-based) of a container read with its data.
+
+        Raises
+        ------
+        ValueError
+            If the container was read without its data.
+        IndexError
+            If ``k`` is not one of the subproblems (negative indices are
+            not accepted, as when reading from the file).
+        """
         if self.y is None:
             raise ValueError("the container was read without its data")
+        _check_index(k, self.n_subproblems)
         pix = self.subproblem_pixels[k]
         return _subproblem(
             self.y[:, pix],
@@ -218,6 +228,12 @@ class Container:
             self.subproblem_sources[k],
             self.crops[k],
         )
+
+
+def _check_index(k: int, n: int) -> None:
+    """Reject an index that is not one of ``n`` subproblems."""
+    if not 0 <= k < n:
+        raise IndexError(f"subproblem {k} is not one of {n}")
 
 
 def crop_of(pixel_rc: np.ndarray) -> np.ndarray:
@@ -412,10 +428,12 @@ def _reserve_baseline(f, n_px, chunk_pixels, compression, compression_opts):
             compression_opts=compression_opts,
             shuffle=True,
         )
+    # a trial without selected pixels has no pixel axis to chunk: HDF5
+    # needs that axis unlimited then
     g.create_dataset(
         "values",
         shape=(n_px, 0),
-        maxshape=(n_px, None),
+        maxshape=(n_px or None, None),
         dtype=np.float32,
         chunks=(max(1, min(chunk_pixels, n_px)), 256),
         fillvalue=np.nan,
@@ -534,9 +552,7 @@ def read_subproblem(
     f = container
     _check_format(f)
     sub = f["subproblems"]
-    n = sub["crop"].shape[0]
-    if not 0 <= k < n:
-        raise IndexError(f"subproblem {k} is not one of {n}")
+    _check_index(k, sub["crop"].shape[0])
     p0, p1 = (int(v) for v in sub["pixel_offset"][k : k + 2])
     s0, s1 = (int(v) for v in sub["source_offset"][k : k + 2])
     pix = sub["pixel_index"][p0:p1].astype(np.int64)

@@ -1098,9 +1098,11 @@ def nansvd(
     """Truncated SVD of data with gaps (``nansvd.m``).
 
     Rows and columns with at least ``nan_frac`` of their values missing are
-    left out; a moving mean over a fifth of the columns is subtracted; the
-    remaining gaps are filled iteratively with the rank-``num_comps``
-    estimate.
+    left out, repeatedly, until the choice no longer changes (``nansvd.m``
+    stops when the numbers of rows and columns no longer change, which is
+    the same unless a pass exchanges rows or columns); a moving mean over a
+    fifth of the columns is subtracted; the remaining gaps are filled
+    iteratively with the rank-``num_comps`` estimate.
 
     Parameters
     ----------
@@ -1130,13 +1132,14 @@ def nansvd(
     missing = np.isnan(d)
     rows = np.ones(d.shape[0], dtype=bool)
     cols = np.ones(d.shape[1], dtype=bool)
-    n_r = n_c = -1
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # empty means
-        while not (cols.sum() == n_c and rows.sum() == n_r):
-            n_c, n_r = cols.sum(), rows.sum()
+        for _ in range(sum(d.shape) + 2):  # ends, even if the choice cycles
+            kept = (rows, cols)
             rows = missing[:, cols].mean(1) < nan_frac
             cols = missing[rows, :].mean(0) < nan_frac
+            if np.array_equal(rows, kept[0]) and np.array_equal(cols, kept[1]):
+                break
     u = np.full((d.shape[0], num_comps), np.nan)
     v = np.full((d.shape[1], num_comps), np.nan)
     s = np.zeros(num_comps)
