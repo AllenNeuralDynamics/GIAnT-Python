@@ -13,6 +13,42 @@ fits, which are convex, are solved to convergence
 ``SolverOptions.max_iter`` and ``fit_max_iter`` cap them, for diagnosing
 differences.
 
+**The baseline** of the activity channel (``SolverParams.baseline_mode``;
+the variants of the SILo port's baseline test, WP6). ``b_ext`` is
+``Subproblem.baseline``, an external baseline (the F0 network's, mapped
+to the data by :mod:`~giant_python.extraction.raster.baseline_map`),
+bounded below by ``min_baseline``. The baseline enters every fit: the
+starting activity (least squares of the data minus the baseline), the
+first activity fit, the noise estimate that thresholds the activity for
+the baseline step and the footprint fit, then (after the baseline step)
+the footprint fit, the second activity fit, the debias refit, least
+squares and F0. With ``nmf_iter`` 2 the baseline step runs once, after
+the first activity fit.
+
+=================  ====  =========================  =======================
+mode               test  baseline of the first fit  baseline step
+=================  ====  =========================  =======================
+'fit' (default)    R0    ``splitFreq`` of the data  ``fitB``: surround and
+                                                    spline per pixel
+'fixed'            N0    ``b_ext``                  none: ``b_ext`` held
+'gain'             N1    ``b_ext``                  ``g_p b_ext``: one gain
+                                                    per pixel
+'gain_shared'      N2    ``b_ext``                  ``g_p b_ext c_t``: c
+                                                    from the pixels outside
+                                                    the footprints
+'fit_from'         N3    ``b_ext``                  ``b_ext`` plus ``fitB``
+                                                    of the correction
+=================  ====  =========================  =======================
+
+In 'gain' and 'gain_shared' each pixel's gain is fitted as ``fitB`` fits
+its predictors, jointly with the pixel's sources' contributions (see
+:func:`~giant_python.extraction.raster.solver_baseline.fit_network_gain`).
+'fit_from' runs ``fitB`` on the data minus ``b_ext`` (surround predictors
+from its high-pass, the spline, the sources' contributions) and adds
+``b_ext`` back; its weights come from the baseline of the first fit,
+``b_ext``. Channel 2 keeps MATLAB's treatment in every mode (its
+``splitFreq`` baseline, held).
+
 Subproblems with the same number of frames are fitted together, padded to
 a common size, on the CPU or a GPU.
 """
@@ -31,6 +67,7 @@ from .solver_baseline import (
     activity_noise,
     compute_floor,
     fit_baseline,
+    fit_network_gain,
     initial_baseline,
     source_f0,
     surround_operators,
@@ -180,7 +217,7 @@ def estimate_photon_scale(y: np.ndarray, finv: np.ndarray) -> float:
     return matlab_prctile((var[bright] - vb) / mean[bright], 10)
 
 
-def _check_data(sub: Subproblem) -> None:
+def _check_data(sub: Subproblem, mode: str = "fit") -> None:
     """Reject data the fits cannot weigh.
 
     The trial loader fills missing samples and gives them a large variance
@@ -197,6 +234,11 @@ def _check_data(sub: Subproblem) -> None:
     if not (np.isfinite(sub.finv).all() and (sub.finv > 0).all()):
         raise ValueError(
             "a subproblem's variance multiplier must be positive and finite"
+        )
+    if mode != "fit" and sub.baseline is None:
+        raise ValueError(
+            f"baseline_mode {mode!r} needs each subproblem's baseline "
+            "(Subproblem.baseline)"
         )
 
 
@@ -310,6 +352,27 @@ def _debias(bt, z, h, b, k, s, info, name):
     return s
 
 
+def _baseline_step(b, b_ext, data, sel, p, operators, info):
+    """The baseline after an activity fit, by ``p.baseline_mode``.
+
+    ``data`` is ``(y, x_thr, h, finv)`` of one subproblem; ``b`` the
+    current baseline, ``b_ext`` the external one (None in 'fit').
+    """
+    y, xt, h, finv = data
+    mode = p.baseline_mode
+    if mode == "fixed":
+        return b
+    if mode in ("fit", "fit_from"):
+        offset = b_ext if mode == "fit_from" else None
+        return fit_baseline(
+            b, y, xt, h, finv, sel, p, operators, False, offset
+        )
+    shared = mode == "gain_shared"
+    b, step = fit_network_gain(b, b_ext, y, xt, h, finv, p, shared)
+    info["baseline_step"] = step
+    return b
+
+
 def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
     """``extractSources`` for subproblems with equal frames and channels."""
     n_ch = subs[0].y.shape[0]
@@ -318,10 +381,11 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
             "the solver fits the activity channel and at most one more; "
             f"a subproblem has {n_ch} channels"
         )
-    for sb in subs:
-        _check_data(sb)
-    bt = _Batch(subs, params, opt)
     p = params
+    mode = p.baseline_mode
+    for sb in subs:
+        _check_data(sb, mode)
+    bt = _Batch(subs, params, opt)
     info = [dict() for _ in subs]
     y1 = [np.asarray(s.y[0], np.float64) for s in subs]
     finv = [np.asarray(s.finv, np.float64) for s in subs]
@@ -331,7 +395,15 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
     # starting values
     t0 = time.perf_counter()
     init = [initial_footprints(s.sel, s.sources_rc, p.sigma_px) for s in subs]
-    b_np = [initial_baseline(y, p) for y in y1]
+    b_ext = None
+    if mode == "fit":
+        b_np = [initial_baseline(y, p) for y in y1]
+    else:
+        b_ext = [
+            np.fmax(p.min_baseline, np.asarray(s.baseline, np.float64))
+            for s in subs
+        ]
+        b_np = [b.copy() for b in b_ext]
     k_peak = p.k[p.k.size // 2]
     s_np = []
     for (_, h0, _), y, b0 in zip(init, y1, b_np):
@@ -348,7 +420,10 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
     g = torch.zeros((bt.n, bt.p_max, bt.p_max), dtype=bt.dt, device=bt.dev)
     for i, gi in enumerate(g_np):
         g[i, : gi.shape[0], : gi.shape[0]] = bt.tensor(gi.toarray())
-    operators = [surround_operators(sb.sel, p) for sb in subs]
+    operators = [
+        surround_operators(sb.sel, p) if mode in ("fit", "fit_from") else None
+        for sb in subs
+    ]
     for d in info:
         d["init_seconds"] = (time.perf_counter() - t0) / bt.n
 
@@ -374,8 +449,14 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
             )
             floor = compute_floor(xi, p.denoise_window, p.baseline_window)
             xt = np.fmax(0, xi - floor - noise[:, None])
-            b_np[i] = fit_baseline(
-                b_np[i], y1[i], xt, hi, finv[i], subs[i].sel, p, operators[i]
+            b_np[i] = _baseline_step(
+                b_np[i],
+                None if b_ext is None else b_ext[i],
+                (y1[i], xt, hi, finv[i]),
+                subs[i].sel,
+                p,
+                operators[i],
+                info[i],
             )
             x_thr.append(xt)
         b = bt.pixels_frames(b_np, 1.0)
