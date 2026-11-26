@@ -321,6 +321,7 @@ def localize_trial(
     motion_thresh: float = 2.0,
     discard_initial_s: float = 0.0,
     half_ims: bool = False,
+    find_peaks: bool = True,
 ) -> tuple[RasterLocalization, RegisteredTrial]:
     """Load one registered trial and localize it (SiLo's per-trial step).
 
@@ -329,7 +330,11 @@ def localize_trial(
     localization is retried with the first and last rows and columns set to
     NaN (invalid inputs, such as a wrong baseline size, are not retried).
     With ``half_ims`` the trial also carries the mean images of two halves
-    of its frames (MATLAB's ``hIM``, for the patchwise alignment).
+    of its frames (MATLAB's ``hIM``, for the patchwise alignment). Without
+    ``find_peaks`` the per-trial Gaussian peak fit is left out
+    (``localization.peaks`` is None); :func:`~giant_python.extraction.
+    raster.peaks.get_act_im_peaks` on ``localization.summary`` gives them
+    later.
 
     Against MATLAB's ``loadAndProcessTrialAsync``: ``mIM`` is
     ``trial.mean_im``, ``aIM`` is ``localization.act_im``, ``peaks`` is
@@ -360,10 +365,14 @@ def localize_trial(
             )
     check_inputs(trial.movie.shape, p, baseline, trial.var_factor)
     try:
-        loc = localize_sources(trial.movie, trial.var_factor, p, baseline)
+        loc = localize_sources(
+            trial.movie, trial.var_factor, p, baseline, find_peaks=find_peaks
+        )
     except Exception:  # MATLAB's catch: retry without the outer pixels
         movie = trial.movie.copy()
         movie[:, [0, -1], :] = np.nan
         movie[:, :, [0, -1]] = np.nan
-        loc = localize_sources(movie, trial.var_factor, p, baseline)
+        loc = localize_sources(
+            movie, trial.var_factor, p, baseline, find_peaks=find_peaks
+        )
     return loc, trial

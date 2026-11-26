@@ -25,8 +25,11 @@ through the model. It is never copied from raw ``F``. Older summaries without
 the optional temporal datasets remain readable; rewriting missing optional
 data emits NaNs, not fabricated fits.
 
-``per_trial_summary.h5`` is an **unsupported, external-reference format**;
-Python BandSILo does not emit it. Band registration products and the band
+Raster SILo (:doc:`silo`) writes ``experiment_summary.h5`` and
+``per_trial_summary.h5`` in GIAnT-MATLAB's schema, column-major
+(``row_major`` 0), as MATLAB's ``saveExperimentSummaryH5`` and
+``savePerTrialSummaryH5`` do; the band schema below does not apply to them.
+Python BandSILo does not emit ``per_trial_summary.h5``. Band registration products and the band
 lookup table are **external inputs**, not Python-generated outputs. Python
 loads existing trial tables; raster registration rewrites only their
 ``motion_correction`` group, in MATLAB layout.

@@ -2,7 +2,11 @@
 
 ``giant trial-table`` builds a SLAP2 session's trial table;
 ``giant register`` registers raster recordings (MultiRoiRegistration);
-``giant annotate`` loads or draws ROIs; ``giant extract`` runs BandSILo.
+``giant silo`` extracts sources from them (raster SILo; its stages also run
+on their own as ``giant silo-localize``, ``silo-plan``, ``silo-prepare``,
+``silo-dispatch``, ``silo-solve`` and ``silo-collect``, see
+:mod:`giant_python.cli_silo`); ``giant annotate`` loads or draws ROIs;
+``giant extract`` runs BandSILo.
 All delegate to the public workflow services with separate scientific,
 execution and annotation options. GUI imports occur only when needed.
 """
@@ -13,6 +17,7 @@ import argparse
 import sys
 from typing import Optional, Sequence
 
+from .cli_silo import SILO_COMMANDS, add_silo_commands, run_silo_command
 from .models.params import (
     AnnotationOptions,
     BandSiloParams,
@@ -191,9 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     Returns
     -------
     argparse.ArgumentParser
-        Parser with ``trial-table``, ``register``, ``annotate`` and
-        ``extract`` subcommands. Each subcommand stores its ``command``
-        name in the parsed namespace.
+        Parser with ``trial-table``, ``register``, ``annotate``,
+        ``extract`` and the SILo subcommands (``silo``, ``silo-localize``,
+        ``silo-plan``, ``silo-prepare``, ``silo-dispatch``, ``silo-solve``,
+        ``silo-collect``). Each subcommand stores its ``command`` name in
+        the parsed namespace.
     """
     parser = argparse.ArgumentParser(prog="giant")
     subparsers = parser.add_subparsers(dest="command")
@@ -232,6 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("trial_table", help="Path to trial_table.h5.")
     _add_silo_options(extract)
 
+    add_silo_commands(subparsers)
     return parser
 
 
@@ -392,8 +400,8 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point for the ``giant`` console script.
 
-    Dispatches ``trial-table``, ``register``, ``annotate`` and ``extract``
-    to their workflow services.
+    Dispatches ``trial-table``, ``register``, ``annotate``, ``extract``
+    and the SILo commands to their workflow services.
 
     Parameters
     ----------
@@ -419,6 +427,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
     }
+    handlers.update({name: run_silo_command for name in SILO_COMMANDS})
     if args.command is None:
         parser.print_help()
         return 2
