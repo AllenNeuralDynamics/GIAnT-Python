@@ -46,6 +46,8 @@ from .alignment import (
     warp_trial_image,
 )
 from .localization import nanmedfilt2
+from .solver_setup import Subproblem
+from .trial_data import RigidShift
 from .seeding import (
     SEEDING_METHODS,
     disk_strel,
@@ -204,6 +206,69 @@ class SubproblemGroup:
     col0: int
     sel: np.ndarray
     sources_rc: np.ndarray
+
+    def subproblem(self, y: np.ndarray, finv: np.ndarray) -> Subproblem:
+        """The group's subproblem in one trial.
+
+        Parameters
+        ----------
+        y : ndarray of shape (channels, pixels, frames)
+            The trial's data at all of the path's selected pixels
+            (``TrialData.y``).
+        finv : ndarray of shape (pixels, frames)
+            Its variance multiplier (``TrialData.finv``).
+
+        Returns
+        -------
+        Subproblem
+            The solver's input, with the group's pixels, sources and crop.
+        """
+        return Subproblem(
+            y=y[:, self.pixels],
+            finv=finv[self.pixels],
+            sel=self.sel,
+            sources_rc=self.sources_rc,
+            pixels=np.asarray(self.pixels, dtype=np.int64),
+            sources=np.asarray(self.sources, dtype=np.int64),
+            row0=int(self.row0),
+            col0=int(self.col0),
+        )
+
+
+def loader_warp(warp: TrialWarp, trial: int):
+    """A trial's across-trial map in the form the trial loader takes.
+
+    Parameters
+    ----------
+    warp : TrialWarp
+        The plan's alignment (``ExtractionPlan.warp``).
+    trial : int
+        Zero-based trial; it must have been aligned.
+
+    Returns
+    -------
+    RigidShift or callable
+        The trial's shift (added to its motion, MATLAB's ``isShift`` path),
+        or, for an affine map, a function from zero-based consensus
+        ``(rows, cols)`` to zero-based positions in the trial's registered
+        frame (MATLAB's ``trialWarpCoords`` path).
+
+    Raises
+    ------
+    ValueError
+        If the trial was not aligned across trials.
+    """
+    if not warp.aligned[trial]:
+        raise ValueError(f"trial {trial} was not aligned across trials")
+    if warp.is_shift(trial):
+        row, col = warp.shift(trial)
+        return RigidShift(float(row), float(col))
+
+    def coords(rows, cols):
+        """Consensus to trial-frame positions (zero-based)."""
+        return warp.coords(trial, rows, cols)
+
+    return coords
 
 
 def _matlab_order_labels(zones: np.ndarray) -> tuple[np.ndarray, int]:
