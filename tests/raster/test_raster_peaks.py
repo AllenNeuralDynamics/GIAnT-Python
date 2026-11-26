@@ -2,9 +2,12 @@
 
 import numpy as np
 
+import pytest
+
 from giant_python.extraction.raster.peaks import (
     _eval_budget,
     _IntegratedGaussians,
+    _WindowedGaussians,
     get_act_im_peaks,
     ordfilt3x3,
 )
@@ -140,3 +143,101 @@ def test_rounding_is_matlabs():
     iy, ix = _rounded_index(theta, (10, 10))  # 1-based in, 0-based out
     np.testing.assert_array_equal(iy, [4, 3])  # MATLAB 5 and 4
     np.testing.assert_array_equal(ix, [2, 6])  # MATLAB 3 and 7
+
+
+def _windowed(shape, starts, window, rows=None):
+    """A windowed model on a gap-free image, and the edges it uses."""
+    cols, rws = np.nonzero(np.ones(shape, bool).T)
+    idx = np.full(shape, -1, np.int64)
+    idx[rws, cols] = np.arange(rws.size)
+    edges = (rws + 0.5, rws + 1.5, cols + 0.5, cols + 1.5)
+    rows = np.arange(rws.size) if rows is None else rows
+    model = _WindowedGaussians(idx, edges, np.asarray(starts), window, rows)
+    return model, rws[rows] + 1.0, cols[rows] + 1.0
+
+
+def test_windowed_model_is_the_integrated_model_within_its_window():
+    """With windows covering the image, the windowed model is the dense one
+    (positions as offsets from the start pixels); its Jacobian, dense and
+    sparse, matches finite differences."""
+    starts = np.array([[4, 6], [9, 3]])  # 0-based start pixels
+    theta = np.array([[3.0, 5.4, 7.2, 0.7], [1.5, 9.8, 4.1, 1.1]])
+    model, ys, xs = _windowed((12, 14), starts, 20)
+    x = np.concatenate(
+        [
+            theta[:, 0],
+            theta[:, 1] - starts[:, 0] - 1,
+            theta[:, 2] - starts[:, 1] - 1,
+            theta[:, 3],
+        ]
+    )
+    dense = _IntegratedGaussians(ys, xs).value(theta.ravel(order="F"))
+    np.testing.assert_allclose(model.value(x), dense, rtol=1e-12)
+    eps = 1e-6
+    num = np.column_stack(
+        [
+            (model.value(x + eps * e) - model.value(x - eps * e)) / (2 * eps)
+            for e in np.eye(x.size)
+        ]
+    )
+    np.testing.assert_allclose(model.jacobian(x, True), num, atol=1e-7)
+    np.testing.assert_allclose(
+        model.jacobian(x, False).toarray(), num, atol=1e-7
+    )
+    # a narrow window leaves the peak out of pixels beyond it
+    narrow, ys, xs = _windowed((12, 14), starts[:1], 2)
+    far = (np.abs(ys - 5) > 2) | (np.abs(xs - 7) > 2)
+    assert np.all(narrow.value(x[[0, 2, 4, 6]])[far] == 0)
+
+
+@pytest.mark.parametrize("merge_px", [0.0, 1.5])
+def test_local_fit_finds_separated_gaussians(merge_px):
+    """The local fit finds the blobs the MATLAB fit finds, at their
+    centres."""
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:40, :50]
+    img = 0.05 * rng.standard_normal((40, 50))
+    for r, c in ((10.3, 12.6), (28.0, 35.4)):
+        img += 4 * np.exp(-((yy - r) ** 2 + (xx - c) ** 2) / (2 * 1.1**2))
+    img[:, :2] = np.nan
+    pk = get_act_im_peaks(img, 8, fit="local", merge_px=merge_px)
+    assert pk.shape[0] == 2
+    order = np.argsort(pk[:, 1])
+    np.testing.assert_allclose(
+        pk[order, 1:3], [[10.3, 12.6], [28.0, 35.4]], atol=0.15
+    )
+
+
+def _split_prone_image():
+    """Two sources as activity images show them: a peak narrower than a
+    pixel on a wider base, on unit noise."""
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:30, :30]
+    img = rng.standard_normal((30, 30))
+    for r, c in ((10.5, 12.0), (20.2, 8.4)):
+        d2 = (yy - r) ** 2 + (xx - c) ** 2
+        img += 40 * np.exp(-d2 / (2 * 0.45**2)) + 6 * np.exp(-d2 / 5.12)
+    return img
+
+
+@pytest.mark.parametrize("fit", ["matlab", "local"])
+def test_merge_keeps_one_seed_per_split_peak(fit):
+    """MATLAB's rule fits each source as several peaks less than 1.5 px
+    apart; merge_px 1.5 keeps one per source, at the source."""
+    img = _split_prone_image()
+    assert get_act_im_peaks(img, 3, fit=fit).shape[0] > 2
+    pk = get_act_im_peaks(img, 3, fit=fit, merge_px=1.5)
+    assert pk.shape[0] == 2
+    order = np.argsort(pk[:, 1])
+    np.testing.assert_allclose(
+        pk[order, 1:3], [[10.5, 12.0], [20.2, 8.4]], atol=0.5
+    )
+
+
+def test_seed_fit_options_are_checked():
+    """Unknown fits and negative merge distances raise."""
+    img = _split_prone_image()
+    with pytest.raises(ValueError):
+        get_act_im_peaks(img, 3, fit="other")
+    with pytest.raises(ValueError):
+        get_act_im_peaks(img, 3, merge_px=-1)

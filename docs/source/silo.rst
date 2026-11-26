@@ -57,6 +57,26 @@ camelCase) when they differ from MATLAB's algorithm: a default run now
 records ``footprintVariance = 'fixed'``, and a run with
 ``--set footprint_variance=model`` has MATLAB's fields exactly.
 
+Two seeding options are not MATLAB's either (both off by default):
+
+* ``seed_fit='local'`` runs the Gaussian fits of the seeding and of the
+  per-trial peaks locally: each Gaussian only within 10 pixels of where it
+  started, every fit to convergence, and a residual peak refitted with the
+  peaks within 6 pixels of it rather than with its whole connected region.
+  The search is MATLAB's otherwise. On 780125 (5 trials) a path's seeding
+  takes about 5-7 s instead of 3-8 minutes, and the seeds are as close to
+  MATLAB's as the MATLAB fit's (MATLAB's ``lsqcurvefit`` stops after a few
+  iterations; the converged fit lands nearer to it than the capped port).
+* ``seed_merge_px=1.5`` rejects a residual peak whose fit ends within
+  1.5 pixels of another peak. An activity image's peak is narrower than a
+  pixel; a source between pixels is otherwise fitted as two or three peaks
+  less than a pixel apart, and each becomes a source. On injected ground
+  truth this removes the duplicate sources (a quarter to a third of the
+  sources) without losing injected ones.
+
+Changing either reruns the localization and plan stages (outputs made with
+the defaults keep their settings hashes).
+
 Stages
 ------
 
@@ -165,7 +185,9 @@ Differences from MATLAB
   by default; see :mod:`giant_python.extraction.raster.solver`.
 * The Gaussian seed fit does not reproduce MATLAB's seeds, which are where
   MATLAB's ``lsqcurvefit`` stops at its evaluation limit; parity runs pass
-  MATLAB's seeds (``--seeds``).
+  MATLAB's seeds (``--seeds``). The capped fit's result also depends on the
+  number of BLAS threads (on 780125 path 1: 262 seeds with the pipeline's
+  threads, 280 with one); ``seed_fit='local'`` much less so.
 * The per-trial peak fits run in the background; ``--no-trial-peaks``
   leaves ``per_trial_act_im_peaks`` and ``per_trial_num_peaks`` out.
 * A trial without any sample at the selected pixels is skipped (MATLAB

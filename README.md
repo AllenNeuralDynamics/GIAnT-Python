@@ -97,6 +97,8 @@ or `run_silo(table, SiloParams(), SiloExecution(...))` from `giant_python.pipeli
 
 The stages also run on their own, for any subset of their units, with file contracts between them, so that a pipeline can scatter them over machines: `giant silo-localize`, `silo-plan`, `silo-prepare` (one container per trial-path), `silo-dispatch --machines N` (job files of about equal work), `silo-solve JOB` (needs only the job file and its containers) and `silo-collect`. Every output records a settings hash; units whose outputs exist with the same settings are skipped. Results do not depend on how the work is split. See [SILo for SLAP2 raster recordings](docs/source/silo.rst).
 
+Two seeding options are not MATLAB's (both off by default): `--set seed_fit=local` runs the Gaussian seed fits locally and to convergence, which takes seconds per path instead of minutes; `--set seed_merge_px=1.5` rejects a residual peak that ends within 1.5 pixels of another one, so a source that falls between pixels is not seeded two or three times.
+
 ## Raster SILo localization (multi-ROI)
 
 The per-trial localization of SILo (`loadAndProcessTrialAsync`, `localizeSources_vIM` and `getActImPeaks`) can also be used on its own. It reads GIAnT-MATLAB's registered 80 Hz movies and returns each trial's activity image, the summary image that is seeded, and the seeds:

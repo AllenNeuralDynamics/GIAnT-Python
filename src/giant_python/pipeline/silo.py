@@ -109,7 +109,12 @@ def _localize_job(job: dict) -> dict:
     if p.trial_peaks and job["fit_peaks"]:
         loc_p = p.localization_params(job["align_hz"])
         peaks = get_act_im_peaks(
-            loc.summary, loc_p.peak_th, None, loc_p.min_peak_distance
+            loc.summary,
+            loc_p.peak_th,
+            None,
+            loc_p.min_peak_distance,
+            p.seed_fit,
+            p.seed_merge_px,
         )
     write_localization(
         job["out"],
@@ -135,7 +140,12 @@ def _peaks_job(job: dict) -> dict:
     t0 = time.perf_counter()
     rec = read_localization(job["file"])
     peaks = get_act_im_peaks(
-        rec.summary, job["peak_th"], None, job["min_peak_distance"]
+        rec.summary,
+        job["peak_th"],
+        None,
+        job["min_peak_distance"],
+        job["seed_fit"],
+        job["seed_merge_px"],
     )
     add_peaks(job["file"], peaks)
     return {"unit": job["unit"], "seconds": time.perf_counter() - t0}
@@ -254,6 +264,8 @@ def peaks_jobs(session: SiloSession, params: SiloParams, units=None) -> list:
                     "file": str(f),
                     "peak_th": loc.peak_th,
                     "min_peak_distance": loc.min_peak_distance,
+                    "seed_fit": params.seed_fit,
+                    "seed_merge_px": params.seed_merge_px,
                 }
             )
     return jobs

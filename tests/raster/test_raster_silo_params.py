@@ -246,6 +246,8 @@ def test_python_only_settings_are_recorded_when_not_matlabs():
         {"min_kinetic_score": float("nan")},
         # the solver needs a baseline window longer than the denoise window
         {"baseline_window_s": 0.1},
+        {"seed_fit": "other"},
+        {"seed_merge_px": -1.0},
     ],
 )
 def test_invalid_values_are_rejected(kwargs):
@@ -275,6 +277,27 @@ def test_stage_settings_change_only_with_their_fields():
     )
     with pytest.raises(ValueError):
         a.stage_settings("other")
+
+
+def test_seed_fit_settings_reach_the_plan_and_keep_old_hashes():
+    """The seed fit's options reach the plan and the per-trial peaks'
+    stage; at their defaults (MATLAB's) they leave the stage settings, and
+    so the outputs made before the options existed, as they were."""
+    a = SiloParams()
+    b = SiloParams(seed_fit="local", seed_merge_px=1.5)
+    assert (b.plan_params().seed_fit, b.plan_params().seed_merge_px) == (
+        "local",
+        1.5,
+    )
+    for stage in ("localize", "plan"):
+        assert "seed_fit" not in a.stage_settings(stage)
+        assert b.stage_settings(stage)["seed_fit"] == "local"
+        assert b.stage_settings(stage)["seed_merge_px"] == 1.5
+    for stage in ("prepare", "solve", "collect"):
+        assert a.stage_settings(stage) == b.stage_settings(stage)
+    m = b.to_matlab(2, 80.0)
+    assert (m["seedFit"], m["seedMergePx"]) == ("local", 1.5)
+    assert "seedFit" not in a.to_matlab(2, 80.0)
 
 
 def test_execution_options():
