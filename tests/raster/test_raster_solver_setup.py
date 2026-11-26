@@ -244,6 +244,14 @@ def test_load_matlab_subproblem(tmp_path):
     # the trial's map has two selected pixels before this crop's
     assert np.array_equal(sub.pixels, 2 + np.arange(n_px))
     assert p.photon_scale is None and p.debias_variance == "model"
+    # not a MATLAB parameter: the default, unless the struct names it
+    assert p.footprint_variance == "fixed"
+    with h5py.File(path, "r+") as f:
+        f["params"].create_dataset(
+            "footprintVariance",
+            data=np.array([[ord(c)] for c in "Model"], dtype=np.uint16),
+        )
+    assert load_matlab_subproblem(path)[1].footprint_variance == "model"
     assert (p.sigma_px, p.sel_radius, p.lam) == (1.6, 4, 0.7)
     assert p.tau_frames == pytest.approx(0.03 * 200)
     assert load_matlab_subproblem(path, np.float32)[0].y.dtype == np.float32

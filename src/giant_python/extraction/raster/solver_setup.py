@@ -87,7 +87,10 @@ def _check_numbers(params) -> None:
 
 @dataclass(frozen=True)
 class SolverParams:
-    """Parameters of the subproblem solver (SILo's defaults for SLAP2).
+    """Parameters of the subproblem solver.
+
+    The defaults are SILo's for SLAP2, and ``footprint_variance``, which
+    MATLAB does not have, is 'fixed'.
 
     Attributes
     ----------
@@ -118,11 +121,17 @@ class SolverParams:
         Variance term of the debias refit: held at its value at the
         refit's start (a weighted least-squares refit) or following the
         model.
-    footprint_variance : {'model', 'fixed'}
-        Variance term of the footprint fit: following the model, as in
-        MATLAB, or held at its value at the fit's start (a weighted
-        least-squares fit, as the debias refit's 'fixed'). Not a MATLAB
-        option.
+    footprint_variance : {'fixed', 'model'}
+        Variance term of the footprint fit. 'fixed' (the default) holds it
+        at its value at the fit's start: a weighted least-squares fit, as
+        the debias refit's. 'model' lets it follow the model, which is
+        MATLAB's loss; a wider footprint then lowers every sample's loss,
+        and the converged footprints come out too spread. On the
+        ground-truth simulations 'fixed' gives footprints closer to the
+        true ones and denoised traces that correlate better with the
+        truth than MATLAB's. Its footprints are more compact than
+        MATLAB's, so F0 and the amplitudes come out lower (by about 16%
+        and 4% there). Not a MATLAB option.
     baseline_knot_factor : float
         Knot spacing of the baseline spline, in baseline windows.
     baseline_penalty : float
@@ -145,7 +154,7 @@ class SolverParams:
     nmf_iter: int = 2
     photon_scale: float | None = 25.0
     debias_variance: str = "fixed"
-    footprint_variance: str = "model"
+    footprint_variance: str = "fixed"
     baseline_knot_factor: float = 0.5
     baseline_penalty: float = 30.0
     tau_full: float | None = None
@@ -420,6 +429,10 @@ def params_from_matlab(g: h5py.Group) -> SolverParams:
 
     The filters and kernels are derived again from the scalar parameters;
     a warning is given if they differ from the saved ones.
+    ``footprint_variance`` is not a MATLAB parameter: it is read from a
+    ``footprintVariance`` field if the struct has one, and is
+    :class:`SolverParams`'s default ('fixed') otherwise. For MATLAB's loss
+    use ``dataclasses.replace(params, footprint_variance='model')``.
     """
     d = SolverParams()
 
@@ -441,6 +454,9 @@ def params_from_matlab(g: h5py.Group) -> SolverParams:
         nmf_iter=int(num("nmfIter", d.nmf_iter)),
         photon_scale=num("photonScale", None),
         debias_variance=_mat_str(g, "debiasVariance", "fixed").lower(),
+        footprint_variance=_mat_str(
+            g, "footprintVariance", d.footprint_variance
+        ).lower(),
         baseline_knot_factor=num("baselineKnotFactor", 0.5),
         baseline_penalty=num("baselinePenalty", 30.0),
         tau_full=num("tau_full", None),
