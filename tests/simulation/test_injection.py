@@ -558,12 +558,12 @@ def test_registered_copy_keeps_the_motion(
         d = truth["trials_detail"][t]
         assert d["copy_motion_rms_px"] < 0.05
         np.testing.assert_allclose(
-            d["positions_copy_rc"], d["positions_rc"] - d["copy_offset_rc"]
+            d["positions_copy_rc"], d["positions_rc"] + d["copy_shift_rc"]
         )
         a = inj.read_alignment(d["alignment"])
         b = inj.read_alignment(d["copy_alignment"])
         off = inj.registration_offset(a, b)
-        np.testing.assert_allclose(off["offset_rc"], d["copy_offset_rc"])
+        np.testing.assert_allclose(off["shift_rc"], d["copy_shift_rc"])
 
 
 def test_saturation_invalid_samples_and_chunking(online, tmp_path):
@@ -735,3 +735,158 @@ def test_refuses_to_write_into_the_original(online, registered, monkeypatch):
             monkeypatch,
             data_dir=out / "raw",
         )
+
+
+def test_registration_offset_includes_the_grid(registered):
+    """Different padding, window and reference offset move the copy's
+    positions; mixed compensation is refused."""
+    from dataclasses import replace as dc_replace
+
+    moco = Path(registered[True]).parent / "motion_correction"
+    a = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    comp = dict(a.compensation, refOffset=a.compensation["refOffset"] + 1)
+    b = dc_replace(
+        a,
+        margin=a.margin + 3,
+        trim_r0=a.trim_r0 + 1,
+        motion_r=a.motion_r + 0.25,
+        compensation=comp,
+    )
+    off = inj.registration_offset(a, b)
+    # continuous motion unchanged in columns; rows: +0.25 recorded, -1 from
+    # the reference (mapping swaps x and y)
+    np.testing.assert_allclose(off["motion_offset_rc"], [0.25 - 1, -1.0])
+    np.testing.assert_allclose(
+        off["shift_rc"], [3 - 1 - 1 - (0.25 - 1), 3 - 1 + 1]
+    )
+    assert off["rms_px"] < 1e-9
+    plain = inj.read_alignment(
+        Path(registered[False]).parent
+        / "motion_correction"
+        / "E1T1DMD1_ALIGNMENTDATA.h5"
+    )
+    with pytest.raises(ValueError, match="online motion correction"):
+        inj.registration_offset(a, plain)
+
+
+def test_frame_motion_uses_each_frames_own_reference(registered):
+    """A frame at a registered frame's time but with another reference
+    offset is moved by its own reference, not the recorded motion."""
+    from giant_python.simulation.render import frame_motion
+
+    moco = Path(registered[True]).parent / "motion_correction"
+    al = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    t = al.ds_frames.astype(np.int64)
+    c = al.compensation
+    refs = np.stack([c["frameRefX"], c["frameRefY"]], 1)
+    ok = np.isfinite(al.motion_r)
+    same = frame_motion(al, t, refs)
+    np.testing.assert_allclose(same[ok, 0], al.motion_r[ok], atol=1e-9)
+    np.testing.assert_allclose(same[ok, 1], al.motion_c[ok], atol=1e-9)
+    other = frame_motion(al, t, refs + np.array([1, 0]))  # x one more
+    np.testing.assert_allclose(other[ok, 1], al.motion_c[ok] - 1, atol=1e-9)
+    np.testing.assert_allclose(other[ok, 0], al.motion_r[ok], atol=1e-9)
+
+
+def test_calibration_keeps_overlapping_sources_apart(online, registered):
+    """Overlapping sources are calibrated in turns: a close neighbour does
+    not change a source's frame peak."""
+    layout, _, _ = online
+    moco = Path(registered[True]).parent / "motion_correction"
+    al = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    geo = inj.trial_geometry(layout, al, (1, 4800))
+    fp = inj.GaussianFootprint(1.33)
+    s = inj.InjectionSettings(tau_s=0.012, calibration_s=2.5)
+    pair = np.array([[16.0, 20.0], [16.0, 22.0], [10.0, 33.0]])
+    np.testing.assert_array_equal(
+        inj.overlap_classes(pair, [fp] * 3), [0, 1, 0]
+    )
+    both = inj.calibrate_frame_peaks(
+        layout,
+        al,
+        geo,
+        pair,
+        (0.0, 0.0),
+        [fp] * 3,
+        s,
+        np.random.default_rng(0),
+    )
+    alone = inj.calibrate_frame_peaks(
+        layout,
+        al,
+        geo,
+        pair[:1],
+        (0.0, 0.0),
+        [fp],
+        s,
+        np.random.default_rng(0),
+    )
+    assert both[0] == pytest.approx(alone[0], rel=0.05)
+
+
+def test_inputs_that_would_corrupt_a_dataset_are_refused(
+    online, registered, tmp_path, monkeypatch
+):
+    """Repeated trials or paths, and an output folder that already holds a
+    dataset, are refused before anything is written."""
+    s = inj.InjectionSettings(
+        raw_per_photon=4.0, frame_traces=False, size_reference="tissue"
+    )
+    pos = {1: np.array([[16.0, 20.0]])}
+    with pytest.raises(ValueError, match="must not repeat"):
+        run_injection(
+            online,
+            registered[False],
+            tmp_path / "a",
+            monkeypatch,
+            settings=s,
+            positions=pos,
+            trials=[1, 1],
+        )
+    with pytest.raises(ValueError, match="must not repeat"):
+        inj.inject_session(
+            registered[False],
+            tmp_path / "b",
+            paths=(1, 1),
+            settings=s,
+            positions=pos,
+        )
+    assert not (tmp_path / "a").exists() and not (tmp_path / "b").exists()
+    out = tmp_path / "c"
+    (out / "motion_correction").mkdir(parents=True)
+    with pytest.raises(ValueError, match="already holds motion_correction"):
+        run_injection(
+            online,
+            registered[False],
+            out,
+            monkeypatch,
+            settings=s,
+            positions=pos,
+        )
+
+
+def test_copy_table_paths_and_absolute_folders(tmp_path, monkeypatch):
+    """The copy's table has absolute folders and no files for paths that
+    were not copied."""
+    from giant_python.io.hdf5 import load_struct_h5
+
+    table = {
+        "datadr": "x",
+        "savedr": "y",
+        "filename": np.array([["a1", "b1"], ["a2", "b2"]], dtype=object),
+        "epoch": np.ones((2, 2)),
+        "slap2_info": {"first_line": np.ones((2, 2))},
+        "motion_correction": {"fn_adata": "z"},
+    }
+    monkeypatch.chdir(tmp_path)
+    Path("rel").mkdir()
+    p = inj.write_copy_table(
+        table, np.array([1]), Path("rel/raw"), Path("rel"), paths=[1]
+    )
+    t = load_struct_h5(p)
+    assert Path(t["datadr"]).is_absolute() and Path(t["savedr"]).is_absolute()
+    assert Path(t["savedr"]) == tmp_path / "rel"
+    np.testing.assert_array_equal(
+        np.asarray(t["filename"], dtype=object).ravel(), ["b1", ""]
+    )
+    assert "motion_correction" not in t

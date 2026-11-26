@@ -10,9 +10,11 @@ does. Samples can be any array of raw counts in the recording's slot order,
 for example the injected copy minus the original, or the expected injected
 counts of :class:`~giant_python.simulation.injection.SampleModel`.
 
-At the registered (DS) frame times the motion is the recorded one; at other
-times it is the continuous motion interpolated as SILo's ``loadTrial`` does
-(``pchip``), less the frame's own online offset when compensated.
+A frame is moved by the continuous motion interpolated to its time as SILo's
+``loadTrial`` does (``pchip``, which passes through the recorded motion at the
+registered frames), less its own online reference offset when compensated: a
+frame formed with another kernel than the registration's can have another
+reference than the registered frame at the same time.
 """
 
 from __future__ import annotations
@@ -85,21 +87,14 @@ def frame_motion(
     Returns
     -------
     ndarray
-        ``(frames, 2)``: the recorded motion at DS frame times, else the
-        interpolated continuous motion less ``mapping @ (ref - refOffset)``.
+        ``(frames, 2)``: the interpolated continuous motion, less ``mapping @
+        (ref - refOffset)`` when compensated.
     """
     move = motion_at(alignment, times).T
     comp = alignment.compensation
     if comp is not None:
         d = comp["mapping"] @ (refs.T - comp["refOffset"][:, None])
         move = move - d.T
-    ds = alignment.ds_frames
-    k = np.searchsorted(ds, times)
-    at_ds = (k < ds.size) & (ds[np.minimum(k, ds.size - 1)] == times)
-    rec = np.stack([alignment.motion_r, alignment.motion_c], 1)
-    kk = np.minimum(k, ds.size - 1)
-    use = at_ds & np.all(np.isfinite(rec[kk]), axis=1)
-    move[use] = rec[kk[use]]
     return move
 
 

@@ -999,6 +999,20 @@ def read_alignment(path: Union[str, Path]) -> Alignment:
         )
 
 
+def _continuous(alignment: Alignment) -> np.ndarray:
+    """``(2, frames)`` continuous motion of every DS frame (NaN if missing).
+
+    With compensation, the recorded motion plus ``mapping @ (frameRef -
+    refOffset)``: the motion relative to the frame of ``refOffset``.
+    """
+    move = np.stack([alignment.motion_r, alignment.motion_c])
+    comp = alignment.compensation
+    if comp is not None:
+        ref = np.stack([comp["frameRefX"], comp["frameRefY"]])
+        move = move + comp["mapping"] @ (ref - comp["refOffset"][:, None])
+    return move
+
+
 def continuous_motion(alignment: Alignment):
     """DS frame times and the motion to interpolate (``onlineCompensation``).
 
@@ -1009,12 +1023,7 @@ def continuous_motion(alignment: Alignment):
         relative to the frame of ``refOffset`` (as SILo's ``loadTrial``).
     """
     t = alignment.ds_frames
-    mr, mc = alignment.motion_r.copy(), alignment.motion_c.copy()
-    comp = alignment.compensation
-    if comp is not None:
-        ref = np.stack([comp["frameRefX"], comp["frameRefY"]])
-        d = comp["mapping"] @ (ref - comp["refOffset"][:, None])
-        mr, mc = mr + d[0], mc + d[1]
+    mr, mc = _continuous(alignment)
     ok = np.isfinite(mr) & np.isfinite(mc)
     if not ok.any():
         raise ValueError(f"{alignment.path} has no frame with motion")
@@ -1418,13 +1427,18 @@ def _cols(value, keep: np.ndarray, n: int):
 
 
 def write_copy_table(
-    table: dict, keep: np.ndarray, data_dir: Path, save_dir: Path
+    table: dict,
+    keep: np.ndarray,
+    data_dir: Path,
+    save_dir: Path,
+    paths: Optional[Sequence[int]] = None,
 ) -> Path:
     """The trial table of the injected copy (``save_dir/trial_table.h5``).
 
     The original's table with only the trials ``keep`` (zero-based columns),
-    ``datadr`` and ``savedr`` pointing to the copy, and no registration or
-    extraction results.
+    ``datadr`` and ``savedr`` pointing to the copy (absolute), no
+    registration or extraction results, and empty filenames for paths not
+    in ``paths`` (one-based DMDs; default all), whose files are not copied.
     """
     n = np.atleast_2d(np.asarray(table["filename"], dtype=object)).shape[1]
     out = {}
@@ -1434,11 +1448,15 @@ def write_copy_table(
         if key == "slap2_info" and isinstance(value, dict):
             out[key] = {k: _cols(v, keep, n) for k, v in value.items()}
         elif key == "filename":
-            out[key] = np.atleast_2d(np.asarray(value, dtype=object))[:, keep]
+            names = np.atleast_2d(np.asarray(value, dtype=object))[:, keep]
+            for d in range(names.shape[0]):
+                if paths is not None and d + 1 not in paths:
+                    names[d] = ""
+            out[key] = names
         else:
             out[key] = _cols(value, keep, n)
-    out["datadr"] = str(data_dir)
-    out["savedr"] = str(save_dir)
+    out["datadr"] = str(Path(data_dir).absolute())
+    out["savedr"] = str(Path(save_dir).absolute())
     path = Path(save_dir) / "trial_table.h5"
     save_struct_h5(path, out)
     return path
@@ -1638,6 +1656,28 @@ def expected_frames(
     return out
 
 
+def overlap_classes(positions: np.ndarray, footprints: Sequence) -> np.ndarray:
+    """Classes of sources whose footprints do not overlap (greedy colouring).
+
+    Sources ``i`` and ``j`` overlap when they are closer than the sum of
+    their footprints' radii.
+
+    Returns
+    -------
+    ndarray of int
+        Class of each source, from 0.
+    """
+    pos = np.asarray(positions, dtype=np.float64).reshape(-1, 2)
+    radius = np.array([fp.radius for fp in footprints], dtype=np.float64)
+    dist = np.hypot(*(pos[:, None, :] - pos[None, :, :]).transpose(2, 0, 1))
+    near = dist < radius[:, None] + radius[None, :]
+    cls = np.full(pos.shape[0], -1)
+    for j in range(pos.shape[0]):
+        taken = set(cls[near[j] & (cls >= 0)])
+        cls[j] = next(c for c in range(pos.shape[0]) if c not in taken)
+    return cls
+
+
 def calibrate_frame_peaks(
     layout: RasterLayout,
     alignment: Alignment,
@@ -1654,7 +1694,9 @@ def calibrate_frame_peaks(
     Isolated unit events (tissue units) of every source are placed in a
     ``calibration_s`` stretch of the trial, at random phases of the frame
     grid; their noiseless frames at ``analyze_hz`` are formed as SILo forms
-    them (:func:`expected_frames`), in the path frame.
+    them (:func:`expected_frames`), in the path frame. Sources whose
+    footprints overlap take turns (:func:`overlap_classes`), so that each
+    event is alone at its source's peak pixel.
 
     Returns
     -------
@@ -1674,19 +1716,25 @@ def calibrate_frame_peaks(
         geometry.last_line - reach - gap,
         a + settings.calibration_s / period,
     )
-    k = np.arange(int(max(0.0, b - a) / gap))
-    if k.size == 0:
-        raise ValueError("the trial is too short to calibrate frame peaks")
-    onset = (
-        a
-        + k[None, :] * gap
-        + rng.uniform(0, gap - tail / period, (n_src, k.size))
-    )
-    src = np.repeat(np.arange(n_src), k.size)
+    turn = overlap_classes(positions, footprints)
+    n_turns = int(turn.max()) + 1 if n_src else 1
+    slots = np.arange(int(max(0.0, b - a) / gap))
+    if slots.size < n_turns:
+        raise ValueError(
+            "the trial is too short to calibrate frame peaks (needs "
+            f"{n_turns} event slots of {gap * period:.3f} s)"
+        )
+    src, onset = [], []
+    for j in range(n_src):
+        k = slots[slots % n_turns == turn[j]]
+        src.append(np.full(k.size, j))
+        onset.append(a + k * gap + rng.uniform(0, gap - tail / period, k.size))
+    src = np.concatenate(src) if src else np.zeros(0, np.int64)
+    onset = np.concatenate(onset) if onset else np.zeros(0)
     ev = Events(
         src,
         np.ones(src.size, np.int64),
-        onset.ravel(),
+        onset,
         np.zeros(src.size, np.int64),
         np.ones(src.size),
     )
@@ -1722,7 +1770,12 @@ def calibrate_frame_peaks(
             sel = (fl >= t0 - reach) & (fl <= t0 + tail / period)
             if sel.any():
                 peaks[e] = np.nanmax(vals[j, sel])
-        gain = np.nanmean(peaks.reshape(n_src, -1), axis=1)
+        gain = np.array(
+            [
+                np.nanmean(peaks[src == j]) if np.any(src == j) else np.nan
+                for j in range(n_src)
+            ]
+        )
     gain = gain / settings.photon_scale
     bad = ~(gain > 0)
     if bad.all():
@@ -1958,18 +2011,20 @@ def inject_session(
         statistics.
     """
     settings = settings or InjectionSettings()
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(out_dir).absolute()
     table = load_struct_h5(trial_table)
     names = np.atleast_2d(np.asarray(table["filename"], dtype=object))
     n_paths, n_trials = names.shape
     info = table["slap2_info"]
     trials = list(range(1, n_trials + 1)) if trials is None else trials
     trials = [int(t) for t in trials]
+    paths = [int(p) for p in paths]
     if not trials or min(trials) < 1 or max(trials) > n_trials:
         raise ValueError(f"trials must be in 1..{n_trials}")
+    if len(set(trials)) < len(trials) or len(set(paths)) < len(paths):
+        raise ValueError("trials and paths must not repeat")
     keep = np.array(trials) - 1
-    data_dir = Path(data_dir or table["datadr"])
+    data_dir = Path(data_dir or table["datadr"]).absolute()
     moco_dir = Path(moco_dir or Path(table["savedr"]) / "motion_correction")
     adata = np.atleast_2d(
         np.asarray(table["motion_correction"]["fn_adata"], dtype=object)
@@ -1979,6 +2034,17 @@ def inject_session(
             f"{out_dir / 'raw'} is the original's data folder; the copy "
             "must go elsewhere"
         )
+    found = [
+        name
+        for name in ("raw", "trial_table.h5", TRUTH_NAME, "motion_correction")
+        if (out_dir / name).exists()
+    ]
+    if found:
+        raise ValueError(
+            f"{out_dir} already holds {', '.join(found)}; inject into a new "
+            "folder"
+        )
+    out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "settings": settings,
         "placement": placement or PlacementSettings(),
@@ -2037,7 +2103,9 @@ def inject_session(
                 for q in p["trials"]
             ],
         }
-    copy_table = write_copy_table(table, keep, base["raw_dir"], out_dir)
+    copy_table = write_copy_table(
+        table, keep, base["raw_dir"], out_dir, sorted(truth_paths)
+    )
     origin = {
         "trial_table": str(Path(trial_table).absolute()),
         "data_dir": str(data_dir),
@@ -2207,7 +2275,7 @@ def read_truth(path: Union[str, Path]) -> dict:
         (``positions_rc`` in the trial's registered frame, ``frame_lines``
         at ``analyze_hz``, ``trace`` and ``trace_frames`` sources x frames,
         ``stats`` and the trial's lines; after :func:`record_copy_registration`
-        also ``copy_offset_rc`` and ``positions_copy_rc``).
+        also ``copy_shift_rc`` and ``positions_copy_rc``).
     """
     out = {"paths": {}}
     with h5py.File(path, "r") as f:
@@ -2239,34 +2307,57 @@ def read_truth(path: Union[str, Path]) -> dict:
 # ------------------------------------------- registration of the injected copy
 
 
-def registration_offset(original: Alignment, copy: Alignment) -> dict:
-    """How a copy's registration differs from the original's (same lines).
+def _grid_origin(alignment: Alignment) -> np.ndarray:
+    """What a registration adds to a sample's DMD position besides motion.
 
-    A registration's grid is anchored on its initial template, so the copy's
-    registered frame can sit a constant offset from the original's even when
-    the motion is the same.
+    ``shift(l) = o(l) - (trim - 1) + maxshift - M(l)`` (see
+    :func:`trial_geometry`); the constant part is ``maxshift - (trim - 1)``
+    less ``mapping @ refOffset`` when compensated.
+    """
+    trim = np.array([alignment.trim_r0, alignment.trim_c0], np.float64)
+    origin = alignment.margin - (trim - 1)
+    comp = alignment.compensation
+    if comp is not None:
+        origin = origin - comp["mapping"] @ comp["refOffset"]
+    return origin
+
+
+def registration_offset(original: Alignment, copy: Alignment) -> dict:
+    """Where a copy's registration puts what the original's put at ``p``.
+
+    Two registrations of the same lines can differ by a constant: a grid is
+    anchored on its initial template, and its window, padding and online
+    reference offset may differ. A tissue point at ``p`` in the original's
+    registered frame is at ``p + shift_rc`` in the copy's.
+
+    Raises
+    ------
+    ValueError
+        For registrations of different frames, or when only one of them
+        undid the online correction (they then differ line by line).
 
     Returns
     -------
     dict
-        ``offset_rc``: median of the copy's minus the original's motion (a
-        tissue point at ``p`` in the original's registered frame is at ``p -
-        offset_rc`` in the copy's); ``rms_px`` and ``max_px``: length of the
-        motion difference after removing the offset; ``n_frames``.
+        ``shift_rc``; ``motion_offset_rc``: median of the copy's minus the
+        original's continuous motion; ``rms_px`` and ``max_px``: length of
+        the motion difference after removing that median; ``n_frames``.
     """
     if not np.array_equal(original.ds_frames, copy.ds_frames):
         raise ValueError("the registrations are of different frames")
-    d = np.stack(
-        [copy.motion_r - original.motion_r, copy.motion_c - original.motion_c],
-        1,
-    )
+    if (original.compensation is None) != (copy.compensation is None):
+        raise ValueError(
+            "only one registration undid the online motion correction"
+        )
+    d = (_continuous(copy) - _continuous(original)).T
     d = d[np.all(np.isfinite(d), axis=1)]
     if d.shape[0] == 0:
         raise ValueError("no frame has motion in both registrations")
-    offset = np.median(d, axis=0)
-    r = np.hypot(*(d - offset).T)
+    motion = np.median(d, axis=0)
+    r = np.hypot(*(d - motion).T)
     return {
-        "offset_rc": offset,
+        "shift_rc": _grid_origin(copy) - _grid_origin(original) - motion,
+        "motion_offset_rc": motion,
         "rms_px": float(np.sqrt(np.mean(r**2))),
         "max_px": float(r.max()),
         "n_frames": int(d.shape[0]),
@@ -2278,9 +2369,10 @@ def record_copy_registration(out_dir: Union[str, Path]) -> dict:
 
     ``out_dir`` is an :func:`inject_session` output whose ``trial_table.h5``
     has been registered (``giant register``). For each injected trial-path
-    the truth file gains ``copy_offset_rc`` and ``positions_copy_rc`` (the
-    sources in the copy's registered frame) and the attributes
-    ``copy_alignment``, ``copy_motion_rms_px`` and ``copy_motion_max_px``.
+    the truth file gains ``copy_shift_rc`` and ``positions_copy_rc`` (the
+    sources in the copy's registered frame: ``positions_rc + copy_shift_rc``)
+    and the attributes ``copy_alignment``, ``copy_motion_rms_px`` and
+    ``copy_motion_max_px``.
 
     Returns
     -------
@@ -2306,12 +2398,12 @@ def record_copy_registration(out_dir: Union[str, Path]) -> dict:
                 cmp = registration_offset(
                     read_alignment(h.attrs["alignment"]), read_alignment(path)
                 )
-                for key in ("copy_offset_rc", "positions_copy_rc"):
+                for key in ("copy_shift_rc", "positions_copy_rc"):
                     if key in h:
                         del h[key]
-                h["copy_offset_rc"] = cmp["offset_rc"]
+                h["copy_shift_rc"] = cmp["shift_rc"]
                 h["positions_copy_rc"] = (
-                    h["positions_rc"][()] - cmp["offset_rc"]
+                    h["positions_rc"][()] + cmp["shift_rc"]
                 )
                 h.attrs["copy_alignment"] = str(path)
                 h.attrs["copy_motion_rms_px"] = cmp["rms_px"]
