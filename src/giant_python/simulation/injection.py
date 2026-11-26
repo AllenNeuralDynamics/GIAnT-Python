@@ -970,6 +970,7 @@ def read_alignment(path: Union[str, Path]) -> Alignment:
     """
 
     def vec(ds):
+        """A dataset as a flat float vector."""
         return np.asarray(ds[()], dtype=np.float64).ravel()
 
     with h5py.File(path, "r") as f:
@@ -1673,9 +1674,9 @@ def calibrate_frame_peaks(
         geometry.last_line - reach - gap,
         a + settings.calibration_s / period,
     )
-    if b <= a:
+    k = np.arange(int(max(0.0, b - a) / gap))
+    if k.size == 0:
         raise ValueError("the trial is too short to calibrate frame peaks")
-    k = np.arange(int((b - a) / gap))
     onset = (
         a
         + k[None, :] * gap
@@ -1715,12 +1716,12 @@ def calibrate_frame_peaks(
         device,
     )
     peaks = np.full(src.size, np.nan)
-    for e, (j, t0) in enumerate(zip(src, ev.onset_line)):
-        sel = (fl >= t0 - reach) & (fl <= t0 + tail / period)
-        if sel.any():
-            peaks[e] = np.nanmax(vals[j, sel])
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
+        warnings.simplefilter("ignore", RuntimeWarning)  # pixels w/o data
+        for e, (j, t0) in enumerate(zip(src, ev.onset_line)):
+            sel = (fl >= t0 - reach) & (fl <= t0 + tail / period)
+            if sel.any():
+                peaks[e] = np.nanmax(vals[j, sel])
         gain = np.nanmean(peaks.reshape(n_src, -1), axis=1)
     gain = gain / settings.photon_scale
     bad = ~(gain > 0)
