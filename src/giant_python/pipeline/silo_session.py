@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
+import multiprocessing
 import os
 import time
 from dataclasses import dataclass
@@ -137,7 +138,10 @@ def make_pool(workers: int, threads: int) -> cf.ProcessPoolExecutor:
     """A process pool whose workers use ``threads`` threads each.
 
     The thread variables are set while the workers start, so that the
-    numerical libraries see them when they load.
+    numerical libraries see them when they load. The workers are spawned
+    on every platform: a forked worker (Linux's default) inherits the
+    parent's numerical libraries already loaded with the parent's thread
+    count (OpenBLAS: all cores), which the variables can no longer change.
     """
     saved = {k: os.environ.get(k) for k in _THREAD_VARS}
     for k in _THREAD_VARS:
@@ -145,6 +149,7 @@ def make_pool(workers: int, threads: int) -> cf.ProcessPoolExecutor:
     try:
         pool = cf.ProcessPoolExecutor(
             max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
             initializer=_worker_init,
             initargs=(threads,),
         )
