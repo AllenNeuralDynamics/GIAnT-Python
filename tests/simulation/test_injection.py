@@ -978,3 +978,41 @@ def test_relative_registration_folder_is_stored_absolute(
     al = Path(str(truth["paths"][1]["trials_detail"][1]["alignment"]))
     assert al.is_absolute() and al.exists()
     assert os.path.isabs(truth["origin"]["moco_dir"])
+
+
+def test_more_inputs_are_checked(online, registered, tmp_path):
+    """Non-finite gains are refused; sources without data cannot be
+    calibrated; copies' filenames are their basenames; larger trial grids
+    keep their data when shifted into the path frame."""
+    from giant_python.io.hdf5 import load_struct_h5
+
+    for bad in (float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite"):
+            inj.InjectionSettings(raw_per_photon=bad)
+    layout, _, _ = online
+    moco = Path(registered[True]).parent / "motion_correction"
+    al = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    geo = inj.trial_geometry(layout, al, (1, 4800))
+    fp = inj.GaussianFootprint(1.33)
+    s = inj.InjectionSettings(tau_s=0.012, calibration_s=2.0)
+    with pytest.raises(ValueError, match=r"sources \[1\] have no data"):
+        inj.calibrate_frame_peaks(
+            layout,
+            al,
+            geo,
+            np.array([[16.0, 20.0], [16.0, 200.0]]),
+            (0.0, 0.0),
+            [fp, fp],
+            s,
+            np.random.default_rng(0),
+        )
+    table = {
+        "filename": np.array([["sub/a_DMD1.dat"], [""]], dtype=object),
+        "slap2_info": {"first_line": np.ones((2, 1))},
+    }
+    p = inj.write_copy_table(table, np.array([0]), tmp_path, tmp_path)
+    names = np.asarray(load_struct_h5(p)["filename"], dtype=object).ravel()
+    np.testing.assert_array_equal(names, ["a_DMD1.dat", ""])
+    big = np.arange(10 * 112, dtype=float).reshape(10, 112)
+    out = inj.shift_image(big, (0.0, 8.0), (10, 100))
+    np.testing.assert_allclose(out, big[:, 8:108])

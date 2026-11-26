@@ -246,8 +246,12 @@ class InjectionSettings:
                 "calibration_s must be positive",
             ),
             (
-                self.raw_per_photon is not None and self.raw_per_photon <= 0,
-                "raw_per_photon must be positive",
+                self.raw_per_photon is not None
+                and not (
+                    math.isfinite(self.raw_per_photon)
+                    and self.raw_per_photon > 0
+                ),
+                "raw_per_photon must be positive and finite",
             ),
             (self.channel < 0, "channel must be a zero-based channel index"),
             (
@@ -931,17 +935,22 @@ def align_images(
     return np.array([i - max_shift + di, j - max_shift + dj])
 
 
-def shift_image(image: np.ndarray, shift) -> np.ndarray:
-    """``out(p) = image(p + shift)`` (bilinear; NaN where undefined)."""
+def shift_image(image: np.ndarray, shift, shape=None) -> np.ndarray:
+    """``out(p) = image(p + shift)`` (bilinear; NaN where undefined).
+
+    ``shape`` sets the output grid (default: the image's); the whole image
+    is sampled, whatever its size.
+    """
     img = np.asarray(image, dtype=np.float64)
     ok = np.isfinite(img).astype(np.float64)
-    rr, cc = np.mgrid[0 : img.shape[0], 0 : img.shape[1]].astype(np.float64)
+    shape = img.shape if shape is None else tuple(shape)
+    rr, cc = np.mgrid[0 : shape[0], 0 : shape[1]].astype(np.float64)
     coords = [rr + shift[0], cc + shift[1]]
     val = ndimage.map_coordinates(
         np.where(ok > 0, img, 0.0), coords, order=1, cval=0.0
     )
     wt = ndimage.map_coordinates(ok, coords, order=1, cval=0.0)
-    out = np.full(img.shape, np.nan)
+    out = np.full(shape, np.nan)
     good = wt > 0.999
     out[good] = val[good] / wt[good]
     return out
@@ -1463,8 +1472,9 @@ def write_copy_table(
 
     The original's table with only the trials ``keep`` (zero-based columns),
     ``datadr`` and ``savedr`` pointing to the copy (absolute), no
-    registration or extraction results, and empty filenames for paths not
-    in ``paths`` (one-based DMDs; default all), whose files are not copied.
+    registration or extraction results, filenames reduced to the copies'
+    names in ``data_dir``, and empty filenames for paths not in ``paths``
+    (one-based DMDs; default all), whose files are not copied.
     """
     n = np.atleast_2d(np.asarray(table["filename"], dtype=object)).shape[1]
     out = {}
@@ -1476,6 +1486,10 @@ def write_copy_table(
         elif key == "filename":
             names = np.atleast_2d(np.asarray(value, dtype=object))[:, keep]
             for d in range(names.shape[0]):
+                for t in range(names.shape[1]):
+                    cell = str(names[d, t] or "").strip()
+                    # the copies are flat in data_dir
+                    names[d, t] = Path(cell).name if cell else ""
                 if paths is not None and d + 1 not in paths:
                     names[d] = ""
             out[key] = names
@@ -1566,7 +1580,7 @@ def plan_path(
         raise ValueError("one trial shift per trial is needed")
     moved = np.stack(
         [
-            shift_image(fit_shape(a.mean_im[ch], ref.shape), s)
+            shift_image(a.mean_im[ch], s, ref.shape)
             for a, s in zip(alignments, trial_shift)
         ]
     )
@@ -1734,6 +1748,11 @@ def calibrate_frame_peaks(
     footprints overlap take turns (:func:`overlap_classes`), so that each
     event is alone at its source's peak pixel.
 
+    Raises
+    ------
+    ValueError
+        If a source has no data at its peak pixel.
+
     Returns
     -------
     ndarray of float
@@ -1814,10 +1833,13 @@ def calibrate_frame_peaks(
             ]
         )
     gain = gain / settings.photon_scale
-    bad = ~(gain > 0)
-    if bad.all():
-        raise ValueError("no source has data at its peak pixel")
-    gain[bad] = np.median(gain[~bad])
+    bad = np.flatnonzero(~(gain > 0))
+    if bad.size:
+        raise ValueError(
+            f"sources {bad.tolist()} have no data at their peak pixel, so "
+            "their frame peaks cannot be calibrated; move them or use "
+            "size_reference='tissue'"
+        )
     return gain
 
 
