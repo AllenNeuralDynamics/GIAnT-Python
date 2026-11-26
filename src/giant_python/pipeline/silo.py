@@ -718,8 +718,8 @@ class _Pending:
 class _Done:
     """Completion times of a trial's subproblems, from done callbacks."""
 
-    def __init__(self, n: int) -> None:
-        """Expect ``n`` completions."""
+    def __init__(self, n: int = 1) -> None:
+        """Expect ``n`` completions (set by :func:`_submit`)."""
         self.n, self.times = n, []
         self.cond = threading.Condition()
 
@@ -735,17 +735,6 @@ class _Done:
         with self.cond:
             self.cond.wait_for(lambda: len(self.times) >= self.n, timeout)
             return max(self.times) if self.times else None
-
-
-def _track(futures: list) -> _Done:
-    """Track when each future is done; for no futures (solved here), the
-    solve is done now."""
-    done = _Done(max(1, len(futures)))
-    if not futures:
-        done.add()
-    for f in futures:
-        f.add_done_callback(done.add)
-    return done
 
 
 def _finish(p: _Pending) -> float:
@@ -799,23 +788,36 @@ class _ContainerView:
         return {"plan": self.plan_hash}
 
 
-def _submit(subs, sp, options, pool):
+def _submit(subs, sp, options, pool, done: Optional[_Done] = None):
     """Solve a trial's subproblems: futures from the pool (largest first),
-    or results solved here."""
+    or results solved here.
+
+    ``done`` gets each future's completion time (its done callback is
+    attached as soon as the future exists, so a subproblem solved while the
+    rest are still submitted keeps its own time), or the time the solve
+    here returned.
+    """
     from ..extraction.raster.solver import solve_subproblems
     from .silo_solve import _solve_one, effective_batch
 
+    done = done if done is not None else _Done()
     if not subs:
+        done.add()
         return [], []
     if pool is None or effective_batch(options) is not None:
-        return [], solve_subproblems(subs, sp, options)
+        results = solve_subproblems(subs, sp, options)
+        done.add()
+        return [], results
     order = np.argsort(
         [-s.n_pixels * s.n_frames * (s.n_sources + 1) for s in subs],
         kind="stable",
     )
-    by_index = {
-        int(i): pool.submit(_solve_one, subs[i], sp, options) for i in order
-    }
+    done.n = len(subs)
+    by_index = {}
+    for i in order:
+        f = pool.submit(_solve_one, subs[i], sp, options)
+        f.add_done_callback(done.add)
+        by_index[int(i)] = f
     return [by_index[i] for i in range(len(subs))], []
 
 
@@ -958,10 +960,8 @@ def stream(  # noqa: C901
             )
             del trial
             submitted = time.perf_counter() - clock0
-            futures, results = _submit(subs, sp, options, pool)
-            # before waiting for the previous trial, so that a trial solved
-            # meanwhile gets its own completion time
-            done = _track(futures)
+            done = _Done()
+            futures, results = _submit(subs, sp, options, pool, done)
             del subs
             if pending is not None:
                 wait_s = _finish(pending)
