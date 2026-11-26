@@ -64,9 +64,9 @@ Two seeding options are not MATLAB's either (both off by default):
   started, every fit to convergence, and a residual peak refitted with the
   peaks within 6 pixels of it rather than with its whole connected region.
   The search is MATLAB's otherwise. On 780125 (5 trials) a path's seeding
-  takes about 5-7 s instead of 3-8 minutes, and the seeds are as close to
-  MATLAB's as the MATLAB fit's (MATLAB's ``lsqcurvefit`` stops after a few
-  iterations; the converged fit lands nearer to it than the capped port).
+  takes about 5-10 s instead of 3-8 minutes, and its sources are closer to
+  MATLAB's own than those of the port of MATLAB's capped fit (path 1: 300
+  sources, 282 on MATLAB's pixel, against 261 and 249; MATLAB has 296).
 * ``seed_merge_px=1.5`` rejects a residual peak whose fit ends within
   1.5 pixels of another peak. An activity image's peak is narrower than a
   pixel; a source between pixels is otherwise fitted as two or three peaks

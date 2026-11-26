@@ -687,9 +687,14 @@ class _LocalFit:
         sel0 = ndimage.binary_dilation(cand, np.ones((9, 9), bool))
         rows = self.rows_of(sel0 & self.finite)
         theta = self.solve(theta, starts, rows)
+        # the model everywhere the peaks' windows reach
+        side = 2 * _LOCAL_WINDOW + 1
+        reach = self.rows_of(
+            ndimage.binary_dilation(cand, np.ones((side, side), bool))
+        )
         fit_im = np.zeros(self.shape)
-        fit_im[self.ry[rows], self.rx[rows]] = self.model_at(
-            theta, starts, rows
+        fit_im[self.ry[reach], self.rx[reach]] = self.model_at(
+            theta, starts, reach
         )
         pix = np.column_stack(_rounded_index(theta, self.shape))
         # how many peaks' 9 x 9 squares cover each pixel (padded by 4)
@@ -736,7 +741,9 @@ class _LocalFit:
         for r, c in f_starts:
             region[max(r - w, 0) : r + w + 1, max(c - w, 0) : c + w + 1] = 1
         rows = self.rows_of(region & comp)
-        held = np.flatnonzero(in_comp & ~free)
+        # every other peak whose window reaches these pixels is held,
+        # those of neighbouring regions too (model_at leaves out the rest)
+        held = np.flatnonzero(~free)
         fixed = None
         if held.size:
             fixed = self.model_at(theta[held], starts[held], rows)
@@ -755,7 +762,10 @@ class _LocalFit:
         theta = np.vstack([theta, fitted[-1:]])
         starts = np.vstack([starts, [[r_n, c_n]]])
         changed = np.append(np.flatnonzero(free), theta.shape[0] - 1)
-        fit_im[self.ry[rows], self.rx[rows]] = self.model_at(
-            theta, starts, rows
+        # refresh the model wherever the refitted peaks' windows reach,
+        # beyond their region too
+        reach = self.rows_of(region)
+        fit_im[self.ry[reach], self.rx[reach]] = self.model_at(
+            theta, starts, reach
         )
         return theta, starts, changed, old
