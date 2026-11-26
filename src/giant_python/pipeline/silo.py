@@ -714,14 +714,17 @@ class _Pending:
     done: list = field(default_factory=list)
 
 
-def _track(p: _Pending) -> None:
-    """Note when each of a trial's subproblems is solved (``p.done``)."""
-    if not p.futures:
-        p.done.append(time.perf_counter())
-    for f in p.futures:
+def _track(futures: list) -> list:
+    """A list that gets the time each future is done (a done callback);
+    for no futures (solved here), the time now."""
+    done: list = []
+    if not futures:
+        done.append(time.perf_counter())
+    for f in futures:
         f.add_done_callback(
-            lambda _f, box=p.done: box.append(time.perf_counter())
+            lambda _f, box=done: box.append(time.perf_counter())
         )
+    return done
 
 
 def _finish(p: _Pending) -> float:
@@ -852,7 +855,9 @@ def stream(  # noqa: C901
         Per trial: ``unit``, ``load`` and ``wait`` seconds (the wait is
         for the previous trial's solve), ``submitted`` and ``solved``
         (seconds since ``clock0`` when its subproblems went to the solver
-        and when the last was solved), or ``skipped``.
+        and when the last was solved; a trial solved in this process, with
+        one solver process or batches, is solved when that returns), or
+        ``skipped``.
     """
     clock0 = time.perf_counter() if clock0 is None else clock0
     solve_times = {}
@@ -933,6 +938,9 @@ def stream(  # noqa: C901
             del trial
             submitted = time.perf_counter() - clock0
             futures, results = _submit(subs, sp, options, pool)
+            # before waiting for the previous trial, so that a trial solved
+            # meanwhile gets its own completion time
+            done = _track(futures)
             del subs
             if pending is not None:
                 wait_s = _finish(pending)
@@ -952,8 +960,8 @@ def stream(  # noqa: C901
                 attrs,
                 out,
                 submitted,
+                done,
             )
-            _track(pending)
             report.append({"unit": (d, t), "load": load_s, "wait": wait_s})
             if execution.verbose:
                 print(
@@ -975,7 +983,16 @@ def stream(  # noqa: C901
 
 def _solve_span(p: _Pending, clock0: float) -> tuple:
     """When a finished trial went to the solver and when its last
-    subproblem was solved, in seconds since ``clock0``."""
+    subproblem was solved, in seconds since ``clock0``.
+
+    A future's result can be read before its done callbacks have run, so
+    this waits (briefly) for every callback's time.
+    """
+    deadline = time.perf_counter() + 5.0
+    while len(p.done) < max(1, len(p.futures)):
+        if time.perf_counter() > deadline:
+            break
+        time.sleep(0.001)
     end = max(p.done) if p.done else time.perf_counter()
     return p.submitted, end - clock0
 
