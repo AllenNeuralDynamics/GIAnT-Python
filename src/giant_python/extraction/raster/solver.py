@@ -72,9 +72,11 @@ class SolverOptions:
         :func:`~giant_python.extraction.raster.solver_fits.projected_newton`).
     cg_iter : int
         Cap on the conjugate-gradient iterations of a Newton step.
-    batch_bytes : float
+    batch_bytes : float or None
         Subproblems are fitted together while their padded data stay
-        below this size.
+        below this size. None: one at a time on the CPU, where batches
+        are slower (every member is evaluated until the last one
+        converges), and 2e8 on a GPU.
     keep_baseline : bool
         Return each subproblem's baseline (pixels x frames per channel).
     """
@@ -85,7 +87,7 @@ class SolverOptions:
     fit_max_iter: dict = field(default_factory=dict)
     ftol: float | None = None
     cg_iter: int = 100
-    batch_bytes: float = 2e8
+    batch_bytes: float | None = None
     keep_baseline: bool = False
 
     def fit_options(self, name: str) -> dict:
@@ -260,9 +262,14 @@ def _debias(bt, z, h, b, k, s, info, name):
 
 def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
     """``extractSources`` for subproblems with equal frames and channels."""
+    n_ch = subs[0].y.shape[0]
+    if n_ch not in (1, 2):
+        raise ValueError(
+            "the solver fits the activity channel and at most one more; "
+            f"a subproblem has {n_ch} channels"
+        )
     bt = _Batch(subs, params, opt)
     p = params
-    n_ch = subs[0].y.shape[0]
     info = [dict() for _ in subs]
     y1 = [np.asarray(s.y[0], np.float64) for s in subs]
     finv = [np.asarray(s.finv, np.float64) for s in subs]
@@ -326,7 +333,10 @@ def _solve_batch(subs, params: SolverParams, opt: SolverOptions):  # noqa: C901
         name = f"footprints{outer}"
         opts = opt.fit_options(name)
         x_t = bt.sources_frames(x_thr)
-        s0 = h @ x_t + b + 1 if p.footprint_variance == "fixed" else None
+        s0 = None
+        if p.footprint_variance == "fixed":
+            # the model at the fit's start: the starting Hs through the filter
+            s0 = (g @ hs) @ x_t + b + 1
         hs, fit = fit_footprints(z, x_t, b, g, bt.w, hs, valid, s0=s0, **opts)
         _note(info, name, fit, time.perf_counter() - t0)
         h = g @ hs
@@ -403,10 +413,14 @@ def solve_subproblems(
     Subproblems with the same number of frames and channels are padded to
     a common number of pixels and sources and fitted together, in batches
     of at most ``options.batch_bytes`` of padded data, formed in order of
-    size so that little is padded.
+    size so that little is padded. Results agree with those of single
+    solves within the fits' tolerance, not bit for bit.
     """
     opt = options or SolverOptions()
     itemsize = 8 if opt.dtype == "float64" else 4
+    limit = opt.batch_bytes
+    if limit is None:
+        limit = 0.0 if torch.device(opt.device).type == "cpu" else 2e8
     results: list = [None] * len(subs)
     groups: dict = {}
     for i, sb in enumerate(subs):
@@ -423,7 +437,7 @@ def solve_subproblems(
                     * subs[idx[stop]].n_frames
                     * itemsize
                 )
-                if size > opt.batch_bytes:
+                if size > limit:
                     break
                 stop += 1
             chunk = idx[start:stop]
@@ -466,6 +480,23 @@ class TrialResult:
     snr: np.ndarray
 
 
+def _check_placement(index, count: int, size: int, what: str) -> None:
+    """Reject indices that would put results in the wrong place."""
+    index = np.asarray(index)
+    if index.shape != (count,):
+        raise ValueError(
+            f"a subproblem has {count} {what} and {index.size} indices "
+            "for them"
+        )
+    if index.size and (index.min() < 0 or index.max() >= size):
+        raise ValueError(
+            f"a subproblem's {what} indices must lie in 0..{size - 1}; "
+            f"they span {index.min()}..{index.max()}"
+        )
+    if np.unique(index).size != index.size:
+        raise ValueError(f"a subproblem's {what} indices repeat")
+
+
 def assemble_results(
     subs: list[Subproblem],
     results: list[SubproblemResult],
@@ -489,6 +520,10 @@ def assemble_results(
             raise ValueError(
                 "a subproblem needs its pixels and sources to be assembled"
             )
+        _check_placement(sb.pixels, r.footprints.shape[0], n_pixels, "pixels")
+        _check_placement(
+            sb.sources, r.footprints.shape[1], n_sources, "sources"
+        )
         h[np.ix_(sb.pixels, sb.sources)] = r.footprints
         ev[:, sb.sources] = r.events
         ls[:, sb.sources] = r.ls

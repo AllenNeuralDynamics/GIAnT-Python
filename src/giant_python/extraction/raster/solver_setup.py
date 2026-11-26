@@ -279,6 +279,10 @@ class Subproblem:
                 f"sel has {n_px} pixels; y is {self.y.shape} and finv "
                 f"{self.finv.shape}"
             )
+        for name in ("pixels", "sources"):
+            index = getattr(self, name)
+            if index is not None and np.asarray(index).min(initial=0) < 0:
+                raise ValueError(f"{name} holds a negative index")
         r, c = self.sources_rc[:, 0], self.sources_rc[:, 1]
         inside = (
             (r >= 0)
@@ -470,6 +474,12 @@ def _trial_pixel_index(trial_file: Path, row0, col0, sel) -> np.ndarray:
     rows, cols = sel_coords(full)
     index[rows, cols] = np.arange(rows.size)
     r, c = sel_coords(sel)
+    inside = (r + row0 < full.shape[0]) & (c + col0 < full.shape[1])
+    if not inside.all() or (index[r + row0, c + col0] < 0).any():
+        raise ValueError(
+            f"{trial_file} does not select every pixel of the subproblem: "
+            "the two files are not from the same trial"
+        )
     return index[r + row0, c + col0]
 
 

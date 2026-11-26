@@ -125,7 +125,9 @@ def test_batch_matches_single_solves(fixture, solved):
         y=sub.y[:, keep], finv=sub.finv[keep], sel=sel, sources_rc=[[r0, c0]]
     )
     alone = solve_subproblem(small, PARAMS)
-    both = solve_subproblems([small, sub], PARAMS)
+    both = solve_subproblems(
+        [small, sub], PARAMS, SolverOptions(batch_bytes=1e9)
+    )
     assert both[0].footprints.shape == (int(keep.sum()), 1)
     for got, ref in ((both[0], alone), (both[1], solved)):
         np.testing.assert_allclose(got.footprints, ref.footprints, atol=1e-6)
@@ -147,6 +149,15 @@ def test_trials_of_different_length_are_grouped(fixture, solved):
     assert out[0].events.shape == (1, 2, 600)
     assert out[1].events.shape == (2, 2, 1000)
     np.testing.assert_allclose(out[1].footprints, solved.footprints, atol=1e-6)
+
+
+def test_more_than_two_channels_are_refused(fixture):
+    """The solver fits the activity channel and one more, as MATLAB's; a
+    third channel is refused, not dropped."""
+    sub, _ = fixture
+    three = replace(sub, y=np.concatenate([sub.y, sub.y[:1]]))
+    with pytest.raises(ValueError, match="3 channels"):
+        solve_subproblem(three, PARAMS)
 
 
 def test_float32_fits_are_close(fixture, solved):
@@ -289,6 +300,19 @@ def test_assemble_results():
         assemble_results(
             [replace(subs[0], pixels=None)], results[:1], 6, 5, 25.0
         )
+    # indices that would put results in the wrong place are refused
+    for bad, message in (
+        (dict(pixels=np.array([0, 1, 6])), "pixels indices must lie"),
+        (dict(sources=np.array([5])), "sources indices must lie"),
+        (dict(pixels=np.array([0, 1])), "3 pixels and 2 indices for"),
+        (dict(pixels=np.array([0, 1, 1])), "pixels indices repeat"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            assemble_results(
+                [replace(subs[0], **bad)], results[:1], 6, 5, 25.0
+            )
+    with pytest.raises(ValueError, match="negative index"):
+        replace(subs[0], pixels=np.array([0, -1, 4]))
 
 
 def test_process_result():
