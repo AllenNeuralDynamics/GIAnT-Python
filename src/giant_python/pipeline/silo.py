@@ -742,22 +742,29 @@ def _save_container(folder, session, params, plan, ph, chash, trial, d, t):
         f.attrs["settings_hash"] = chash
 
 
-def stream_path(  # noqa: C901
+def stream(  # noqa: C901
     session: SiloSession,
     params: SiloParams,
     execution: SiloExecution,
-    d: int,
+    paths: Optional[Sequence[int]] = None,
     pool=None,
     save_subproblems: Optional[Path] = None,
 ) -> list:
-    """Load path ``d``'s valid trials one ahead of the solver.
+    """Load the paths' valid trials one ahead of the solver.
 
     As MATLAB's ``processAllTrials_Async``: while one trial's subproblems
-    are solved in ``pool``, the next trial is loaded here. Each trial's
-    results go to the results file that the staged run writes
-    (``results/path<d>_trial<tttt>.h5``, with the same settings hash), so
-    that :func:`~.silo_collect.collect` makes the summaries either way.
-    Containers are written only to ``save_subproblems``, if given.
+    are solved in ``pool``, the next trial is loaded here (also across
+    paths: a path's first trial is loaded while the previous path's last
+    trial is solved). Each trial's results go to the results file that the
+    staged run writes (``results/path<d>_trial<tttt>.h5``, with the same
+    settings hash), so that :func:`~.silo_collect.collect` makes the
+    summaries either way. Containers are written only to
+    ``save_subproblems``, if given.
+
+    Parameters
+    ----------
+    paths : sequence of int, optional
+        Zero-based paths (default: every planned path).
 
     Returns
     -------
@@ -769,82 +776,97 @@ def stream_path(  # noqa: C901
     from ..extraction.raster.results import TrialRecord
     from .silo_solve import results_attrs, solve_hash
 
-    pf = session.plan_file(d)
-    plan = read_plan(pf)
-    rois = read_user_rois(pf)[1]
-    ph = _attr(pf, "settings_hash")
     sp = params.solver_params()
     options = execution.solver_options()
-    placements = [(g.pixels, g.sources) for g in plan.groups]
-    n_sub = len(plan.groups)
     report = []
     pending: Optional[_Pending] = None
-    for t in (int(x) for x in plan.valid_trials):
-        chash = _prepare_hash(params, ph, d, t)
-        rhash = solve_hash(params, options, chash, (0, n_sub))
-        out = session.results_file(d, t)
-        skip = session.skip_file(d, t)
-        if not execution.overwrite and (
-            _attr(out, "settings_hash") == rhash or skip_hash(skip) == chash
-        ):
-            report.append({"unit": (d, t), "skipped": "up to date"})
+    if paths is None:
+        paths = range(session.n_paths)
+    for d in paths:
+        pf = session.plan_file(d)
+        if not pf.exists():
             continue
-        t0 = time.perf_counter()
-        try:
-            trial = load_trial_for(
-                session, params, plan, d, t, rois, execution.loader_device
+        plan = read_plan(pf)
+        rois = read_user_rois(pf)[1]
+        ph = _attr(pf, "settings_hash")
+        placements = [(g.pixels, g.sources) for g in plan.groups]
+        n_sub = len(plan.groups)
+        for t in (int(x) for x in plan.valid_trials):
+            chash = _prepare_hash(params, ph, d, t)
+            rhash = solve_hash(params, options, chash, (0, n_sub))
+            out = session.results_file(d, t)
+            skip = session.skip_file(d, t)
+            if not execution.overwrite and (
+                _attr(out, "settings_hash") == rhash
+                or skip_hash(skip) == chash
+            ):
+                report.append({"unit": (d, t), "skipped": "up to date"})
+                continue
+            t0 = time.perf_counter()
+            try:
+                trial = load_trial_for(
+                    session, params, plan, d, t, rois, execution.loader_device
+                )
+            except ValueError as exc:
+                if NO_DATA not in str(exc):
+                    raise
+                write_skip(skip, str(exc), chash)
+                report.append({"unit": (d, t), "skipped": str(exc)})
+                continue
+            if skip.exists():
+                skip.unlink()
+            load_s = time.perf_counter() - t0
+            record = TrialRecord.from_trial(trial)
+            if save_subproblems is not None:
+                _save_container(
+                    save_subproblems,
+                    session,
+                    params,
+                    plan,
+                    ph,
+                    chash,
+                    trial,
+                    d,
+                    t,
+                )
+            extracted = trial.frame_lines.size >= params.min_frames
+            subs = (
+                [g.subproblem(trial.y, trial.finv) for g in plan.groups]
+                if extracted
+                else []
             )
-        except ValueError as exc:
-            if NO_DATA not in str(exc):
-                raise
-            write_skip(skip, str(exc), chash)
-            report.append({"unit": (d, t), "skipped": str(exc)})
-            continue
-        if skip.exists():
-            skip.unlink()
-        load_s = time.perf_counter() - t0
-        record = TrialRecord.from_trial(trial)
-        if save_subproblems is not None:
-            _save_container(
-                save_subproblems, session, params, plan, ph, chash, trial, d, t
+            attrs = results_attrs(
+                _ContainerView(trial, plan, d, t),
+                session.container_file(d, t).name,
+                chash,
+                (0, n_sub),
+                n_sub,
+                extracted,
+                rhash,
             )
-        extracted = trial.frame_lines.size >= params.min_frames
-        subs = (
-            [g.subproblem(trial.y, trial.finv) for g in plan.groups]
-            if extracted
-            else []
-        )
-        attrs = results_attrs(
-            _ContainerView(trial, plan, d, t),
-            session.container_file(d, t).name,
-            chash,
-            (0, n_sub),
-            n_sub,
-            extracted,
-            rhash,
-        )
-        del trial
-        futures, results = _submit(subs, sp, options, pool)
-        del subs
-        wait_s = _finish(pending) if pending is not None else 0.0
-        out.parent.mkdir(parents=True, exist_ok=True)
-        pending = _Pending(
-            d,
-            t,
-            record,
-            placements if extracted else [],
-            futures,
-            results,
-            attrs,
-            out,
-        )
-        report.append({"unit": (d, t), "load": load_s, "wait": wait_s})
-        if execution.verbose:
-            print(
-                f"SILo path {d + 1} trial {t + 1}: loaded in {load_s:.1f} s "
-                f"(waited {wait_s:.1f} s for the previous trial)",
-                flush=True,
+            del trial
+            futures, results = _submit(subs, sp, options, pool)
+            del subs
+            wait_s = _finish(pending) if pending is not None else 0.0
+            out.parent.mkdir(parents=True, exist_ok=True)
+            pending = _Pending(
+                d,
+                t,
+                record,
+                placements if extracted else [],
+                futures,
+                results,
+                attrs,
+                out,
             )
+            report.append({"unit": (d, t), "load": load_s, "wait": wait_s})
+            if execution.verbose:
+                print(
+                    f"SILo path {d + 1} trial {t + 1}: loaded in "
+                    f"{load_s:.1f} s (waited {wait_s:.1f} s for the "
+                    "previous trial)",
+                    flush=True,
+                )
     if pending is not None:
         report.append(
             {"unit": (pending.d, pending.t), "wait": _finish(pending)}
@@ -952,12 +974,9 @@ def run_silo(
         if ex.solver_workers > 1 and ex.batch_bytes is None:
             pool = make_pool(ex.solver_workers, ex.solver_threads)
         try:
-            timer["trials"] = []
-            for d in range(session.n_paths):
-                if session.plan_file(d).exists() and session.keep[d].any():
-                    timer["trials"] += stream_path(
-                        session, params, ex, d, pool, save_subproblems
-                    )
+            timer["trials"] = stream(
+                session, params, ex, None, pool, save_subproblems
+            )
         finally:
             if pool is not None:
                 pool.shutdown()
