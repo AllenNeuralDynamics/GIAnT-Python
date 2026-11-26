@@ -71,10 +71,18 @@ def file_id(path: Path) -> dict:
 def recording_ids(dat: Path) -> list:
     """Identities (:func:`file_id`) of the files a raw recording is read
     from: its ``.dat`` file (all files of a CYCLE-split recording) and the
-    ``.meta`` files whose names begin its name."""
+    ``.meta`` files whose names begin its name.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the ``.dat`` file is not there (also for a CYCLE-split one).
+    """
     import re
 
     dat = Path(dat)
+    if not dat.exists():
+        raise FileNotFoundError(f"no raw recording {dat}")
     folder = dat.parent
     files = [dat]
     base = re.sub(r"-?CYCLE-?\d+$", "", dat.stem, flags=re.IGNORECASE)

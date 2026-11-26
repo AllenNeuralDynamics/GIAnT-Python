@@ -88,3 +88,25 @@ def test_seeds(tmp_path):
     np.testing.assert_array_equal(read_seeds(tmp_path / "s0.h5", 1)[0], seeds)
     with pytest.raises(ValueError):
         write_seeds(tmp_path / "bad.h5", {1: seeds}, index_base=2)
+
+
+def test_recording_ids(tmp_path):
+    """A recording's files: CYCLE segments and .meta; a missing one raises."""
+    from giant_python.pipeline.silo_session import recording_ids
+
+    for name in (
+        "rec_DMD1-CYCLE-000000.dat",
+        "rec_DMD1-CYCLE-000100.dat",
+        "rec_DMD2-CYCLE-000000.dat",
+        "rec_DMD1.meta",
+        "other.meta",
+    ):
+        (tmp_path / name).write_bytes(b"x")
+    ids = recording_ids(tmp_path / "rec_DMD1-CYCLE-000100.dat")
+    assert [i["name"] for i in ids] == [
+        "rec_DMD1-CYCLE-000000.dat",
+        "rec_DMD1-CYCLE-000100.dat",
+        "rec_DMD1.meta",
+    ]
+    with pytest.raises(FileNotFoundError):
+        recording_ids(tmp_path / "rec_DMD3-CYCLE-000000.dat")
