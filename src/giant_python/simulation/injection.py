@@ -524,6 +524,10 @@ def event_traces(
 class GaussianFootprint:
     """A Gaussian footprint with a peak of 1 at the source position.
 
+    Footprints are callables of row and column offsets from the source with
+    a ``radius`` (zero beyond it) and a ``peak_offset`` (where their maximum
+    is, relative to the source).
+
     Parameters
     ----------
     sigma_px : float
@@ -546,6 +550,7 @@ class GaussianFootprint:
         sc = sigma_px if sigma_c_px is None else sigma_c_px
         self.sigma = (float(sigma_px), float(sc))
         self.radius = float(radius_sigmas) * max(self.sigma)
+        self.peak_offset = (0.0, 0.0)
 
     def __call__(self, dr, dc) -> np.ndarray:
         """Value at row and column offsets from the source."""
@@ -591,6 +596,11 @@ class ImageFootprint:
         self.radius = float(
             np.max(np.hypot(*(corners - np.array(self.center)).T))
         )
+        top = np.unravel_index(np.argmax(self.image), self.image.shape)
+        self.peak_offset = (
+            float(top[0] - self.center[0]),
+            float(top[1] - self.center[1]),
+        )
 
     def __call__(self, dr, dc) -> np.ndarray:
         """Value at row and column offsets from the source (0 outside)."""
@@ -609,6 +619,22 @@ class ImageFootprint:
             "center_rc": list(self.center),
             "radius_px": self.radius,
         }
+
+
+def peak_pixels(positions: np.ndarray, footprints: Sequence) -> np.ndarray:
+    """Each source's peak pixel: nearest to its footprint's maximum.
+
+    Returns
+    -------
+    ndarray of int
+        ``(sources, 2)`` zero-based ``(row, col)``.
+    """
+    pos = np.asarray(positions, dtype=np.float64).reshape(-1, 2)
+    off = np.array(
+        [getattr(fp, "peak_offset", (0.0, 0.0)) for fp in footprints],
+        dtype=np.float64,
+    ).reshape(-1, 2)
+    return np.rint(pos + off).astype(np.int64)
 
 
 def footprint_patch(footprint, position, half: int) -> Tuple[np.ndarray, list]:
@@ -1608,13 +1634,16 @@ def expected_frames(
     frame_lines : ndarray of int
         One-based frame times.
     pixels_rc : ndarray of int
-        ``(n, 2)`` zero-based pixels of the path frame.
+        ``(n, 2)`` zero-based pixels of the path frame; a pixel is NaN where
+        its position in the trial's registered frame has no data.
     shift_rc : (float, float)
         Trial frame = path frame + shift.
     hz : float
         Frame rate that sets the kernel.
     channel : int
-        Channel whose invalid samples are left out.
+        Channel whose invalid samples are left out. Freshness (the
+        resampling weights) comes from channel 0's valid samples, as in
+        registration.
     device : str
         Where frames are formed.
 
@@ -1631,16 +1660,23 @@ def expected_frames(
     reach = max(3 * dt, p)
     c0 = max(0, (int(frame_lines.min()) - reach - 1) // p)
     c1 = min(layout.num_cycles, (int(frame_lines.max()) + reach - 1) // p + 1)
-    samples = np.zeros((1, layout.slot_line.size, c1 - c0), np.float32)
+    # channel 0 sets the freshness; the injected channel goes last
+    n_ch = 1 if channel == 0 else 2
+    samples = np.zeros((n_ch, layout.slot_line.size, c1 - c0), np.float32)
     for a in range(c0, c1, 256):
         cyc = np.arange(a, min(c1, a + 256))
-        samples[0][model.slots[:, None], (cyc - c0)[None, :]] = model.expected(
-            cyc
-        ).T
-    orig = read_raster_samples(layout, (c0, c1))[channel]
-    samples[0][orig == INVALID_SAMPLE] = INVALID_SAMPLE
+        samples[-1][model.slots[:, None], (cyc - c0)[None, :]] = (
+            model.expected(cyc).T
+        )
+    orig = read_raster_samples(layout, (c0, c1))
+    samples[-1][orig[channel] == INVALID_SAMPLE] = INVALID_SAMPLE
+    samples[0][orig[0] == INVALID_SAMPLE] = INVALID_SAMPLE
     del orig
+    # whole pixels of the shift index the trial grid; the rest is rendered
+    whole = np.rint(np.asarray(shift_rc, dtype=np.float64))
+    part = np.asarray(shift_rc, dtype=np.float64) - whole
     pix = np.asarray(pixels_rc, dtype=np.int64).reshape(-1, 2)
+    pix = pix + whole.astype(np.int64)
     h, w = alignment.shape
     inside = (
         (pix[:, 0] >= 0) & (pix[:, 0] < h) & (pix[:, 1] >= 0) & (pix[:, 1] < w)
@@ -1649,9 +1685,9 @@ def expected_frames(
     pc = np.clip(pix[:, 1], 0, w - 1)
     out = np.full((pix.shape[0], frame_lines.size), np.nan)
     for idx, frames, _ in iter_registered_frames(
-        layout, samples, c0, alignment, frame_lines, dt, device, 128, shift_rc
+        layout, samples, c0, alignment, frame_lines, dt, device, 128, part
     ):
-        out[:, idx] = frames[0][:, pr, pc].T.cpu().numpy()
+        out[:, idx] = frames[-1][:, pr, pc].T.cpu().numpy()
     out[~inside] = np.nan
     return out
 
@@ -1702,8 +1738,9 @@ def calibrate_frame_peaks(
     -------
     ndarray of float
         Per source: the mean, over its events, of the event's largest frame
-        value at the source's peak pixel (the path-frame pixel nearest the
-        source), in units of ``photon_scale``.
+        value at the source's peak pixel (the path-frame pixel nearest its
+        footprint's maximum, :func:`peak_pixels`), in units of
+        ``photon_scale``.
     """
     period = layout.line_period_s
     n_src = positions.shape[0]
@@ -1757,7 +1794,7 @@ def calibrate_frame_peaks(
         alignment,
         model,
         fl,
-        np.rint(positions),
+        peak_pixels(positions, footprints),
         shift_rc,
         settings.analyze_hz,
         settings.channel,
@@ -1856,12 +1893,19 @@ def _inject_trial(ctx: dict, k: int, t: int) -> Tuple[dict, Events]:
             align,
             model,
             fl,
-            np.rint(plan.positions),
+            peak_pixels(plan.positions, plan.footprints),
             shift,
             s.analyze_hz,
             s.channel,
             ctx["device"],
         )
+        reach = max(
+            3 * int(math.ceil((1.0 / period) / s.analyze_hz)),
+            layout.lines_per_cycle,
+        )
+        for a, b in ctx["neighbours"](t):
+            # kernels reading another injected trial's samples
+            frames[:, (fl + reach >= a) & (fl - reach <= b)] = np.nan
         detail["trace_frames"] = (frames / s.photon_scale).astype(np.float32)
         stats.render_seconds = time.perf_counter() - t0
     log.info(
@@ -1887,9 +1931,24 @@ def _path_gain(settings: InjectionSettings, layout: RasterLayout):
     return measure_raw_per_photon(layout, settings.channel)
 
 
+def _neighbours(ctx: dict, cells: list):
+    """For trial ``t``: line ranges of the other injected trials of the
+    same recording."""
+
+    def ranges(t):
+        out = []
+        for u in cells:
+            if u != t and ctx["names"][u] == ctx["names"][t]:
+                out.append((float(ctx["first"][u]), float(ctx["last"][u])))
+        return out
+
+    return ranges
+
+
 def _inject_path(ctx: dict, cells: list, options: dict) -> dict:
     """Plan, calibrate and inject one path (see :func:`inject_session`)."""
     s, dmd = ctx["settings"], ctx["dmd"]
+    ctx["neighbours"] = _neighbours(ctx, cells)
     ctx["aligns"] = [
         read_alignment(ctx["moco_dir"] / str(ctx["adata"][t])) for t in cells
     ]
@@ -2025,7 +2084,9 @@ def inject_session(
         raise ValueError("trials and paths must not repeat")
     keep = np.array(trials) - 1
     data_dir = Path(data_dir or table["datadr"]).absolute()
-    moco_dir = Path(moco_dir or Path(table["savedr"]) / "motion_correction")
+    moco_dir = Path(
+        moco_dir or Path(table["savedr"]) / "motion_correction"
+    ).absolute()
     adata = np.atleast_2d(
         np.asarray(table["motion_correction"]["fn_adata"], dtype=object)
     )
@@ -2180,7 +2241,8 @@ def write_truth(
             g.attrs["n_candidates"] = int(plan.n_candidates)
             g.create_dataset("frame_peak", data=p["frame_peak"])
             g.create_dataset(
-                "peak_pixel_rc", data=np.rint(plan.positions).astype(int)
+                "peak_pixel_rc",
+                data=peak_pixels(plan.positions, plan.footprints),
             )
             g.create_dataset("positions_rc", data=plan.positions)
             g.create_dataset("trial_shift_rc", data=plan.trial_shift)
@@ -2273,9 +2335,11 @@ def read_truth(path: Union[str, Path]) -> dict:
         ``events`` (``source``, ``trial``, ``onset_line``, ``onset_s``,
         ``peak_line``, ``size``, ``size_class``) and ``trials_detail[t]``
         (``positions_rc`` in the trial's registered frame, ``frame_lines``
-        at ``analyze_hz``, ``trace`` and ``trace_frames`` sources x frames,
-        ``stats`` and the trial's lines; after :func:`record_copy_registration`
-        also ``copy_shift_rc`` and ``positions_copy_rc``).
+        at ``analyze_hz``, ``trace`` and ``trace_frames`` sources x frames
+        (``trace_frames`` NaN where a frame's kernel reads another injected
+        trial of the same file), ``stats`` and the trial's lines; after
+        :func:`record_copy_registration` also ``copy_shift_rc`` and
+        ``positions_copy_rc``).
     """
     out = {"paths": {}}
     with h5py.File(path, "r") as f:

@@ -890,3 +890,91 @@ def test_copy_table_paths_and_absolute_folders(tmp_path, monkeypatch):
         np.asarray(t["filename"], dtype=object).ravel(), ["b1", ""]
     )
     assert "motion_correction" not in t
+
+
+def test_image_footprint_peak_and_calibration(online, registered):
+    """An off-centre image footprint is calibrated at its maximum."""
+    layout, _, _ = online
+    img = np.zeros((5, 5))
+    img[2, 4] = 1.0
+    fp = inj.ImageFootprint(img)
+    assert fp.peak_offset == (0.0, 2.0)
+    pos = np.array([[16.0, 20.0]])
+    np.testing.assert_array_equal(inj.peak_pixels(pos, [fp]), [[16, 22]])
+    moco = Path(registered[True]).parent / "motion_correction"
+    al = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    geo = inj.trial_geometry(layout, al, (1, 4800))
+    s = inj.InjectionSettings(tau_s=0.012, calibration_s=2.0)
+    peak = inj.calibrate_frame_peaks(
+        layout, al, geo, pos, (0.0, 0.0), [fp], s, np.random.default_rng(0)
+    )
+    assert 0.05 < peak[0] < 1.0
+
+
+def test_expected_frames_follow_the_trial_grid(online, registered):
+    """A path-frame pixel outside the trial grid's size is still rendered
+    where its trial position has data; channel 1 renders with channel 0's
+    freshness."""
+    layout, _, _ = online
+    moco = Path(registered[True]).parent / "motion_correction"
+    al = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    geo = inj.trial_geometry(layout, al, (1, 4800))
+    fp = [inj.GaussianFootprint(1.33)]
+    model = inj.SampleModel(
+        layout, geo, np.array([[16.3, 20.4]]), fp, np.ones((1, 4800))
+    )
+    fl = np.arange(200, 1200, 8)
+    here = inj.expected_frames(
+        layout, al, model, fl, [[16, 20]], (0.3, 0.4), 200.0
+    )
+    far = inj.expected_frames(
+        layout, al, model, fl, [[16 - 40, 20 + 60]], (40.3, -59.6), 200.0
+    )
+    assert al.shape[1] < 80 and np.isfinite(far).all()
+    np.testing.assert_allclose(far, here, rtol=1e-6)
+    ch1 = inj.expected_frames(
+        layout, al, model, fl, [[16, 20]], (0.3, 0.4), 200.0, channel=1
+    )
+    np.testing.assert_allclose(ch1, here, rtol=1e-6)  # no invalid samples
+
+
+def test_trace_frames_skip_kernels_reaching_a_neighbour_trial(injected):
+    """Two trials of one file: frames whose kernel reads the other trial's
+    injected samples are NaN in the truth's frame traces."""
+    out, _, _ = injected
+    truth = inj.read_truth(out / inj.TRUTH_NAME)["paths"][1]
+    reach = 24
+    t1, t2 = truth["trials_detail"][1], truth["trials_detail"][2]
+    near1 = t1["frame_lines"] + reach >= 4801
+    near2 = t2["frame_lines"] - reach <= 4800
+    assert near1.any() and near2.any()
+    assert np.isnan(t1["trace_frames"][:, near1]).all()
+    assert np.isnan(t2["trace_frames"][:, near2]).all()
+    assert np.isfinite(t1["trace_frames"][:, ~near1]).mean() > 0.9
+
+
+def test_relative_registration_folder_is_stored_absolute(
+    online, registered, tmp_path, monkeypatch
+):
+    """A relative registration folder is recorded as an absolute path."""
+    import os
+
+    reg = Path(registered[False]).parent
+    monkeypatch.chdir(reg)
+    s = inj.InjectionSettings(
+        raw_per_photon=4.0, frame_traces=False, size_reference="tissue"
+    )
+    run_injection(
+        online,
+        registered[False],
+        tmp_path / "out",
+        monkeypatch,
+        settings=s,
+        positions={1: np.array([[16.0, 20.0]])},
+        trials=[1],
+        moco_dir="motion_correction",
+    )
+    truth = inj.read_truth(tmp_path / "out" / inj.TRUTH_NAME)
+    al = Path(str(truth["paths"][1]["trials_detail"][1]["alignment"]))
+    assert al.is_absolute() and al.exists()
+    assert os.path.isabs(truth["origin"]["moco_dir"])
