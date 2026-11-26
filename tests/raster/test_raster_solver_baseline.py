@@ -426,3 +426,25 @@ def test_interp1_extrapolates():
     y = np.array([[0.0, 1.0, 5.0]])
     out = sb.interp1_extrap(x, y, np.array([0.0, 1.5, 3.0, 5.0]))
     np.testing.assert_allclose(out, [[-1.0, 0.5, 3.0, 7.0]])
+
+
+def test_activity_noise_with_a_zero_footprint_is_matlabs():
+    """A source whose footprint is all zero makes the normal matrix
+    singular: noise Inf and SNR 0 for every source, with a warning, as
+    MATLAB's inv gives; other inputs give the plain inverse's result."""
+    rng = np.random.default_rng(5)
+    n_px, n_t = 40, 300
+    h = np.abs(rng.standard_normal((n_px, 3)))
+    x = np.abs(rng.standard_normal((3, n_t)))
+    b = np.full((n_px, n_t), 5.0)
+    y = b + h @ x + 0.3 * rng.standard_normal((n_px, n_t))
+    finv = np.ones((n_px, n_t))  # freshness per pixel and frame
+    var, noise, snr = sb.activity_noise(y, finv, b, h, x, 4.0)
+    cov = np.linalg.inv(h.T @ (h / var[:, None]))
+    np.testing.assert_array_equal(noise, np.sqrt(np.diag(cov) / 4.0))
+    assert np.all(np.isfinite(noise)) and np.all(snr > 0)
+    h0 = h.copy()
+    h0[:, 1] = 0.0
+    with pytest.warns(RuntimeWarning, match="singular"):
+        _, noise0, snr0 = sb.activity_noise(y, finv, b, h0, x, 4.0)
+    assert np.all(np.isinf(noise0)) and np.all(snr0 == 0)
