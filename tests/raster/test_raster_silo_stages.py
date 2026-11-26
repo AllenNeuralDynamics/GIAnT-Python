@@ -249,6 +249,13 @@ def test_streamed_and_staged_runs_agree(tmp_path, fake):
     exp = s1.out_dir / "experiment_summary.h5"
     assert exp.exists() and (s1.out_dir / "per_trial_summary.h5").exists()
     assert report["total"] > 0
+    # timings per trial-path: localization, and each trial's solve span
+    assert len(report["localize_trials"]) == N_PATHS * N_TRIALS
+    assert all(r["seconds"] > 0 for r in report["localize_trials"])
+    loaded = [r for r in report["trials"] if "load" in r]
+    assert loaded and all(
+        0 <= r["submitted"] <= r["solved"] <= report["total"] for r in loaded
+    )
     streamed = _all_results(s1)
     # trial 3 is short: its results file has its record and no subproblems
     short = read_results(s1.results_file(0, 2))
@@ -555,3 +562,62 @@ def test_cli(tmp_path, fake, capsys):
         tmp_path / "s" / "source_extraction" / "experiment_summary.h5"
     ).exists()
     capsys.readouterr()
+
+
+class _FakePool:
+    """A pool whose tasks finish at a set time on a controlled clock."""
+
+    def __init__(self, now, finish_at):
+        self.now, self.finish_at, self.futures = now, list(finish_at), []
+
+    def submit(self, *args, **kwargs):
+        """A future; finished at once (before the next submit) when its
+        time is None."""
+        import concurrent.futures as cf
+
+        f = cf.Future()
+        self.now[0] += 0.01  # submitting takes time
+        if self.finish_at[len(self.futures)] is None:
+            f.set_result(None)
+        self.futures.append(f)
+        return f
+
+
+def test_solve_span_is_the_last_subproblem_solved(monkeypatch):
+    """A trial's solve span ends when its last subproblem is done: a
+    subproblem solved while the rest are still submitted keeps its own
+    time, a trial collected later still ends then, and a trial solved here
+    ends when that solve returns. Controlled clock, set completion order."""
+    import types
+
+    from giant_python.extraction.raster import solver as solver_mod
+
+    now = [0.0]
+    monkeypatch.setattr(
+        silo, "time", types.SimpleNamespace(perf_counter=lambda: now[0])
+    )
+    sub = types.SimpleNamespace(n_pixels=1, n_frames=1, n_sources=1)
+    # the first task is done before the second is submitted
+    pool = _FakePool(now, [None, 0.2])
+    done = silo._Done()
+    futures, _ = silo._submit(
+        [sub, sub], None, EX.solver_options(), pool, done
+    )
+    assert done.times == [0.01]
+    now[0] = 0.2
+    pool.futures[1].set_result(None)  # the last subproblem
+    now[0] = 0.6  # collected later
+    p = silo._Pending(0, 0, None, [], futures, [], {}, Path("x"), 0.0, done)
+    assert silo._solve_span(p, 0.0) == (0.0, 0.2)
+    # solved here: done when the solve returned
+    monkeypatch.setattr(
+        solver_mod,
+        "solve_subproblems",
+        lambda subs, sp, options: now.__setitem__(0, 0.9) or [1],
+    )
+    now[0] = 0.7
+    done = silo._Done()
+    _, results = silo._submit([sub], None, EX.solver_options(), None, done)
+    now[0] = 1.5
+    q = silo._Pending(0, 1, None, [], [], results, {}, Path("y"), 0.7, done)
+    assert silo._solve_span(q, 0.0) == (0.7, 0.9)

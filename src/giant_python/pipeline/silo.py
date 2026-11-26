@@ -32,6 +32,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 import warnings
 from dataclasses import asdict, dataclass
@@ -710,6 +711,30 @@ class _Pending:
     results: list
     attrs: dict
     out: Path
+    submitted: float = 0.0
+    done: Optional[_Done] = None
+
+
+class _Done:
+    """Completion times of a trial's subproblems, from done callbacks."""
+
+    def __init__(self, n: int = 1) -> None:
+        """Expect ``n`` completions (set by :func:`_submit`)."""
+        self.n, self.times = n, []
+        self.cond = threading.Condition()
+
+    def add(self, _future=None) -> None:
+        """Record one completion now (a done callback)."""
+        with self.cond:
+            self.times.append(time.perf_counter())
+            self.cond.notify_all()
+
+    def last(self, timeout: float = 60.0):
+        """The last completion time once all ``n`` are in (a future's
+        result can be read before its callbacks have run), or None."""
+        with self.cond:
+            self.cond.wait_for(lambda: len(self.times) >= self.n, timeout)
+            return max(self.times) if self.times else None
 
 
 def _finish(p: _Pending) -> float:
@@ -763,23 +788,36 @@ class _ContainerView:
         return {"plan": self.plan_hash}
 
 
-def _submit(subs, sp, options, pool):
+def _submit(subs, sp, options, pool, done: Optional[_Done] = None):
     """Solve a trial's subproblems: futures from the pool (largest first),
-    or results solved here."""
+    or results solved here.
+
+    ``done`` gets each future's completion time (its done callback is
+    attached as soon as the future exists, so a subproblem solved while the
+    rest are still submitted keeps its own time), or the time the solve
+    here returned.
+    """
     from ..extraction.raster.solver import solve_subproblems
     from .silo_solve import _solve_one, effective_batch
 
+    done = done if done is not None else _Done()
     if not subs:
+        done.add()
         return [], []
     if pool is None or effective_batch(options) is not None:
-        return [], solve_subproblems(subs, sp, options)
+        results = solve_subproblems(subs, sp, options)
+        done.add()
+        return [], results
     order = np.argsort(
         [-s.n_pixels * s.n_frames * (s.n_sources + 1) for s in subs],
         kind="stable",
     )
-    by_index = {
-        int(i): pool.submit(_solve_one, subs[i], sp, options) for i in order
-    }
+    done.n = len(subs)
+    by_index = {}
+    for i in order:
+        f = pool.submit(_solve_one, subs[i], sp, options)
+        f.add_done_callback(done.add)
+        by_index[int(i)] = f
     return [by_index[i] for i in range(len(subs))], []
 
 
@@ -811,6 +849,7 @@ def stream(  # noqa: C901
     paths: Optional[Iterable[int]] = None,
     pool=None,
     save_subproblems: Optional[Path] = None,
+    clock0: Optional[float] = None,
 ) -> list:
     """Load the paths' valid trials one ahead of the solver.
 
@@ -829,13 +868,22 @@ def stream(  # noqa: C901
         Zero-based paths, in the order to extract them; may be a generator
         that yields each path once it is planned (default: every planned
         path).
+    clock0 : float, optional
+        ``time.perf_counter()`` that ``submitted`` and ``solved`` count
+        from (default: when this starts).
 
     Returns
     -------
     list of dict
-        Per trial: ``unit``, ``load`` and ``wait`` seconds, or
+        Per trial: ``unit``, ``load`` and ``wait`` seconds (the wait is
+        for the previous trial's solve), ``submitted`` and ``solved``
+        (seconds since ``clock0`` when its subproblems went to the solver
+        and when the last was solved; a trial solved in this process, with
+        one solver process or batches, is solved when that returns), or
         ``skipped``.
     """
+    clock0 = time.perf_counter() if clock0 is None else clock0
+    solve_times = {}
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.results import TrialRecord
     from .silo_solve import results_attrs, solve_hash
@@ -911,9 +959,17 @@ def stream(  # noqa: C901
                 options,
             )
             del trial
-            futures, results = _submit(subs, sp, options, pool)
+            submitted = time.perf_counter() - clock0
+            done = _Done()
+            futures, results = _submit(subs, sp, options, pool, done)
             del subs
-            wait_s = _finish(pending) if pending is not None else 0.0
+            if pending is not None:
+                wait_s = _finish(pending)
+                solve_times[(pending.d, pending.t)] = _solve_span(
+                    pending, clock0
+                )
+            else:
+                wait_s = 0.0
             out.parent.mkdir(parents=True, exist_ok=True)
             pending = _Pending(
                 d,
@@ -924,6 +980,8 @@ def stream(  # noqa: C901
                 results,
                 attrs,
                 out,
+                submitted,
+                done,
             )
             report.append({"unit": (d, t), "load": load_s, "wait": wait_s})
             if execution.verbose:
@@ -937,7 +995,20 @@ def stream(  # noqa: C901
         report.append(
             {"unit": (pending.d, pending.t), "wait": _finish(pending)}
         )
+        solve_times[(pending.d, pending.t)] = _solve_span(pending, clock0)
+    for entry in report:
+        if "load" in entry and entry["unit"] in solve_times:
+            entry["submitted"], entry["solved"] = solve_times[entry["unit"]]
     return report
+
+
+def _solve_span(p: _Pending, clock0: float) -> tuple:
+    """When a finished trial went to the solver and when its last
+    subproblem was solved, in seconds since ``clock0``."""
+    end = p.done.last() if p.done is not None else None
+    if end is None:
+        end = time.perf_counter()
+    return p.submitted, end - clock0
 
 
 def _ready_paths(  # noqa: C901
@@ -968,7 +1039,7 @@ def _ready_paths(  # noqa: C901
     paths = [d for d in range(session.n_paths) if session.keep[d].any()]
     seeds_of = (lambda d: None) if seeds is None else (lambda d: seeds[d])
     if ex.workers <= 1:
-        run_jobs(_localize_job, jobs, 1, cpus)
+        timer["localize_trials"] = run_jobs(_localize_job, jobs, 1, cpus)
         timer["localize"] = time.perf_counter() - t0
         timer["plan_paths"] = {}
         for d in paths:
@@ -1017,8 +1088,9 @@ def _ready_paths(  # noqa: C901
     for d in paths:
         if not pending[d]:
             start(d)
+    timer["localize_trials"] = []
     for f in cf.as_completed(futures):
-        f.result()
+        timer["localize_trials"].append(f.result())
         d = futures[f]
         pending[d] -= 1
         if not pending[d]:
@@ -1132,7 +1204,7 @@ def run_silo(
         pool = _pool(ex, ex.solver_options())
         try:
             timer["trials"] = stream(
-                session, params, ex, paths, pool, save_subproblems
+                session, params, ex, paths, pool, save_subproblems, t_all
             )
         finally:
             if pool is not None:
