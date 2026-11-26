@@ -312,3 +312,19 @@ def test_outside_pixels_ignore_a_source_without_footprint():
         b, b, sub.y[0], x, h, sub.finv, params, shared=True
     )
     assert info["n_outside"] > 100
+
+
+def test_filled_frames_do_not_fake_a_shared_change():
+    """With a constant baseline, many filled-in frames leave the residual
+    scale unbiased, so no shared change is found."""
+    rng = np.random.default_rng(10)
+    n_px, n_t = 200, 2000
+    q = np.full((n_px, n_t), 3.0)
+    finv = np.ones((n_px, n_t))
+    filled = rng.random(n_t) < 0.3
+    finv[:, filled] = 1000.0
+    y = rng.poisson(q).astype(np.float64)
+    y[:, filled] = 3.0
+    c, rec = shared_time_course(y, q, np.zeros_like(q), finv)
+    assert abs(rec["alpha"] - 0.75) < 0.03
+    assert np.ptp(c) < 0.01

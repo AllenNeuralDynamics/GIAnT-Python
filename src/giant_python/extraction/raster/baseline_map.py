@@ -199,7 +199,10 @@ def sample_bilinear(
 
 
 def interp_frames(
-    values: np.ndarray, src_lines: np.ndarray, dst_lines: np.ndarray
+    values: np.ndarray,
+    src_lines: np.ndarray,
+    dst_lines: np.ndarray,
+    block: int = 512,
 ) -> np.ndarray:
     """Linear interpolation in line number, per row of ``values``.
 
@@ -213,6 +216,8 @@ def interp_frames(
     src_lines : ndarray of shape (sources,)
         Increasing lines of the source frames.
     dst_lines : ndarray of shape (frames,)
+    block : int
+        Rows interpolated at a time (bounds the temporaries).
 
     Returns
     -------
@@ -238,8 +243,11 @@ def interp_frames(
             j = np.clip(np.searchsorted(src, dst, side="right") - 1, 0, None)
             j = np.minimum(j, src.size - 2)
             f = np.clip((dst - src[j]) / (src[j + 1] - src[j]), 0.0, 1.0)
-            v = values[full]
-            out[full] = v[:, j] * (1 - f) + v[:, j + 1] * f
+            rows = np.flatnonzero(full)
+            for a in range(0, rows.size, block):
+                k = rows[a : a + block]
+                v = values[k]
+                out[k] = v[:, j] * (1 - f) + v[:, j + 1] * f
     for i in np.flatnonzero(~full & ok.any(1)):
         out[i] = np.interp(dst, src[ok[i]], values[i, ok[i]])
     return out

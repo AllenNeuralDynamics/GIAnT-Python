@@ -219,3 +219,14 @@ def test_map_baseline_checks_inputs():
     for scale in (0.0, -1.0, np.nan):
         with pytest.raises(ValueError, match="photon_scale"):
             map_baseline(stack, rc, ds, fl, scale)
+
+
+def test_interp_frames_in_blocks():
+    """Interpolating in blocks gives the same rows."""
+    rng = np.random.default_rng(11)
+    vals = rng.random((37, 20))
+    src = np.arange(20) * 5.0
+    dst = np.linspace(-3, 103, 51)
+    np.testing.assert_array_equal(
+        interp_frames(vals, src, dst, block=4), interp_frames(vals, src, dst)
+    )

@@ -733,7 +733,8 @@ def shared_time_course(
         w = 1 / (F (q + src + 1))  (the solver's loss weights),
 
     whose sampling variance is ``alpha / sum_p w q^2``, with ``alpha`` the
-    mean weighted squared residual (1 if the loss's variance model holds).
+    mean weighted squared residual over the reliable frames (1 if the
+    loss's variance model holds).
     Each frame's factor is then shrunk towards their precision-weighted
     mean ``m`` by the empirical-Bayes weight ``s2 / (s2 + var_t)``, where
     ``s2`` is the variance of the factors about ``m`` beyond their
@@ -761,15 +762,18 @@ def shared_time_course(
         return raw, dict(raw=raw, mean=1.0, alpha=float("nan"), s2=0.0)
     m = float(num[ok].sum() / den[ok].sum())
     raw[~ok] = m
-    n_obs = y.shape[0] * int(ok.sum())
-    dof = max(n_obs - int(ok.sum()), 1)
-    alpha = float((w * (r - raw * q) ** 2)[:, ok].sum() / dof)
-    var_t = np.full(n_t, np.inf)
-    var_t[ok] = alpha / den[ok]
-    # the shared variance from the reliable frames only: filled-in frames
-    # (discarded, variance multiplier 1000 x) would inflate the mean
-    # sampling variance without adding spread
-    rel = ok & (var_t <= RELIABLE_FACTOR * np.median(var_t[ok]))
+    # reliable frames: sampling variance (proportional to 1 / den) at most
+    # RELIABLE_FACTOR times its median. Filled-in frames (discarded,
+    # variance multiplier 1000 x) would otherwise inflate the mean sampling
+    # variance without adding spread, and count in alpha's degrees of
+    # freedom without adding residual
+    inv = np.full(n_t, np.inf)
+    inv[ok] = 1.0 / den[ok]
+    rel = ok & (inv <= RELIABLE_FACTOR * np.median(inv[ok]))
+    n_obs = y.shape[0] * int(rel.sum())
+    dof = max(n_obs - int(rel.sum()), 1)
+    alpha = float((w * (r - raw * q) ** 2)[:, rel].sum() / dof)
+    var_t = alpha * inv
     spread = float(((raw[rel] - m) ** 2).sum() / max(int(rel.sum()) - 1, 1))
     s2 = max(0.0, spread - float(var_t[rel].mean()))
     lam = np.zeros(n_t)
