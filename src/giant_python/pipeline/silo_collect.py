@@ -13,13 +13,15 @@ from __future__ import annotations
 import json
 import os
 import time
+import warnings
 from typing import Optional
 
 import h5py
 import numpy as np
 
 from ..models.params import SiloExecution, SiloParams
-from .silo_session import SiloSession, attr, now
+from .silo_session import SiloSession, attr, now, skip_hash
+from .silo_solve import solve_science
 
 
 def _results_files(session: SiloSession, d: int, t: int) -> list:
@@ -33,6 +35,25 @@ def _results_files(session: SiloSession, d: int, t: int) -> list:
         for p in folder.glob(f"{stem}*.h5")
         if p.stem == stem or p.stem.startswith(stem + "_s")
     )
+
+
+def _current(files: list, plan_hash: str, science: str) -> list:
+    """The results files made from the plan ``plan_hash`` with the
+    scientific solve settings ``science``; others are left out, with a
+    warning (they are from earlier runs)."""
+    keep, stale = [], []
+    for f in files:
+        ok = (
+            attr(f, "plan_hash") == plan_hash
+            and attr(f, "solve_science") == science
+        )
+        (keep if ok else stale).append(f)
+    if stale:
+        warnings.warn(
+            f"{len(stale)} results file(s) from other settings or another "
+            f"plan are left out: {', '.join(p.name for p in stale)}"
+        )
+    return keep
 
 
 def _outcome_loader(files: list, solver_params):
@@ -60,7 +81,9 @@ def path_result(
     Raises
     ------
     FileNotFoundError
-        If a valid trial has neither results nor a skip marker.
+        If a valid trial has neither a skip marker of the current plan nor
+        results files made from the current plan with the current
+        scientific solve settings (``solve_science``).
     """
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.stage_files import read_localization
@@ -81,14 +104,17 @@ def path_result(
         if session.keep[d, t]:
             rec = read_localization(session.localize_file(d, t))
             peaks[t] = rec.peaks
+    plan_hash = attr(pf, "settings_hash")
+    science = solve_science(params)
     for t in plan.valid_trials:
         t = int(t)
-        files = _results_files(session, d, t)
+        if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
+            continue  # no data at the selected pixels
+        files = _current(_results_files(session, d, t), plan_hash, science)
         if not files:
-            if session.skip_file(d, t).exists():
-                continue
             raise FileNotFoundError(
-                f"path {d + 1}, trial {t + 1}: no results files in "
+                f"path {d + 1}, trial {t + 1}: no results files made from "
+                f"the current plan with the current solve settings in "
                 f"{session.results_dir}"
             )
         trials[t] = _outcome_loader(files, sp)

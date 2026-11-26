@@ -311,6 +311,60 @@ def test_settings_change_redoes_units(tmp_path, fake):
     assert all(v is not None for v in done.values())
 
 
+def test_inputs_and_stale_results(tmp_path, fake, monkeypatch):
+    """A changed raw file redoes prepare; collect uses only results of the
+    current plan and solve settings; a trial found without data loses its
+    earlier container and results."""
+    import os
+
+    from giant_python.pipeline.silo_session import NO_DATA
+
+    s = SiloSession.open(make_session(tmp_path))
+    silo.localize(s, PARAMS, EX)
+    silo.plan(s, PARAMS, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, PARAMS, EX)
+    assert silo.prepare(s, PARAMS, EX) == []
+    raw = s.raw(0, 0)
+    os.utime(raw, ns=(raw.stat().st_atime_ns, raw.stat().st_mtime_ns + 10**9))
+    assert [u["unit"] for u in silo.prepare(s, PARAMS, EX)] == [(0, 0)]
+
+    # results of three jobs with lam 0.9, then whole files with lam 0.5
+    for job in silo_solve.dispatch(s, PARAMS, 3, EX):
+        silo_solve.solve_job(job, execution=EX)
+    split = list(s.results_dir.glob("*_s*.h5"))
+    assert split
+    other = SiloParams(min_kinetic_score=0.0, lam=0.5)
+    silo_solve.solve_containers(s, other, EX)
+    # the three jobs' range files are from other settings: left out
+    with pytest.warns(UserWarning, match="left out"):
+        silo_collect.collect(s, other, EX)
+    third = SiloParams(min_kinetic_score=0.0, lam=0.3)
+    with pytest.raises(FileNotFoundError, match="current"):
+        with pytest.warns(UserWarning):
+            silo_collect.collect(s, third, EX)
+
+    # the trial has no data any more: its container and results go
+    def no_data(dat_path, *args, **kw):
+        """Path 1, trial 1 has no data now."""
+        if "DMD1-TRIAL000001" in str(dat_path):
+            raise ValueError(NO_DATA)
+        return fake_load(dat_path, *args, **kw)
+
+    monkeypatch.setattr(trial_data_mod, "load_trial", no_data)
+    ex = SiloExecution(
+        workers=1, solver_workers=1, solver_threads=1, overwrite=True
+    )
+    silo.prepare(s, other, ex, units=[(0, 0)])
+    assert s.skip_file(0, 0).exists()
+    assert not s.container_file(0, 0).exists()
+    assert not list(s.results_dir.glob("path1_trial0001*.h5"))
+    assert all(u != (0, 0) for u, _ in silo_solve._containers(s))
+    silo_collect.collect(s, other, EX)
+    e = load_struct_h5(s.out_dir / "experiment_summary.h5")
+    frames = e["Path1"]["frame_info"]["trial_num_frames"].ravel()
+    assert frames.tolist() == [0, FRAMES[1], FRAMES[2]]
+
+
 def test_job_needs_its_container(tmp_path, fake):
     """A job refuses a container other than the one it was made for."""
     s = SiloSession.open(make_session(tmp_path))

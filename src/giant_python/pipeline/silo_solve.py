@@ -43,6 +43,7 @@ from .silo_session import (
     SiloSession,
     attr,
     make_pool,
+    skip_hash,
     stage_hash,
 )
 
@@ -132,6 +133,12 @@ def solve_subproblem_list(subs, params, options, pool=None) -> list:
     return [futures[i].result() for i in range(len(subs))]
 
 
+def solve_science(params: SiloParams) -> str:
+    """Hash of the scientific solve settings alone (recorded as
+    ``solve_science``; the collect stage checks it against its own)."""
+    return stage_hash({"solve": params.stage_settings("solve")})
+
+
 def results_attrs(
     container,
     name: str,
@@ -140,14 +147,23 @@ def results_attrs(
     n_sub,
     extracted,
     h,
-    settings: str,
+    params: SiloParams,
+    options,
 ) -> dict:
-    """Attributes of a results file (``settings`` is
-    :func:`solve_settings`)."""
+    """Attributes of a results file.
+
+    Besides the settings hash and the container's identity it records
+    ``solve_settings`` (:func:`solve_settings`), ``solve_science``
+    (:func:`solve_science`) and ``plan_hash`` (the plan the container was
+    made from), which the collect stage checks.
+    """
     src = getattr(container, "source", {}) or {}
+    plan_hash = (getattr(container, "params", {}) or {}).get("plan", "")
     return {
         "settings_hash": h,
-        "solve_settings": settings,
+        "solve_settings": solve_settings(params, options),
+        "solve_science": solve_science(params),
+        "plan_hash": str(plan_hash or ""),
         "container": name,
         "container_hash": container_hash,
         "path": int(src.get("path", 0)),
@@ -234,7 +250,8 @@ def solve_container(
             n_sub,
             extracted,
             h,
-            solve_settings(params, options),
+            params,
+            options,
         ),
     )
     return {"seconds": time.perf_counter() - t0, "solved": len(subs)}
@@ -247,9 +264,12 @@ def _containers(session: SiloSession) -> list:
     out = []
     for d, t in _valid_units(session):
         f = session.container_file(d, t)
+        plan_hash = attr(session.plan_file(d), "settings_hash")
+        if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
+            continue  # marked as without data for this plan
         if f.exists():
             out.append(((d, t), f))
-        elif not session.skip_file(d, t).exists():
+        else:
             raise FileNotFoundError(f"not prepared: {f}")
     return out
 

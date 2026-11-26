@@ -48,6 +48,7 @@ from ..models.params import (
 from .silo_session import (
     NO_DATA,
     SiloSession,
+    recording_ids,
     attr as _attr,
     file_id as _file_id,
     make_pool,
@@ -232,15 +233,20 @@ def localize_jobs(
 
 
 def peaks_jobs(session: SiloSession, params: SiloParams, units=None) -> list:
-    """Peak fits still to do: localization files without peaks."""
+    """Peak fits still to do: localization files without peaks (in the
+    file or its ``.peaks.h5`` sidecar, where :func:`_peaks_job` writes
+    them so that the localization file is not written while the plan stage
+    reads it)."""
+    from ..extraction.raster.stage_files import localization_attrs
+
     if not params.trial_peaks:
         return []
     loc = params.localization_params(session.align_hz)
     jobs = []
     for d, t in _units(session, units):
         f = session.localize_file(d, t)
-        fitted = _attr(f, "peaks_fitted")
-        if fitted is not None and not int(fitted):
+        attrs = localization_attrs(f)
+        if attrs is not None and not int(attrs.get("peaks_fitted", 0)):
             jobs.append(
                 {
                     "unit": (d, t),
@@ -284,7 +290,9 @@ def _plan_inputs(session: SiloSession, d: int):
     recs = []
     for t in range(session.n_trials):
         f = session.localize_file(d, t)
-        recs.append(read_localization(f) if session.keep[d, t] else None)
+        recs.append(
+            read_localization(f, peaks=False) if session.keep[d, t] else None
+        )
     return recs
 
 
@@ -518,14 +526,23 @@ def load_trial_for(
     )
 
 
-def _prepare_hash(params: SiloParams, plan_hash: str, d, t) -> str:
-    """Settings hash of a container."""
+def _prepare_hash(
+    session: SiloSession, params: SiloParams, plan_hash: str, d, t
+) -> str:
+    """Settings hash of a container: the prepare settings, the plan, the
+    raw recording's files, the trial's lines and its alignment file."""
     return _hash(
         {
             "stage": "prepare",
             "settings": params.stage_settings("prepare"),
             "plan": plan_hash,
             "unit": [d, t],
+            "raw": recording_ids(session.raw(d, t)),
+            "lines": [
+                float(session.first_line[d, t]),
+                float(session.last_line[d, t]),
+            ],
+            "alignment": _file_id(session.alignment(d, t)),
         }
     )
 
@@ -568,7 +585,7 @@ def prepare(
                 _attr(f, "settings_hash"),
             )
         p, rois, ph = plans[d]
-        h = _prepare_hash(params, ph, d, t)
+        h = _prepare_hash(session, params, ph, d, t)
         out = session.container_file(d, t)
         skip = session.skip_file(d, t)
         if not ex.overwrite and (
@@ -584,7 +601,7 @@ def prepare(
         except ValueError as exc:
             if NO_DATA not in str(exc):
                 raise
-            write_skip(skip, str(exc), h)
+            _mark_skipped(session, d, t, str(exc), h, ph)
             continue
         if skip.exists():
             skip.unlink()
@@ -609,6 +626,23 @@ def prepare(
             {"unit": (d, t), "file": out, "seconds": time.perf_counter() - t0}
         )
     return done
+
+
+def _mark_skipped(session, d, t, reason, prepare_hash, plan_hash) -> None:
+    """Mark a trial-path as without data; remove its earlier container and
+    results files, so that no stage uses them."""
+    write_skip(session.skip_file(d, t), reason, prepare_hash, plan_hash)
+    stale = [session.container_file(d, t)]
+    stem = f"path{d + 1}_trial{t + 1:04d}"
+    if session.results_dir.exists():
+        stale += [
+            p
+            for p in session.results_dir.glob(f"{stem}*.h5")
+            if p.stem == stem or p.stem.startswith(stem + "_s")
+        ]
+    for p in stale:
+        if p.exists():
+            p.unlink()
 
 
 def _container_params(
@@ -679,6 +713,7 @@ class _ContainerView:
     plan: object
     d: int
     t: int
+    plan_hash: str = ""
 
     @property
     def pixel_rc(self):
@@ -699,6 +734,11 @@ class _ContainerView:
     def source(self):
         """Path and trial, one-based."""
         return {"path": self.d + 1, "trial": self.t + 1}
+
+    @property
+    def params(self):
+        """What the container would record: its plan's hash."""
+        return {"plan": self.plan_hash}
 
 
 def _submit(subs, sp, options, pool):
@@ -774,11 +814,10 @@ def stream(  # noqa: C901
     """
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.results import TrialRecord
-    from .silo_solve import results_attrs, solve_hash, solve_settings
+    from .silo_solve import results_attrs, solve_hash
 
     sp = params.solver_params()
     options = execution.solver_options()
-    settings = solve_settings(params, options)
     report = []
     pending: Optional[_Pending] = None
     if paths is None:
@@ -793,7 +832,7 @@ def stream(  # noqa: C901
         placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
         for t in (int(x) for x in plan.valid_trials):
-            chash = _prepare_hash(params, ph, d, t)
+            chash = _prepare_hash(session, params, ph, d, t)
             rhash = solve_hash(params, options, chash, (0, n_sub))
             out = session.results_file(d, t)
             skip = session.skip_file(d, t)
@@ -811,7 +850,7 @@ def stream(  # noqa: C901
             except ValueError as exc:
                 if NO_DATA not in str(exc):
                     raise
-                write_skip(skip, str(exc), chash)
+                _mark_skipped(session, d, t, str(exc), chash, ph)
                 report.append({"unit": (d, t), "skipped": str(exc)})
                 continue
             if skip.exists():
@@ -837,14 +876,15 @@ def stream(  # noqa: C901
                 else []
             )
             attrs = results_attrs(
-                _ContainerView(trial, plan, d, t),
+                _ContainerView(trial, plan, d, t, ph),
                 session.container_file(d, t).name,
                 chash,
                 (0, n_sub),
                 n_sub,
                 extracted,
                 rhash,
-                settings,
+                params,
+                options,
             )
             del trial
             futures, results = _submit(subs, sp, options, pool)

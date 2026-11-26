@@ -35,14 +35,21 @@ def test_localization_round_trip(tmp_path):
     assert rec.peaks is None and rec.attrs["peaks_fitted"] == 0
     assert rec.attrs["trial"] == 3
     peaks = np.array([[1.0, 2.0, 3.0, 0.5]])
-    add_peaks(path, peaks)
+    side = add_peaks(path, peaks)
+    assert side.name == "loc.peaks.h5"  # the localization file is not written
     rec = read_localization(path)
     np.testing.assert_array_equal(rec.peaks, peaks)
     assert localization_attrs(path)["peaks_fitted"] == 1
+    assert read_localization(path, peaks=False).peaks is None
     images = rec.trial_images()
     np.testing.assert_array_equal(images.act_im, act_im)
     np.testing.assert_array_equal(images.peaks, peaks)
     assert not list(tmp_path.glob("*.partial"))
+    # a new localization replaces the earlier one's peaks
+    write_localization(
+        path, mean_im, act_im, act_im, discard, None, {"trial": 3}
+    )
+    assert not side.exists() and read_localization(path).peaks is None
 
 
 def test_localization_format_checks(tmp_path):

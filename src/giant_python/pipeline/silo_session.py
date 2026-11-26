@@ -53,8 +53,43 @@ def stage_hash(record: dict) -> str:
 
 
 def file_id(path: Path) -> dict:
-    """A file's identity for a settings hash: name and size."""
-    return {"name": path.name, "size": path.stat().st_size}
+    """A file's identity for a settings hash: name, size and modification
+    time (nanoseconds).
+
+    A changed or replaced input gets a new identity; so does a copied one
+    (a copy has a new modification time), which only costs a rerun.
+    Reading every input for a content hash would cost minutes per trial.
+    """
+    st = Path(path).stat()
+    return {
+        "name": Path(path).name,
+        "size": st.st_size,
+        "mtime_ns": st.st_mtime_ns,
+    }
+
+
+def recording_ids(dat: Path) -> list:
+    """Identities (:func:`file_id`) of the files a raw recording is read
+    from: its ``.dat`` file (all files of a CYCLE-split recording) and the
+    ``.meta`` files whose names begin its name."""
+    import re
+
+    dat = Path(dat)
+    folder = dat.parent
+    files = [dat]
+    base = re.sub(r"-?CYCLE-?\d+$", "", dat.stem, flags=re.IGNORECASE)
+    if base != dat.stem:
+        files = sorted(
+            p
+            for p in folder.glob(f"{base}*.dat")
+            if re.fullmatch(
+                re.escape(base) + r"-?CYCLE-?\d+", p.stem, re.IGNORECASE
+            )
+        )
+    meta = sorted(
+        p for p in folder.glob("*.meta") if dat.stem.startswith(p.stem)
+    )
+    return [file_id(p) for p in files + meta]
 
 
 def now() -> str:
@@ -399,19 +434,26 @@ class SiloSession:
         return self.work_dir / "jobs"
 
 
-def write_skip(path: Path, reason: str, settings_hash: str) -> None:
-    """Mark a trial-path as not extracted (``*.skip.json``: the reason and
-    the settings hash of the prepare stage)."""
+def write_skip(
+    path: Path, reason: str, settings_hash: str, plan_hash: str = ""
+) -> None:
+    """Mark a trial-path as not extracted (``*.skip.json``: the reason, the
+    settings hash of the prepare stage and the plan's hash)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.partial")
-    record = {"reason": reason, "settings_hash": settings_hash}
+    record = {
+        "reason": reason,
+        "settings_hash": settings_hash,
+        "plan_hash": plan_hash,
+    }
     tmp.write_text(json.dumps(record), encoding="utf-8")
     os.replace(tmp, path)
 
 
-def skip_hash(path: Path) -> Optional[str]:
-    """The settings hash of a skip marker (None if there is none)."""
+def skip_hash(path: Path, key: str = "settings_hash") -> Optional[str]:
+    """A hash recorded in a skip marker (``settings_hash`` or
+    ``plan_hash``; None if there is no marker)."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))["settings_hash"]
+        return json.loads(path.read_text(encoding="utf-8"))[key]
     except (OSError, ValueError, KeyError, TypeError):
         return None
