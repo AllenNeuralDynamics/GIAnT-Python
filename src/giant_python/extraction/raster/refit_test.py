@@ -160,7 +160,8 @@ def score_refit(
     -------
     sources : list of dict
         ``true_mass``, ``recovered`` (refit / true activity mass),
-        ``slope`` (of the refit on the truth, through 0), ``f0_ratio``,
+        ``slope`` (of the refit on the truth, through 0), ``r`` (their
+        correlation; NaN if either is flat), ``f0_ratio``,
         ``f0_ratio_active`` (where the truth is above 20% of its
         largest), ``ls_recovered``, ``peak_h`` and ``baseline`` (the true
         baseline under the footprint, per pixel and frame).
@@ -185,6 +186,7 @@ def score_refit(
             ls_recovered=nan,
             f0_ratio=float(f01[s].mean() / truth.f0[s].mean()),
             f0_ratio_active=nan,
+            r=nan,
             peak_h=float(peak_h[s]),
             baseline=float(truth.h[:, s] @ b_mean / truth.h[:, s].sum()),
         )
@@ -192,6 +194,8 @@ def score_refit(
             row["recovered"] = float(xr.sum() / mass)
             row["slope"] = float((xr * x0).sum() / (x0 * x0).sum())
             row["ls_recovered"] = float(ls1[s].sum() / mass)
+            if xr.std() > 0 and x0.std() > 0:
+                row["r"] = float(np.corrcoef(xr, x0)[0, 1])
         if active.any():
             row["f0_ratio_active"] = float(
                 f01[s][active].mean() / truth.f0[s][active].mean()
@@ -273,6 +277,7 @@ def summarize(sources: list[dict], events: list[dict]) -> dict:
         slope_q3=q("slope", 75),
         f0_ratio=q("f0_ratio", 50),
         f0_ratio_active=q("f0_ratio_active", 50),
+        r=q("r", 50),
         ls_recovered=q("ls_recovered", 50),
     )
 
