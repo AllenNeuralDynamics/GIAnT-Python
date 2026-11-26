@@ -27,6 +27,7 @@ summaries from them.
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import json
 import logging
 import math
@@ -795,7 +796,7 @@ def stream(  # noqa: C901
     session: SiloSession,
     params: SiloParams,
     execution: SiloExecution,
-    paths: Optional[Sequence[int]] = None,
+    paths: Optional[Iterable[int]] = None,
     pool=None,
     save_subproblems: Optional[Path] = None,
 ) -> list:
@@ -812,8 +813,10 @@ def stream(  # noqa: C901
 
     Parameters
     ----------
-    paths : sequence of int, optional
-        Zero-based paths (default: every planned path).
+    paths : iterable of int, optional
+        Zero-based paths, in the order to extract them; may be a generator
+        that yields each path once it is planned (default: every planned
+        path).
 
     Returns
     -------
@@ -925,6 +928,100 @@ def stream(  # noqa: C901
     return report
 
 
+def _ready_paths(  # noqa: C901
+    session,
+    params,
+    ex,
+    seeds,
+    baseline_dir,
+    timer,
+    peak_pool,
+    peak_futures,
+    pools,
+):
+    """Localize and plan the paths; yield each path once it is planned.
+
+    With several workers a path's plan starts as soon as its own trials
+    are localized, and its per-trial peak fits go to ``peak_pool``
+    (``peak_futures``) then; paths are yielded in the order their plans
+    finish, so the first planned path is extracted while the other is
+    still planned. With one worker everything runs here, in order.
+    """
+    t0 = time.perf_counter()
+    jobs = localize_jobs(
+        session, params, None, baseline_dir, False, ex.overwrite
+    )
+    timer["localize_units"] = len(jobs)
+    cpus = os.cpu_count() or 1
+    paths = [d for d in range(session.n_paths) if session.keep[d].any()]
+    seeds_of = (lambda d: None) if seeds is None else (lambda d: seeds[d])
+    if ex.workers <= 1:
+        run_jobs(_localize_job, jobs, 1, cpus)
+        timer["localize"] = time.perf_counter() - t0
+        timer["plan_paths"] = {}
+        for d in paths:
+            t1 = time.perf_counter()
+            plan_one(session, params, d, seeds_of(d), ex.overwrite)
+            timer["plan_paths"][d + 1] = time.perf_counter() - t1
+            yield d
+        return
+    loc_pool = None
+    if jobs:
+        loc_pool = make_pool(
+            min(ex.workers, len(jobs)), max(1, cpus // ex.workers)
+        )
+        pools.append(loc_pool)
+    plan_pool = make_pool(
+        max(1, len(paths)), max(1, cpus // max(1, len(paths)))
+    )
+    pools.append(plan_pool)
+    pending = {d: 0 for d in paths}
+    futures = {}
+    for job in jobs:
+        pending[job["unit"][0]] += 1
+        futures[loc_pool.submit(_localize_job, job)] = job["unit"][0]
+    planned = {}
+    timer["plan_paths"] = {}
+
+    def start(d):
+        """Plan path ``d`` and fit its trials' peaks in the background."""
+        planned[
+            plan_pool.submit(
+                _plan_job,
+                {
+                    "session": session,
+                    "params": asdict(params),
+                    "d": d,
+                    "seeds": seeds_of(d),
+                    "overwrite": ex.overwrite,
+                },
+            )
+        ] = d
+        if peak_pool is not None:
+            units = [(d, t) for t in range(session.n_trials)]
+            for job in peaks_jobs(session, params, units):
+                peak_futures.append(peak_pool.submit(_peaks_job, job))
+
+    for d in paths:
+        if not pending[d]:
+            start(d)
+    for f in cf.as_completed(futures):
+        f.result()
+        d = futures[f]
+        pending[d] -= 1
+        if not pending[d]:
+            start(d)
+    timer["localize"] = time.perf_counter() - t0
+    if loc_pool is not None:
+        loc_pool.shutdown()
+    for f in cf.as_completed(planned):
+        res = f.result()
+        timer["plan_paths"][res["path"] + 1] = res["seconds"]
+        timer.setdefault("first_plan_ready", time.perf_counter() - t0)
+        yield res["path"]
+    timer["plan"] = time.perf_counter() - t0
+
+
 def run_silo(
     table,
     params=None,
@@ -943,15 +1040,15 @@ def run_silo(
 ) -> dict:
     """SILo on one machine (``giant silo``), streaming as MATLAB's.
 
-    1. Localize every kept trial-path (``workers`` processes). The
-       per-trial peak fits, which only the per-trial summary uses, run in
-       the background (``peak_workers`` processes, one thread each) while
-       the rest goes on.
-    2. Plan every path (one process per path).
-    3. Per path, load each valid trial at the plan's selected pixels while
-       the previous trial's subproblems are solved (``solver_workers``
-       processes of ``solver_threads`` threads); write each trial's
-       results file.
+    1. Localize every kept trial-path (``workers`` processes).
+    2. Plan each path (one process per path) as soon as its trials are
+       localized; its per-trial peak fits, which only the per-trial
+       summary uses, start then in the background (``peak_workers``
+       processes, one thread each).
+    3. Per path, in the order the plans finish, load each valid trial at
+       the plan's selected pixels while the previous trial's subproblems
+       are solved (``solver_workers`` processes of ``solver_threads``
+       threads); write each trial's results file.
     4. Collect: kinetics test, ``experiment_summary.h5``,
        ``per_trial_summary.h5``, the trial table's fields.
 
@@ -998,35 +1095,32 @@ def run_silo(
         table, moco_dir, data_dir, out_dir, work_dir, annotations
     )
     seeds = read_seeds(seeds_file, session.n_paths) if seeds_file else None
-    cpus = os.cpu_count() or 1
 
-    t0 = time.perf_counter()
-    jobs = localize_jobs(
-        session, params, None, baseline_dir, False, ex.overwrite
-    )
-    timer["localize_units"] = len(jobs)
-    run_jobs(_localize_job, jobs, ex.workers, max(1, cpus // ex.workers))
-    timer["localize"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    pjobs = peaks_jobs(session, params)
-    peak_pool, peak_futures = None, []
-    if pjobs:
-        n_peak = peak_workers or max(1, ex.workers // 2)
-        peak_pool = make_pool(min(n_peak, len(pjobs)), 1)
-        peak_futures = [peak_pool.submit(_peaks_job, j) for j in pjobs]
+    peak_futures: list = []
+    peak_pool = None
+    pools: list = []
     try:
-        plans = plan(session, params, ex, seeds=seeds)
-        timer["plan"] = time.perf_counter() - t0
-        timer["plan_paths"] = {p["path"] + 1: p["seconds"] for p in plans}
-
+        if ex.workers > 1:
+            n_peak = peak_workers or max(1, ex.workers // 2)
+            peak_pool = make_pool(n_peak, 1) if params.trial_peaks else None
+        paths = _ready_paths(
+            session,
+            params,
+            ex,
+            seeds,
+            baseline_dir,
+            timer,
+            peak_pool,
+            peak_futures,
+            pools,
+        )
         t0 = time.perf_counter()
         from .silo_solve import _pool
 
         pool = _pool(ex, ex.solver_options())
         try:
             timer["trials"] = stream(
-                session, params, ex, None, pool, save_subproblems
+                session, params, ex, paths, pool, save_subproblems
             )
         finally:
             if pool is not None:
@@ -1035,10 +1129,14 @@ def run_silo(
 
         t0 = time.perf_counter()
         timer["peaks"] = [f.result() for f in peak_futures]
+        if peak_pool is None and params.trial_peaks:
+            timer["peaks"] = run_jobs(
+                _peaks_job, peaks_jobs(session, params), 1, 1
+            )
         timer["peaks_wait"] = time.perf_counter() - t0
     finally:
-        if peak_pool is not None:
-            peak_pool.shutdown(cancel_futures=True)
+        for p in pools + ([peak_pool] if peak_pool is not None else []):
+            p.shutdown(cancel_futures=True)
 
     t0 = time.perf_counter()
     timer["collect_detail"] = collect(
