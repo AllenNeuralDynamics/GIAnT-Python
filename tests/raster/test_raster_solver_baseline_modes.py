@@ -19,6 +19,7 @@ from giant_python.extraction.raster.solver_baseline import (
     fit_gain,
     fit_network_gain,
     gain_programs,
+    outside_halves,
     shared_time_course,
 )
 from giant_python.extraction.raster.solver_setup import (
@@ -360,3 +361,50 @@ def test_shared_change_found_when_most_frames_are_filled():
     c, rec = shared_time_course(y, q, np.zeros_like(q), finv)
     assert rec["s2"] > 0
     assert _corr(c[~filled], true[~filled]) > 0.85
+
+
+def _paired_noise(rng, q, true):
+    """Poisson data whose noise neighbouring pixel pairs share (as on
+    resampled frames): each pair's pixels are the mean of two draws."""
+    n_px, n_t = q.shape
+    draws = rng.poisson(q * true[None]).astype(np.float64)
+    pair = draws.reshape(n_px // 2, 2, n_t).mean(1)
+    return np.repeat(pair, 2, axis=0)
+
+
+def test_halves_ignore_noise_shared_by_neighbours():
+    """Noise shared by neighbouring pixels is no shared change when the
+    halves are apart; the independent-noise estimate mistakes it for one."""
+    rng = np.random.default_rng(14)
+    n_px, n_t = 200, 2000
+    q = np.full((n_px, n_t), 3.0)
+    finv = np.ones((n_px, n_t))
+    src = np.zeros_like(q)
+    y = _paired_noise(rng, q, np.ones(n_t))
+    half_a = np.arange(n_px) < 90
+    half_b = np.arange(n_px) >= 110
+    c1, r1 = shared_time_course(y, q, src, finv)
+    c2, r2 = shared_time_course(y, q, src, finv, (half_a, half_b))
+    assert r1["s2"] > 0 and np.ptp(c1) > 0.05
+    assert r2["s2"] < 0.1 * r2["var_raw"]
+    assert np.std(c2) < 0.3 * np.std(c1)
+    true = 1 + 0.15 * np.sin(np.arange(n_t) / 7.0)
+    y = _paired_noise(rng, q, true)
+    c3, r3 = shared_time_course(y, q, src, finv, (half_a, half_b))
+    assert r3["s2"] > 0
+    assert _corr(c3, true) > 0.85
+    small = np.zeros(n_px, bool)
+    small[:3] = True
+    _, r4 = shared_time_course(y, q, src, finv, (small, half_b))
+    assert r4["s2"] == 0
+
+
+def test_outside_halves_are_apart():
+    """The halves split the outside pixels along their longer extent,
+    with a gap."""
+    sel = np.ones((5, 12), bool)
+    outside = np.ones(60, bool)
+    a, b = outside_halves(sel, outside)
+    rows, cols = np.nonzero(sel.T)[::-1]
+    assert cols[a].max() < cols[b].min() - 2
+    assert a.sum() > 15 and b.sum() > 15

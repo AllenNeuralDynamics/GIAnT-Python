@@ -375,7 +375,7 @@ def _baseline_step(b, b_ext, data, sel, p, operators, info):
             b, y, xt, h, finv, sel, p, operators, False, offset
         )
     shared = mode == "gain_shared"
-    b, step = fit_network_gain(b, b_ext, y, xt, h, finv, p, shared)
+    b, step = fit_network_gain(b, b_ext, y, xt, h, finv, p, shared, sel)
     info["baseline_step"] = step
     return b
 

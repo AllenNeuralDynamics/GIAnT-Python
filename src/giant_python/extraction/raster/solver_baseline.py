@@ -17,7 +17,7 @@ import numpy as np
 from scipy import linalg, ndimage, optimize, sparse
 
 from .localization import movmean_nan
-from .solver_setup import SolverParams, conv_operator
+from .solver_setup import SolverParams, conv_operator, sel_coords
 
 
 def smooth_lowess(a: np.ndarray, window: int) -> np.ndarray:
@@ -637,6 +637,9 @@ GAIN_MAX = 10.0
 # fewest pixels outside the footprints that a shared time course is
 # estimated from ('gain_shared'); with fewer it is held at 1
 MIN_OUTSIDE = 10
+# fewest pixels in each half of the outside pixels for the shared
+# variance ('gain_shared'); with fewer it is 0
+MIN_HALF = 5
 # frames whose shared factor's sampling variance exceeds this multiple of
 # the median do not enter the estimate of the shared variance
 RELIABLE_FACTOR = 4.0
@@ -724,7 +727,11 @@ def fit_gain(
 
 
 def shared_time_course(
-    y: np.ndarray, q: np.ndarray, src: np.ndarray, finv: np.ndarray
+    y: np.ndarray,
+    q: np.ndarray,
+    src: np.ndarray,
+    finv: np.ndarray,
+    halves: tuple | None = None,
 ) -> tuple[np.ndarray, dict]:
     """A factor per frame shared by pixels, and how it was shrunk.
 
@@ -746,6 +753,23 @@ def shared_time_course(
     times ten times its 10th percentile if that is lower; this leaves out
     filled-in frames, also where they are most of the trial). Without a
     shared change the factor is ``m`` throughout.
+
+    How ``s2`` is estimated:
+
+    - with ``halves`` (two boolean masks over the pixels, spatially apart:
+      the solver splits the outside pixels at their median column or row
+      with a gap): ``s2`` is the covariance over the reliable frames of
+      the factors estimated from each half alone. A change shared by the
+      pixels appears in both halves; noise shared only by neighbouring
+      pixels (the 200 Hz frames are resampled, so neighbours share
+      photons) does not. The sampling variance of each frame is then the
+      factors' remaining variance, ``var(c) - s2``, apportioned by the
+      frame's precision. With fewer than ``MIN_HALF`` pixels in a half,
+      ``s2`` is 0.
+    - without: ``s2`` is the factors' variance beyond the sampling
+      variance that independent pixel noise would give. This holds only
+      for independent noise (it over-estimates ``s2`` on resampled
+      frames).
 
     Returns
     -------
@@ -784,12 +808,65 @@ def shared_time_course(
     alpha = float((w * (r - raw * q) ** 2)[seen].sum() / dof)
     var_t = alpha * inv
     spread = float(((raw[rel] - m) ** 2).sum() / max(int(rel.sum()) - 1, 1))
-    s2 = max(0.0, spread - float(var_t[rel].mean()))
+    record = dict(raw=raw, mean=m, alpha=alpha, var_raw=spread)
+    if halves is None:
+        s2 = max(0.0, spread - float(var_t[rel].mean()))
+    else:
+        s2, cov = _shared_variance_halves(w, r, q, rel, halves)
+        record["cov_halves"] = cov
+        # the rest of the factors' variance is their sampling variance,
+        # apportioned to the frames by their precision
+        noise = max(spread - s2, 0.0)
+        var_t = noise * inv / float(inv[rel].mean())
     lam = np.zeros(n_t)
     if s2 > 0:
         lam[ok] = s2 / (s2 + var_t[ok])
     c = m + lam * (raw - m)
-    return c, dict(raw=raw, mean=m, alpha=alpha, s2=s2)
+    record["s2"] = s2
+    return c, record
+
+
+def _shared_variance_halves(w, r, q, rel, halves):
+    """Covariance of two halves' factors over the reliable frames (>= 0).
+
+    Returns ``(s2, cov)``; ``s2`` is 0 when a half has fewer than
+    ``MIN_HALF`` pixels or no reliable frame has a factor in both.
+    """
+    a, b = (np.asarray(x, dtype=bool) for x in halves)
+    if a.sum() < MIN_HALF or b.sum() < MIN_HALF:
+        return 0.0, float("nan")
+    fac = []
+    for m in (a, b):
+        den = (w[m] * q[m] * q[m]).sum(0)
+        num = (w[m] * r[m] * q[m]).sum(0)
+        fac.append((num, den))
+    both = rel & (fac[0][1] > 0) & (fac[1][1] > 0)
+    if both.sum() < 2:
+        return 0.0, float("nan")
+    ca = fac[0][0][both] / fac[0][1][both]
+    cb = fac[1][0][both] / fac[1][1][both]
+    cov = float(np.mean((ca - ca.mean()) * (cb - cb.mean())))
+    return max(cov, 0.0), cov
+
+
+def outside_halves(sel: np.ndarray, outside: np.ndarray, gap: float = 1.0):
+    """Two spatially separate halves of the outside pixels.
+
+    The outside pixels (a boolean mask over the subproblem's pixels, in
+    ``sel``'s column-major order) are split at their median column, or
+    row if they extend further in rows; pixels within ``gap`` of the
+    median are left out, so that the halves share no neighbours.
+
+    Returns
+    -------
+    a, b : ndarray of bool, shape (outside pixels,)
+        Masks over the outside pixels.
+    """
+    rows, cols = sel_coords(sel)
+    rows, cols = rows[outside], cols[outside]
+    axis = cols if np.ptp(cols) >= np.ptp(rows) else rows
+    med = float(np.median(axis))
+    return axis < med - gap, axis > med + gap
 
 
 def fit_network_gain(
@@ -801,6 +878,7 @@ def fit_network_gain(
     finv: np.ndarray,
     params: SolverParams,
     shared: bool = False,
+    sel: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
     """The baseline step of the 'gain' and 'gain_shared' modes.
 
@@ -826,6 +904,11 @@ def fit_network_gain(
     params : SolverParams
     shared : bool
         Also fit the shared time course.
+    sel : ndarray of bool, optional
+        The subproblem's crop: its outside pixels are split into two
+        spatially separate halves (:func:`outside_halves`) for the shared
+        variance. Without it the shared variance assumes independent
+        pixel noise (see :func:`shared_time_course`).
 
     Returns
     -------
@@ -848,8 +931,9 @@ def fit_network_gain(
         return b, info
     src = (coef[:, :n_src] * h) @ x
     q = coef[:, -1:] * b_ext
+    halves = None if sel is None else outside_halves(sel, outside)
     c, record = shared_time_course(
-        y[outside], q[outside], src[outside], finv[outside]
+        y[outside], q[outside], src[outside], finv[outside], halves
     )
     b, coef = fit_gain(
         b0, y, x, h, finv, b_ext * c[None, :], params.min_baseline
