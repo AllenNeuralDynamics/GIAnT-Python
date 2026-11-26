@@ -84,6 +84,18 @@ def test_params_reject_bad_values():
         SolverParams(nmf_iter=0)
     with pytest.raises(ValueError, match="sigma_px"):
         SolverParams(sigma_px=0)
+    # divisors: a zero would give a NaN kernel or an endless spline
+    with pytest.raises(ValueError, match="tau_full"):
+        SolverParams(tau_full=0)
+    with pytest.raises(ValueError, match="baseline_knot_factor"):
+        SolverParams(baseline_knot_factor=0)
+    with pytest.raises(ValueError, match="tau_s"):
+        SolverParams(tau_s=float("nan"))
+    with pytest.raises(ValueError, match="photon_scale"):
+        SolverParams(photon_scale=float("inf"))
+    with pytest.raises(ValueError, match="lam"):
+        SolverParams(lam=-0.1)
+    assert SolverParams(photon_scale=None, lam=0, phi=0).tau_full is None
 
 
 def test_initial_footprints_match_matlab():

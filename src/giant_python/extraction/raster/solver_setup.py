@@ -125,7 +125,7 @@ class SolverParams:
             )
         if self.nmf_iter < 1:
             raise ValueError(f"nmf_iter must be >= 1, not {self.nmf_iter}")
-        for name in (
+        positive = [
             "analyze_hz",
             "tau_s",
             "tau2_s",
@@ -133,9 +133,21 @@ class SolverParams:
             "sel_radius",
             "baseline_window_s",
             "denoise_window_s",
-        ):
-            if not getattr(self, name) > 0:
-                raise ValueError(f"{name} must be positive")
+            "min_baseline",
+            "baseline_knot_factor",
+        ]
+        if self.tau_full is not None:
+            positive.append("tau_full")
+        if self.photon_scale is not None:
+            positive.append("photon_scale")
+        for name in positive:
+            v = getattr(self, name)
+            if not (v > 0 and math.isfinite(v)):
+                raise ValueError(f"{name} must be positive and finite")
+        for name in ("lam", "phi", "baseline_penalty"):
+            v = getattr(self, name)
+            if not (v >= 0 and math.isfinite(v)):
+                raise ValueError(f"{name} must not be negative")
 
     @property
     def tau_frames(self) -> float:

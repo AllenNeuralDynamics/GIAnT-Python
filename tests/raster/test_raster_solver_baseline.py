@@ -235,6 +235,23 @@ def test_box_qp_matches_scipy():
         np.testing.assert_allclose(x[i], ref, atol=1e-8)
 
 
+def test_box_qp_zero_curvature_follows_the_linear_term():
+    """A variable without curvature goes to the bound that its linear
+    term favours."""
+    g = np.zeros((3, 1, 1))
+    c = np.array([[1.0], [-1.0], [0.0]])
+    lb, ub = np.full((3, 1), -3.0), np.full((3, 1), 2.0)
+    x, info = sb.solve_box_qp(g, c, lb, ub)
+    assert x.ravel().tolist() == [2.0, -3.0, 0.0]
+    assert info["converged"].all()
+    # beside variables with curvature, which do not depend on it
+    g = np.array([[[2.0, 0.0], [0.0, 0.0]]])
+    x, _ = sb.solve_box_qp(
+        g, np.array([[1.0, 5.0]]), np.full((1, 2), -4.0), np.full((1, 2), 3.0)
+    )
+    assert x.ravel().tolist() == [0.5, 3.0]
+
+
 def test_box_qp_zero_rows_and_fallback():
     """A variable with a zero row is left at its bound nearest zero; a
     problem the Newton iterations do not finish goes to the fallback."""

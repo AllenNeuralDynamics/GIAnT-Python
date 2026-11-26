@@ -312,8 +312,10 @@ def solve_box_qp(
     A projected Newton method on the free variables (exact for a
     quadratic once the active bounds are identified), run for all problems
     at once; a problem it does not finish goes to scipy's bounded-variable
-    least squares. Variables whose row of G is zero do not enter the
-    objective and are set to their bound nearest zero.
+    least squares. A variable whose row of G is zero enters the objective
+    through ``c`` alone: it goes to its upper bound where ``c`` is
+    positive, to its lower bound where ``c`` is negative, and to its
+    bound nearest zero where ``c`` is zero.
 
     Parameters
     ----------
@@ -384,8 +386,8 @@ def solve_box_qp(
     kkt = kkt_residual(x)[2] / grad_scale
     # back to the given scale; the bounds are met exactly
     x = np.clip(x * scale, lb, ub)
-    nearest = np.clip(0.0, lb, ub)
-    return np.where(dead, nearest, x), {"converged": done, "kkt": kkt}
+    linear = np.where(c > 0, ub, np.where(c < 0, lb, np.clip(0.0, lb, ub)))
+    return np.where(dead, linear, x), {"converged": done, "kkt": kkt}
 
 
 def surround_operators(sel: np.ndarray, params: SolverParams) -> list:
