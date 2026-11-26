@@ -774,10 +774,11 @@ def stream(  # noqa: C901
     """
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.results import TrialRecord
-    from .silo_solve import results_attrs, solve_hash
+    from .silo_solve import results_attrs, solve_hash, solve_settings
 
     sp = params.solver_params()
     options = execution.solver_options()
+    settings = solve_settings(params, options)
     report = []
     pending: Optional[_Pending] = None
     if paths is None:
@@ -843,6 +844,7 @@ def stream(  # noqa: C901
                 n_sub,
                 extracted,
                 rhash,
+                settings,
             )
             del trial
             futures, results = _submit(subs, sp, options, pool)

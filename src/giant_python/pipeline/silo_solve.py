@@ -67,21 +67,35 @@ def subproblem_work(n_pixels, n_sources, n_frames) -> np.ndarray:
     )
 
 
+def _solve_record(params: SiloParams, options) -> dict:
+    """What a results file depends on besides its container and range."""
+    return {
+        "stage": "solve",
+        "settings": params.stage_settings("solve"),
+        "solver": {
+            "device": str(options.device).split(":")[0],
+            "dtype": options.dtype,
+            "batch_bytes": options.batch_bytes,
+            "max_iter": options.max_iter,
+            "fit_max_iter": options.fit_max_iter,
+            "ftol": options.ftol,
+            "cg_iter": options.cg_iter,
+        },
+    }
+
+
+def solve_settings(params: SiloParams, options) -> str:
+    """Hash of how subproblems are solved (the same for every results file
+    of one run; recorded as ``solve_settings``)."""
+    return stage_hash(_solve_record(params, options))
+
+
 def solve_hash(params: SiloParams, options, container_hash: str, span) -> str:
-    """Settings hash of a results file."""
+    """Settings hash of a results file: how, which container, which
+    subproblems."""
     return stage_hash(
         {
-            "stage": "solve",
-            "settings": params.stage_settings("solve"),
-            "solver": {
-                "device": str(options.device).split(":")[0],
-                "dtype": options.dtype,
-                "batch_bytes": options.batch_bytes,
-                "max_iter": options.max_iter,
-                "fit_max_iter": options.fit_max_iter,
-                "ftol": options.ftol,
-                "cg_iter": options.cg_iter,
-            },
+            **_solve_record(params, options),
             "container": container_hash,
             "span": [int(span[0]), int(span[1])],
         }
@@ -119,12 +133,21 @@ def solve_subproblem_list(subs, params, options, pool=None) -> list:
 
 
 def results_attrs(
-    container, name: str, container_hash: str, span, n_sub, extracted, h
+    container,
+    name: str,
+    container_hash: str,
+    span,
+    n_sub,
+    extracted,
+    h,
+    settings: str,
 ) -> dict:
-    """Attributes of a results file."""
+    """Attributes of a results file (``settings`` is
+    :func:`solve_settings`)."""
     src = getattr(container, "source", {}) or {}
     return {
         "settings_hash": h,
+        "solve_settings": settings,
         "container": name,
         "container_hash": container_hash,
         "path": int(src.get("path", 0)),
@@ -204,7 +227,14 @@ def solve_container(
         TrialRecord.from_trial(c),
         subproblem_results(subs, results, idx),
         results_attrs(
-            c, container_path.name, chash, span, n_sub, extracted, h
+            c,
+            container_path.name,
+            chash,
+            span,
+            n_sub,
+            extracted,
+            h,
+            solve_settings(params, options),
         ),
     )
     return {"seconds": time.perf_counter() - t0, "solved": len(subs)}
