@@ -7,8 +7,11 @@ same files: ``source_extraction/experiment_summary.h5``,
 ``source_extraction/per_trial_summary.h5`` and the trial table's
 ``source_extraction`` group, in MATLAB's schema (names, sizes as MATLAB's
 ``h5read`` sees them, classes, ``/row_major = 0``). MATLAB's algorithm is the
-default: moving-median localization, the fitted baseline, rigid
-across-trial alignment, ``getActImPeaks`` seeding, the kinetics test.
+default (moving-median localization, the fitted baseline, rigid
+across-trial alignment, ``getActImPeaks`` seeding, the kinetics test), with
+two differences in the solver: its fits run to convergence, and the
+footprint fit holds its variance term at its start
+(``footprint_variance='fixed'``; ``'model'`` is MATLAB's loss).
 
 .. code-block:: bash
 
@@ -34,8 +37,9 @@ Settings
 :class:`~giant_python.models.params.SiloParams` is the one parameter set of
 every stage; its defaults are MATLAB's ``setParams('SILo')`` for SLAP2 with
 the modality defaults resolved (``peakth`` 3, ``minKineticScore`` 0.2,
-``photonScale`` 25), and ``to_matlab()`` gives the ``params`` struct that
-the summary and the trial table record. On the command line a few fields
+``photonScale`` 25) and the fixed-variance footprint fit, and
+``to_matlab()`` gives the ``params`` struct that the summary and the trial
+table record. On the command line a few fields
 have their own options (``--peak-th``, ``--min-kinetic-score``,
 ``--footprint-variance``, ``--localization-baseline``,
 ``--no-trial-peaks``, ``--activity-channel``); any field can be set with
@@ -43,14 +47,14 @@ have their own options (``--peak-th``, ``--min-kinetic-score``,
 :class:`~giant_python.models.params.SiloExecution` says how to run (worker
 processes and threads, device, precision); it does not change results.
 
-Settings that MATLAB does not have are fields too, with MATLAB's algorithm
-as their default: ``footprint_variance`` (``'fixed'`` holds the footprint
-fit's variance at its start), the localization options of the F0-network
-work (``localization_baseline='network'`` with ``--baseline-dir``,
-``localization_surround``, ``localization_null``, ...), and
-``trial_peaks``. They are added to the saved ``params`` only when they
-differ from MATLAB's algorithm, so a default run's files have MATLAB's
-fields exactly.
+Settings that MATLAB does not have are fields too: ``footprint_variance``
+(default ``'fixed'``), the localization options of the F0-network work
+(``localization_baseline='network'`` with ``--baseline-dir``,
+``localization_surround``, ``localization_null``, ...; their defaults are
+MATLAB's), and ``trial_peaks``. They are added to the saved ``params`` (in
+camelCase) when they differ from MATLAB's algorithm: a default run records
+``footprintVariance = 'fixed'``, and a run with
+``--set footprint_variance=model`` has MATLAB's fields exactly.
 
 Stages
 ------
@@ -156,7 +160,8 @@ Differences from MATLAB
 -----------------------
 
 * The iterative fits run to convergence (MATLAB's fmincon stops at
-  iteration caps); see :mod:`giant_python.extraction.raster.solver`.
+  iteration caps), and the footprint fit holds its variance at its start
+  by default; see :mod:`giant_python.extraction.raster.solver`.
 * The Gaussian seed fit does not reproduce MATLAB's seeds, which are where
   MATLAB's ``lsqcurvefit`` stops at its evaluation limit; parity runs pass
   MATLAB's seeds (``--seeds``).

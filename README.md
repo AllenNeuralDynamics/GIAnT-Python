@@ -86,7 +86,7 @@ Annotations are stored beneath the table's `savedr` in `annotations/annotations.
 
 ## Run SILo on raster recordings
 
-`giant silo` extracts sources from registered SLAP2 multi-ROI (raster) recordings as GIAnT-MATLAB's `SILo.m` does, and writes the same files in MATLAB's schema: `source_extraction/experiment_summary.h5`, `source_extraction/per_trial_summary.h5` and the trial table's `source_extraction` fields. MATLAB's algorithm is the default (moving-median localization, fitted baseline, rigid across-trial alignment, the kinetics test); the fits run to convergence instead of stopping at MATLAB's iteration caps.
+`giant silo` extracts sources from registered SLAP2 multi-ROI (raster) recordings as GIAnT-MATLAB's `SILo.m` does, and writes the same files in MATLAB's schema: `source_extraction/experiment_summary.h5`, `source_extraction/per_trial_summary.h5` and the trial table's `source_extraction` fields. MATLAB's algorithm is the default (moving-median localization, fitted baseline, rigid across-trial alignment, the kinetics test), except that the fits run to convergence instead of stopping at MATLAB's iteration caps and the footprint fit holds its variance at its start (`footprint_variance='fixed'`; `--set footprint_variance=model` gives MATLAB's loss).
 
 ```bash
 giant register path/to/trial_table.h5
