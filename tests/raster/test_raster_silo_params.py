@@ -151,8 +151,9 @@ def test_one_setting_reaches_every_stage():
 
 
 def test_to_matlab_has_matlabs_fields_types_and_values(tmp_path):
-    """Written as saveStructToH5 would, the struct has MATLAB's schema."""
-    m = SiloParams().to_matlab(2, 80.0, 12, "a", "b")
+    """Written as saveStructToH5 would, the struct of MATLAB's algorithm
+    has MATLAB's schema."""
+    m = SiloParams(footprint_variance="model").to_matlab(2, 80.0, 12, "a", "b")
     assert set(m) == set(MATLAB_FIELDS)
     path = tmp_path / "p.h5"
     with h5py.File(path, "w") as f:
@@ -179,9 +180,12 @@ def test_to_matlab_has_matlabs_fields_types_and_values(tmp_path):
 
 
 def test_python_only_settings_are_recorded_when_not_matlabs():
-    """A default struct has MATLAB's fields only; other settings add one."""
+    """MATLAB's algorithm has MATLAB's fields only; other settings add one
+    each, the default fixed-variance footprint fit too."""
+    assert set(SiloParams().to_matlab(2, 80.0)) - set(MATLAB_FIELDS) == {
+        "footprintVariance"
+    }
     m = SiloParams(
-        footprint_variance="fixed",
         localization_baseline="network",
         trial_peaks=False,
         localization_peak_th=8.0,

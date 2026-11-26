@@ -484,9 +484,11 @@ class SiloParams:
     plan, trial loading, subproblem solving, collection). The defaults are
     GIAnT-MATLAB main's ``setParams('SILo')`` for SLAP2 (``isSLAP2``), with
     its modality defaults resolved (``peakth`` 3, ``minKineticScore`` 0.2,
-    ``photonScale`` 25). MATLAB's names are given in brackets;
-    :meth:`to_matlab` returns the ``params`` struct that SILo saves. The
-    stages' own parameter types are derived with :meth:`plan_params`,
+    ``photonScale`` 25), and the solver's fixed-variance footprint fit
+    (``footprint_variance='model'`` gives MATLAB's). MATLAB's names are
+    given in brackets; :meth:`to_matlab` returns the ``params`` struct
+    that SILo saves. The stages' own parameter types are derived with
+    :meth:`plan_params`,
     :meth:`load_params`, :meth:`solver_params` and
     :meth:`localization_params`.
 
@@ -573,9 +575,10 @@ class SiloParams:
         Lower bound of the baseline, normalized units (``minBaseline``).
     debias_variance : {'fixed', 'model'}
         Variance term of the debias refit (``debiasVariance``).
-    footprint_variance : {'model', 'fixed'}
-        Variance term of the footprint fit: MATLAB's ('model') or held at
-        the fit's start ('fixed'). Not a MATLAB option.
+    footprint_variance : {'fixed', 'model'}
+        Variance term of the footprint fit: held at the fit's start
+        ('fixed', the default since GIAnT-Python#23) or following the model
+        as in MATLAB ('model'). Not a MATLAB option.
     baseline_knot_factor, baseline_penalty : float
         The solver's baseline spline (MATLAB's fixed values).
     min_kinetic_score : float
@@ -629,7 +632,7 @@ class SiloParams:
     nmf_iter: int = 2
     min_baseline: float = 0.01
     debias_variance: str = "fixed"
-    footprint_variance: str = "model"
+    footprint_variance: str = "fixed"
     baseline_knot_factor: float = 0.5
     baseline_penalty: float = 30.0
     min_kinetic_score: float = 0.2
@@ -863,8 +866,9 @@ class SiloParams:
         windows in frames). Numbers are doubles, logicals ``np.bool_``
         (saved as int8), strings ``str``; arrays are in MATLAB's
         orientation. A setting without a MATLAB name is added (in
-        camelCase) only when it differs from MATLAB's algorithm, so that a
-        default run's struct has MATLAB's fields exactly.
+        camelCase) when it differs from MATLAB's algorithm, so that a run
+        with MATLAB's algorithm has MATLAB's fields exactly. With the
+        defaults that is ``footprintVariance = 'fixed'`` alone.
 
         Parameters
         ----------
@@ -938,10 +942,9 @@ class SiloParams:
             "Bfilter": np.ascontiguousarray(sp.bfilter.transpose(1, 2, 0)),
             "validKernel": np.ones((3, 3), dtype=np.bool_),
         }
-        default = SiloParams()
-        for name, key in _PYTHON_ONLY.items():
+        for name, (key, matlab) in _PYTHON_ONLY.items():
             value = getattr(self, name)
-            if value == getattr(default, name):
+            if value == matlab:
                 continue
             if isinstance(value, bool):
                 out[key] = np.bool_(value)
@@ -1022,23 +1025,24 @@ _STAGE_FIELDS = {
     ),
 }
 
-# settings without a MATLAB name, and their names in the saved params
+# settings without a MATLAB name: their names in the saved params, and the
+# value that is MATLAB's algorithm
 _PYTHON_ONLY = {
-    "footprint_variance": "footprintVariance",
-    "localization_baseline": "localizationBaseline",
-    "localization_surround": "localizationSurround",
-    "localization_null": "localizationNull",
-    "localization_null_draws": "localizationNullDraws",
-    "localization_null_seed": "localizationNullSeed",
-    "localization_null_scale": "localizationNullScale",
-    "localization_variance_floor": "localizationVarianceFloor",
-    "localization_score": "localizationScore",
-    "localization_soft_th": "localizationSoftTh",
-    "localization_peak_th": "localizationPeakth",
-    "trial_peaks": "trialPeaks",
-    "baseline_knot_factor": "baselineKnotFactor",
-    "baseline_penalty": "baselinePenalty",
-    "min_frames": "minFrames",
+    "footprint_variance": ("footprintVariance", "model"),
+    "localization_baseline": ("localizationBaseline", "median"),
+    "localization_surround": ("localizationSurround", True),
+    "localization_null": ("localizationNull", "none"),
+    "localization_null_draws": ("localizationNullDraws", 1),
+    "localization_null_seed": ("localizationNullSeed", 0),
+    "localization_null_scale": ("localizationNullScale", "tail"),
+    "localization_variance_floor": ("localizationVarianceFloor", True),
+    "localization_score": ("localizationScore", "squared_maxima"),
+    "localization_soft_th": ("localizationSoftTh", 2.0),
+    "localization_peak_th": ("localizationPeakth", None),
+    "trial_peaks": ("trialPeaks", True),
+    "baseline_knot_factor": ("baselineKnotFactor", 0.5),
+    "baseline_penalty": ("baselinePenalty", 30.0),
+    "min_frames": ("minFrames", 100),
 }
 
 
