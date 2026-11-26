@@ -1356,6 +1356,8 @@ def inject_samples(
     -------
     InjectionStats
     """
+    if int(chunk_cycles) < 1:
+        raise ValueError("chunk_cycles must be at least 1")
     t_start = time.perf_counter()
     stats = InjectionStats(reachable_slots=int(model.slots.size))
     if model.slots.size == 0:
@@ -1445,6 +1447,48 @@ def _copy_recording(layout: RasterLayout, dest: Path, done: set) -> None:
             done.add(meta.name)
         elif not meta.exists():
             log.warning("%s has no %s; not copied", src.name, meta.name)
+
+
+def _recording_files(names, keep, paths, data_dir: Path) -> dict:
+    """Each injected cell's data files; reject copies that would collide.
+
+    Returns
+    -------
+    dict
+        ``{zero-based path: {zero-based trial: tuple of resolved files}}``.
+
+    Raises
+    ------
+    ValueError
+        If two different originals (data or ``.meta`` files) would be
+        copied to the same name in the copy's flat folder.
+    """
+    out, origin = {}, {}
+    for dmd in paths:
+        d = int(dmd) - 1
+        if not 0 <= d < names.shape[0]:
+            raise ValueError(f"path {dmd} is not in the trial table")
+        out[d] = {}
+        for t in keep:
+            if not str(names[d, t] or "").strip():
+                continue
+            layout = raster_layout(data_dir / str(names[d, t]))
+            files = tuple(str(Path(p).resolve()) for p in layout.files)
+            out[d][int(t)] = files
+            for f in files:
+                extra = []
+                try:
+                    extra = [str(meta_path(f).resolve())]
+                except ValueError:
+                    pass
+                for src in [f] + extra:
+                    name = Path(src).name
+                    if origin.setdefault(name, src) != src:
+                        raise ValueError(
+                            f"{origin[name]} and {src} would both be copied "
+                            f"as {name}"
+                        )
+    return out
 
 
 def _relocated(layout: RasterLayout, dest: Path) -> RasterLayout:
@@ -1635,8 +1679,9 @@ def expected_frames(
     """Noiseless registered frames of a sample model, at given pixels.
 
     The model's expected counts are formed into frames at ``frame_lines``
-    as SILo forms them at ``hz`` (kernel ``ceil(line rate / hz)`` lines,
-    the recording's invalid samples left out) and resampled with the
+    as SILo's extraction forms them at ``hz`` (kernel ``ceil(line rate /
+    hz)`` lines, the samples exactly at its reach and the recording's
+    invalid samples left out) and resampled with the
     registration's motion into the path frame (the trial frame moved by
     ``shift_rc``; see :func:`~giant_python.simulation.render.
     iter_registered_frames`).
@@ -1699,7 +1744,16 @@ def expected_frames(
     pc = np.clip(pix[:, 1], 0, w - 1)
     out = np.full((pix.shape[0], frame_lines.size), np.nan)
     for idx, frames, _ in iter_registered_frames(
-        layout, samples, c0, alignment, frame_lines, dt, device, 128, part
+        layout,
+        samples,
+        c0,
+        alignment,
+        frame_lines,
+        dt,
+        device,
+        128,
+        part,
+        exclusive=True,
     ):
         out[:, idx] = frames[-1][:, pr, pc].T.cpu().numpy()
     out[~inside] = np.nan
@@ -1955,13 +2009,15 @@ def _path_gain(settings: InjectionSettings, layout: RasterLayout):
 
 def _neighbours(ctx: dict, cells: list):
     """For trial ``t``: line ranges of the other injected trials of the
-    same recording."""
+    same recording (trials whose recordings share a data file, which may be
+    named by different files of a CYCLE-split recording)."""
+    files = {t: set(ctx["files"][t]) for t in cells}
 
     def ranges(t):
-        """``(first, last)`` lines of the other trials of ``t``'s file."""
+        """``(first, last)`` lines of the other trials of ``t``'s recording."""
         out = []
         for u in cells:
-            if u != t and ctx["names"][u] == ctx["names"][t]:
+            if u != t and files[u] & files[t]:
                 out.append((float(ctx["first"][u]), float(ctx["last"][u])))
         return out
 
@@ -2000,7 +2056,7 @@ def _inject_path(ctx: dict, cells: list, options: dict) -> dict:
         ctx["gain"].mean_pulse,
     )
     peaks = np.ones(n_src)
-    if s.size_reference == "frames" and n_src:
+    if s.size_reference == "frames" and n_src and s.rate_hz > 0:
         lo, hi = trial_lines(
             ref, ctx["first"][cells[0]], ctx["last"][cells[0]]
         )
@@ -2113,6 +2169,8 @@ def inject_session(
     adata = np.atleast_2d(
         np.asarray(table["motion_correction"]["fn_adata"], dtype=object)
     )
+    if int(chunk_cycles) < 1:
+        raise ValueError("chunk_cycles must be at least 1")
     if (out_dir / "raw").resolve() == data_dir.resolve():
         raise ValueError(
             f"{out_dir / 'raw'} is the original's data folder; the copy "
@@ -2128,7 +2186,6 @@ def inject_session(
             f"{out_dir} already holds {', '.join(found)}; inject into a new "
             "folder"
         )
-    out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "settings": settings,
         "placement": placement or PlacementSettings(),
@@ -2140,6 +2197,8 @@ def inject_session(
         "chunk_cycles": chunk_cycles,
         "device": _render_device(settings.device),
     }
+    recordings = _recording_files(names, keep, paths, data_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)  # inputs checked
     truth_paths, summary = {}, {"paths": {}}
     for dmd in paths:
         d = int(dmd) - 1
@@ -2158,6 +2217,7 @@ def inject_session(
             base,
             dmd=int(dmd),
             names=names[d],
+            files=recordings[d],
             adata=adata[d],
             first=_grid(info["first_line"], n_paths, n_trials)[d],
             last=_grid(info["last_line"], n_paths, n_trials)[d],

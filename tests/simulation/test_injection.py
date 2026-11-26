@@ -1016,3 +1016,113 @@ def test_more_inputs_are_checked(online, registered, tmp_path):
     big = np.arange(10 * 112, dtype=float).reshape(10, 112)
     out = inj.shift_image(big, (0.0, 8.0), (10, 100))
     np.testing.assert_allclose(out, big[:, 8:108])
+
+
+def test_bad_chunks_and_name_collisions_are_refused(
+    online, registered, tmp_path, monkeypatch
+):
+    """A nonpositive chunk size, and two recordings that would be copied
+    under one name, are refused before anything is written."""
+    import shutil
+
+    from giant_python.io.hdf5 import load_struct_h5
+
+    layout, _, _ = online
+    s = inj.InjectionSettings(
+        raw_per_photon=4.0, frame_traces=False, size_reference="tissue"
+    )
+    with pytest.raises(ValueError, match="chunk_cycles"):
+        run_injection(
+            online,
+            registered[False],
+            tmp_path / "c",
+            monkeypatch,
+            settings=s,
+            chunk_cycles=0,
+        )
+    assert not (tmp_path / "c").exists()
+    data = tmp_path / "data"
+    src = Path(layout.files[0])
+    for sub in ("a", "b"):
+        (data / sub).mkdir(parents=True)
+        shutil.copyfile(src, data / sub / src.name)
+    table = load_struct_h5(registered[False])
+    table["filename"] = np.array(
+        [[f"a/{src.name}", f"b/{src.name}"]], dtype=object
+    )
+    twins = tmp_path / "twins.h5"
+    save_struct_h5(twins, table)
+    monkeypatch.setattr(
+        inj, "raster_layout", lambda path: replace(layout, files=(str(path),))
+    )
+    with pytest.raises(ValueError, match="would both be copied"):
+        inj.inject_session(
+            twins, tmp_path / "t", paths=(1,), settings=s, data_dir=data
+        )
+    assert not (tmp_path / "t").exists()
+
+
+def test_neighbours_share_recording_files():
+    """Trials are neighbours when their recordings share a file, whatever
+    file each trial names."""
+    ctx = {
+        "names": ["c0.dat", "c1.dat", "other.dat"],
+        "files": {
+            0: ("c0.dat", "c1.dat"),
+            1: ("c0.dat", "c1.dat"),
+            2: ("other.dat",),
+        },
+        "first": [1.0, 101.0, 1.0],
+        "last": [100.0, 200.0, 50.0],
+    }
+    near = inj._neighbours(ctx, [0, 1, 2])
+    assert near(0) == [(101.0, 200.0)]
+    assert near(1) == [(1.0, 100.0)]
+    assert near(2) == []
+
+
+def test_no_events_need_no_calibration(
+    online, registered, tmp_path, monkeypatch
+):
+    """Without events nothing is calibrated, even in a trial too short to
+    calibrate, and the copy stays identical."""
+    layout, _, _ = online
+    s = inj.InjectionSettings(rate_hz=0.0, edge_s=1.6, raw_per_photon=1.0)
+    run_injection(
+        online, registered[True], tmp_path / "o", monkeypatch, settings=s
+    )
+    src = Path(layout.files[0])
+    assert sha(tmp_path / "o" / "raw" / src.name) == sha(src)
+    truth = inj.read_truth(tmp_path / "o" / inj.TRUTH_NAME)["paths"][1]
+    np.testing.assert_array_equal(truth["frame_peak"], 1.0)
+
+
+def test_silo_frames_leave_out_the_kernels_edge(online, registered):
+    """Frame traces and calibration use SILo's extraction frames, which
+    leave out the samples exactly at the kernel's reach."""
+    layout, _, _ = online
+    moco = Path(registered[True]).parent / "motion_correction"
+    al = inj.read_alignment(moco / "E1T1DMD1_ALIGNMENTDATA.h5")
+    geo = inj.trial_geometry(layout, al, (1, 4800))
+    model = inj.SampleModel(
+        layout,
+        geo,
+        np.array([[16.0, 20.0]]),
+        [inj.GaussianFootprint()],
+        np.ones((1, 4800)),
+    )
+    fl = np.arange(300, 900, 8)
+    got = inj.expected_frames(layout, al, model, fl, [[16, 21]], (0, 0), 200)
+    n_c = layout.num_cycles
+    smp = np.zeros((1, layout.slot_line.size, n_c), np.float32)
+    smp[0][model.slots] = model.expected(np.arange(n_c)).T
+    want = {}
+    for exclusive in (True, False):
+        out = []
+        for _, f, _ in iter_registered_frames(
+            layout, smp, 0, al, fl, 8, chunk=200, exclusive=exclusive
+        ):
+            out.append(f[0][:, 16, 21].numpy())
+        want[exclusive] = np.concatenate(out)
+    np.testing.assert_allclose(got[0], want[True], rtol=1e-6)
+    assert np.max(np.abs(want[True] - want[False])) > 1e-6

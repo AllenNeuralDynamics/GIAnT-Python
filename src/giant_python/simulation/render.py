@@ -108,6 +108,7 @@ def iter_registered_frames(
     device="cpu",
     chunk: int = 64,
     offset_rc=(0.0, 0.0),
+    exclusive: bool = False,
 ) -> Iterator[Tuple[np.ndarray, torch.Tensor, torch.Tensor]]:
     """Registered frames of ``samples``, a chunk of frames at a time.
 
@@ -136,6 +137,10 @@ def iter_registered_frames(
         offset: pixel ``p`` shows the trial frame's ``p + offset_rc`` (the
         way SILo reads a trial on its consensus grid, with the trial shift
         ``motOutput``). Default: the trial's own registered frame.
+    exclusive : bool
+        Leave out the samples exactly ``max(3 dt, P)`` lines from a frame's
+        time, as SILo's extraction frames do (``getImages``); registration's
+        frames keep them (the default).
 
     Yields
     ------
@@ -149,7 +154,7 @@ def iter_registered_frames(
     times = np.asarray(times, dtype=np.int64).ravel()
     n_ch = samples.shape[0]
     lay = replace(layout, num_channels=n_ch)
-    former = FrameFormer(lay, samples, int(cycle0), 1, device)
+    former = FrameFormer(lay, samples, int(cycle0), 1, device, exclusive)
     src = _source(former, alignment, times, int(dt))
     refs = src.references(times)
     move = frame_motion(alignment, times, refs) + np.asarray(offset_rc)
