@@ -211,6 +211,7 @@ def test_python_only_settings_are_recorded_when_not_matlabs():
         {"localization_null": "other"},
         {"trial_peaks": 1},
         {"min_frames": 0},
+        {"nan_thresh": 1.1},
         {"localization_null_seed": -1},
         {"localization_null_seed": 1.5},
         {"localization_null_seed": True},

@@ -701,6 +701,10 @@ class SiloParams:
                 f"peakMethod {self.peak_method!r} is not ported yet; only "
                 "'getactimpeaks'"
             )
+        if not self.nan_thresh <= 1:
+            # a share of missing samples: above 1 pixels without any sample
+            # would pass
+            raise ValueError("nan_thresh must not be above 1")
         self._check_localization()
         # the stages' own types check the rest
         self.localization_params(80.0)

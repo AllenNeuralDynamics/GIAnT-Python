@@ -30,6 +30,8 @@ DATA = Path(__file__).parent / "data"
 SUBPROBLEM = DATA / "matlab_solver_subproblem.h5"
 HELPERS = DATA / "matlab_solver_helpers.h5"
 PARAMS = SolverParams()
+# MATLAB's loss for the footprint fit (the default holds its variance)
+MATLAB_LOSS = replace(PARAMS, footprint_variance="model")
 
 
 def _corr(a, b):
@@ -58,11 +60,20 @@ def solved(fixture):
     return solve_subproblem(sub, PARAMS, SolverOptions(keep_baseline=True))
 
 
-def test_agrees_with_matlab(fixture, solved):
-    """The converged solver's outputs are close to MATLAB's, whose fits
-    stop early: same footprints and least squares, similar activity."""
+@pytest.fixture(scope="module")
+def solved_matlab_loss(fixture):
+    """The result with MATLAB's loss for the footprint fit."""
+    sub, _ = fixture
+    opt = SolverOptions(keep_baseline=True)
+    return solve_subproblem(sub, MATLAB_LOSS, opt)
+
+
+def test_agrees_with_matlab(fixture, solved_matlab_loss):
+    """With MATLAB's loss, the converged solver's outputs are close to
+    MATLAB's, whose fits stop early: same footprints and least squares,
+    similar activity."""
     sub, out = fixture
-    r = solved
+    r = solved_matlab_loss
     assert r.footprints.shape == (sub.n_pixels, 2)
     assert r.events.shape == r.ls.shape == r.f0.shape == (2, 2, 1000)
     assert r.baseline.shape == (2, sub.n_pixels, 1000)
@@ -268,19 +279,25 @@ def test_single_fits_can_be_capped(fixture, solved):
     assert np.abs(r.footprints - solved.footprints).max() > 1e-3
 
 
-def test_fixed_variance_footprint_fit_is_more_compact(fixture, solved):
-    """With the variance held at its value at the fit's start, the footprint
-    fit no longer gains from raising the model, and the footprints come
-    out more compact than with MATLAB's loss; the fit still converges."""
-    sub, _ = fixture
-    one = replace(sub, y=sub.y[:1])
-    r = solve_subproblem(one, replace(PARAMS, footprint_variance="fixed"))
-    assert r.info["footprints1"]["converged"]
-    np.testing.assert_allclose(r.footprints.sum(0), 1.0, atol=1e-12)
-    compact = (r.footprints**2).sum(0)
-    assert np.all(compact > 1.02 * (solved.footprints**2).sum(0))
+def test_default_footprint_fit_holds_its_variance(solved, solved_matlab_loss):
+    """By default the variance of the footprint fit is held at its value
+    at the fit's start, so the fit does not gain from raising the model:
+    the footprints come out more compact than with MATLAB's loss, and F0,
+    which scales with their spread, lower. Both fits converge."""
+    assert PARAMS.footprint_variance == "fixed"
+    fixed, model = solved, solved_matlab_loss
+    assert fixed.info["footprints1"]["converged"]
+    assert model.info["footprints1"]["converged"]
+    np.testing.assert_allclose(fixed.footprints.sum(0), 1.0, atol=1e-12)
+    compact = (fixed.footprints**2).sum(0)
+    assert np.all(compact > 1.02 * (model.footprints**2).sum(0))
+    assert np.all(fixed.f0[0].mean(1) < model.f0[0].mean(1))
     for j in range(2):
-        assert _corr(r.footprints[:, j], solved.footprints[:, j]) > 0.98
+        assert _corr(fixed.footprints[:, j], model.footprints[:, j]) > 0.98
+    # what precedes the footprint fit does not depend on the choice
+    assert fixed.info["activity1"]["loss"] == pytest.approx(
+        model.info["activity1"]["loss"], rel=1e-12
+    )
     with pytest.raises(ValueError, match="footprint_variance"):
         replace(PARAMS, footprint_variance="other")
 
