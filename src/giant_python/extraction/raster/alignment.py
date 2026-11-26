@@ -259,7 +259,11 @@ def dftregistration_clipped(
         error = 1.0 - cc_max * np.conj(cc_max) / (rg_zero * rf_zero)
     error = float(np.sqrt(np.abs(error)))
     diffphase = float(np.arctan2(cc_max.imag, cc_max.real))
-    # in MATLAB's one-based indices: beyond the middle is a negative shift
+    # MATLAB's test, on its one-based index: "if rloc > fix(m/2)" the shift
+    # is negative. On an odd axis this turns the largest positive shift,
+    # (m - 1) / 2, into its alias -(m + 1) / 2 (the same circular shift);
+    # kept as MATLAB returns it. With SiLo's clip of 80 the peak can only be
+    # there on a canvas of 81 pixels or fewer.
     row_shift = rloc - m if rloc + 1 > m // 2 else rloc
     col_shift = cloc - n if cloc + 1 > n // 2 else cloc
     return error, diffphase, int(row_shift), int(col_shift)

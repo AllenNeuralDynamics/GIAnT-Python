@@ -141,6 +141,37 @@ def test_dftregistration_clipped_whole_shifts():
     assert abs(out[2]) <= 5 and abs(out[3]) <= 5
 
 
+def test_dftregistration_clipped_odd_sizes_as_matlab():
+    """On an odd axis MATLAB's midpoint test (``rloc > fix(m/2)`` on the
+    one-based index) returns a shift of half the axis as its negative alias:
+    values of dftregistration_clipped.m (R2024b) for a 5 x 7 and a 6 x 8
+    image moved circularly."""
+    rng = np.random.default_rng(4)
+    matlab = {
+        (5, 7): {
+            (-2, 0): (-3, 0),  # the alias of +2 on 5 rows
+            (2, 0): (-2, 0),
+            (0, 3): (0, -3),
+            (0, -3): (0, -4),  # the alias of +3 on 7 columns
+            (1, -2): (-1, 2),
+        },
+        (6, 8): {
+            (-3, 0): (-3, 0),
+            (3, 0): (-3, 0),
+            (0, 4): (0, -4),
+            (0, -4): (0, -4),
+        },
+    }
+    for shape, cases in matlab.items():
+        ref = rng.normal(size=shape)
+        for moved_by, expect in cases.items():
+            moved = np.roll(ref, moved_by, axis=(0, 1))
+            out = dftregistration_clipped(
+                np.fft.fft2(ref), np.fft.fft2(moved), 80
+            )
+            assert out[2:] == expect, (shape, moved_by)
+
+
 def test_template_samples():
     """Up to 20 kept trials, evenly spaced as MATLAB's
     round(linspace(1, n, 20))."""
