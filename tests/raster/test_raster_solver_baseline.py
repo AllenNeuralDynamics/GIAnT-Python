@@ -252,6 +252,33 @@ def test_box_qp_zero_curvature_follows_the_linear_term():
     assert x.ravel().tolist() == [0.5, 3.0]
 
 
+def test_box_qp_fixed_variables():
+    """Bounds that coincide fix a variable, in the Newton iterations and in
+    the fallback; the others are solved around it."""
+    one = np.ones((1, 1))
+    for max_iter in (100, 0):
+        x, _ = sb.solve_box_qp(one[None], 0 * one, one, one, max_iter=max_iter)
+        assert x.tolist() == [[1.0]]
+    rng = np.random.default_rng(9)
+    g, c, lb, ub = _random_qp(rng, 8, 5)
+    lb[:, 1] = ub[:, 1] = 0.3
+    lb[:, 4] = ub[:, 4] = -0.2
+    x, info = sb.solve_box_qp(g, c, lb, ub)
+    assert info["converged"].all()
+    assert np.all(x[:, 1] == 0.3) and np.all(x[:, 4] == -0.2)
+    fallback, info = sb.solve_box_qp(g, c, lb, ub, max_iter=0)
+    assert not info["converged"].any()
+    np.testing.assert_allclose(fallback, x, atol=1e-7)
+    # the free variables solve the program with the fixed ones moved into
+    # its linear term
+    keep = [0, 2, 3]
+    shift = g[:, keep][:, :, [1, 4]] @ np.array([0.3, -0.2])
+    ref, _ = sb.solve_box_qp(
+        g[:, keep][:, :, keep], c[:, keep] - shift, lb[:, keep], ub[:, keep]
+    )
+    np.testing.assert_allclose(x[:, keep], ref, atol=1e-9)
+
+
 def test_box_qp_zero_rows_and_fallback():
     """A variable with a zero row is left at its bound nearest zero; a
     problem the Newton iterations do not finish goes to the fallback."""

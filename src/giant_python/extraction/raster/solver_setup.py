@@ -148,6 +148,13 @@ class SolverParams:
             v = getattr(self, name)
             if not (v >= 0 and math.isfinite(v)):
                 raise ValueError(f"{name} must not be negative")
+        if self.lp_factor < 2:
+            # splitFreq takes a low order statistic over this many pages
+            raise ValueError(
+                "baseline_window_s must be longer than denoise_window_s "
+                "(in whole frames): the baseline is tracked over "
+                f"{self.lp_factor} denoise window(s), and needs at least 2"
+            )
 
     @property
     def tau_frames(self) -> float:

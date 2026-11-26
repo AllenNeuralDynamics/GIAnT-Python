@@ -261,15 +261,33 @@ def curvature_penalty(n_coef: int) -> np.ndarray:
 
 
 def _bvls_fallback(g, c, lb, ub):
-    """One bounded QP by scipy's bounded-variable least squares."""
-    n = g.shape[0]
-    ridge = 1e-13 * max(np.trace(g) / n, np.finfo(float).tiny)
-    r = linalg.cholesky(g + ridge * np.eye(n), lower=False)
-    rhs = linalg.solve_triangular(r, c, trans="T")
+    """One bounded QP by scipy's bounded-variable least squares.
+
+    Variables whose bounds coincide are set to them first (the least
+    squares need a lower bound below the upper one), and the others
+    solved with their contribution moved into the linear term.
+    """
+    fixed = lb >= ub
+    x = np.where(fixed, lb, 0.0)
+    if fixed.all():
+        return x
+    free = ~fixed
+    gf = g[np.ix_(free, free)]
+    cf = c[free] - g[np.ix_(free, fixed)] @ x[fixed]
+    n = gf.shape[0]
+    ridge = 1e-13 * max(np.trace(gf) / n, np.finfo(float).tiny)
+    r = linalg.cholesky(gf + ridge * np.eye(n), lower=False)
+    rhs = linalg.solve_triangular(r, cf, trans="T")
     res = optimize.lsq_linear(
-        r, rhs, bounds=(lb, ub), method="bvls", tol=1e-14, max_iter=50 * n
+        r,
+        rhs,
+        bounds=(lb[free], ub[free]),
+        method="bvls",
+        tol=1e-14,
+        max_iter=50 * n,
     )
-    return res.x
+    x[free] = res.x
+    return x
 
 
 def _qp_objective(g, c, x):

@@ -96,6 +96,15 @@ def test_params_reject_bad_values():
     with pytest.raises(ValueError, match="lam"):
         SolverParams(lam=-0.1)
     assert SolverParams(photon_scale=None, lam=0, phi=0).tau_full is None
+    # the baseline needs at least two denoise windows per baseline window
+    with pytest.raises(ValueError, match="baseline_window_s"):
+        SolverParams(baseline_window_s=0.1, denoise_window_s=0.1)
+    with pytest.raises(ValueError, match="baseline_window_s"):
+        SolverParams(baseline_window_s=0.2, denoise_window_s=0.196)
+    assert (
+        SolverParams(baseline_window_s=0.3, denoise_window_s=0.2).lp_factor
+        == 2
+    )
 
 
 def test_initial_footprints_match_matlab():
