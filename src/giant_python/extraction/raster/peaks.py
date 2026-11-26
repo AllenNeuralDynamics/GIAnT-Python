@@ -615,20 +615,29 @@ class _LocalFit:
             target = target - fixed
         lb, ub = _offset_bounds(starts, self.shape)
         start = np.clip(_to_offsets(theta, starts), lb, ub)
-        dense = start.size <= _LOCAL_DENSE_MAX
-        res = least_squares(
-            lambda x: model.value(x) - target,
-            start,
-            jac=lambda x: model.jacobian(x, dense),
-            bounds=(lb, ub),
-            method="trf",
-            tr_solver="exact" if dense else "lsmr",
-            x_scale="jac",
-            ftol=_LOCAL_TOL,
-            xtol=_LOCAL_TOL,
-            gtol=_LOCAL_TOL,
-            max_nfev=100 * start.size,
-        )
+
+        def run(dense):
+            """least_squares with a dense (SVD) or sparse (lsmr) solver."""
+            return least_squares(
+                lambda x: model.value(x) - target,
+                start,
+                jac=lambda x: model.jacobian(x, dense),
+                bounds=(lb, ub),
+                method="trf",
+                tr_solver="exact" if dense else "lsmr",
+                x_scale="jac",
+                ftol=_LOCAL_TOL,
+                xtol=_LOCAL_TOL,
+                gtol=_LOCAL_TOL,
+                max_nfev=100 * start.size,
+            )
+
+        try:
+            res = run(start.size <= _LOCAL_DENSE_MAX)
+        except np.linalg.LinAlgError:
+            # LAPACK's SVD now and then fails to converge (see _fit); the
+            # sparse solver needs none
+            res = run(False)
         return _from_offsets(res.x, starts)
 
     def model_at(self, theta, starts, rows):

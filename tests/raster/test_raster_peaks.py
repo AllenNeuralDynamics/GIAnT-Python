@@ -190,10 +190,15 @@ def test_windowed_model_is_the_integrated_model_within_its_window():
     assert np.all(narrow.value(x[[0, 2, 4, 6]])[far] == 0)
 
 
+@pytest.mark.parametrize("dense_max", [400, 0])
 @pytest.mark.parametrize("merge_px", [0.0, 1.5])
-def test_local_fit_finds_separated_gaussians(merge_px):
+def test_local_fit_finds_separated_gaussians(merge_px, dense_max, monkeypatch):
     """The local fit finds the blobs the MATLAB fit finds, at their
-    centres."""
+    centres, with the dense (SVD) solver of small fits and with the sparse
+    (lsmr) one of large fits."""
+    import giant_python.extraction.raster.peaks as peaks
+
+    monkeypatch.setattr(peaks, "_LOCAL_DENSE_MAX", dense_max)
     rng = np.random.default_rng(0)
     yy, xx = np.mgrid[:40, :50]
     img = 0.05 * rng.standard_normal((40, 50))
@@ -218,6 +223,27 @@ def _split_prone_image():
         d2 = (yy - r) ** 2 + (xx - c) ** 2
         img += 40 * np.exp(-d2 / (2 * 0.45**2)) + 6 * np.exp(-d2 / 5.12)
     return img
+
+
+def test_local_fit_falls_back_when_svd_fails(monkeypatch):
+    """A LAPACK SVD failure in a local fit's dense solver retries with the
+    sparse one, and the seeds are found."""
+    import giant_python.extraction.raster.peaks as peaks
+
+    calls = []
+    real = peaks.least_squares
+
+    def flaky(*args, **kwargs):
+        """least_squares whose dense (SVD) solver always fails."""
+        calls.append(kwargs.get("tr_solver"))
+        if kwargs.get("tr_solver") == "exact":
+            raise np.linalg.LinAlgError("SVD did not converge")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(peaks, "least_squares", flaky)
+    pk = get_act_im_peaks(_split_prone_image(), 3, fit="local", merge_px=1.5)
+    assert calls[:2] == ["exact", "lsmr"]
+    assert pk.shape[0] == 2
 
 
 @pytest.mark.parametrize("fit", ["matlab", "local"])
