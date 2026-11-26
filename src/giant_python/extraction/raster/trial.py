@@ -164,7 +164,8 @@ def half_mean_images(
     for h in (0, 1):
         with np.errstate(invalid="ignore", divide="ignore"):
             m = total[h] / count[h]
-        missing = 1 - count[h].mean(axis=0) / (half == h).sum() > nan_thresh
+            seen = count[h].mean(axis=0) / np.float64((half == h).sum())
+            missing = 1 - seen > nan_thresh
         m[:, missing] = np.nan
         out[h] = m.transpose(1, 2, 0)
     return out
