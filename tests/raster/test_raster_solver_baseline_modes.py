@@ -435,7 +435,6 @@ def test_halves_do_not_shrink_noiseless_factors():
     q = np.ones((20, 2))
     y = q * np.array([0.8, 1.2])[None]
     halves = (np.arange(20) < 8, np.arange(20) >= 12)
-    c, rec = shared_time_course(
-        y, q, np.zeros_like(q), np.ones_like(q), halves
-    )
-    np.testing.assert_allclose(c, [0.8, 1.2])
+    for finv in (np.ones_like(q), np.ones_like(q) * np.array([1.0, 4.0])):
+        c, rec = shared_time_course(y, q, np.zeros_like(q), finv, halves)
+        np.testing.assert_allclose(c, [0.8, 1.2])

@@ -814,8 +814,10 @@ def shared_time_course(
         s2, cov = _shared_variance_halves(w, r, q, rel, halves)
         record["cov_halves"] = cov
         # the rest of the factors' variance is their sampling variance,
-        # apportioned to the frames by their precision
-        noise = max(spread - s2, 0.0)
+        # apportioned to the frames by their precision; centred on the
+        # arithmetic mean, as the halves' covariance
+        sample_var = float(np.var(raw[rel], ddof=1)) if rel.sum() > 1 else 0.0
+        noise = max(sample_var - s2, 0.0)
         var_t = noise * inv / float(inv[rel].mean())
     lam = np.zeros(n_t)
     if s2 > 0:
