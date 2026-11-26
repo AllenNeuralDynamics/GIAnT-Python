@@ -86,12 +86,12 @@ class PlanParams:
     peak_method : str
         ``"getactimpeaks"``; ``"wmf"`` is not ported yet (``peakMethod``).
     seed_fit : str
-        ``"matlab"`` (MATLAB's Gaussian fits) or ``"local"`` (faster local
-        fits run to convergence; not in MATLAB). See
+        ``"local"`` (the default: local Gaussian fits run to convergence,
+        seconds per path) or ``"matlab"`` (MATLAB's capped joint fits). See
         :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`.
     seed_merge_px : float
         Reject a residual peak that ends closer than this to another peak
-        (0: MATLAB's rule only).
+        (default 1.5; 0: MATLAB's rule only).
     peak_th : float
         Seed threshold in robust SDs of the combined activity image
         (``peakth``: 3 for SLAP2, 8 otherwise).
@@ -115,8 +115,8 @@ class PlanParams:
     max_corr_thresh: float = 0.90
     inter_trial_alignment: str = "rigid"
     peak_method: str = "getactimpeaks"
-    seed_fit: str = "matlab"
-    seed_merge_px: float = 0.0
+    seed_fit: str = "local"
+    seed_merge_px: float = 1.5
     peak_th: float = 3.0
     min_peak_distance: int = 1
     d_xy: float = 3.0
@@ -600,6 +600,20 @@ def combined_activity_image(
     return act_im - med_im, med_im, nan_frac
 
 
+# fields added to PlanParams after plans were first written, with the value
+# that describes plans written before them (MATLAB's seed fit, no merging)
+_PLAN_FIELDS_ADDED = {"seed_fit": "matlab", "seed_merge_px": 0.0}
+
+
+def _saved_params(text: str) -> dict:
+    """A plan file's saved PlanParams; fields it predates get the values
+    it was made with, not today's defaults."""
+    saved = json.loads(text)
+    for name, before in _PLAN_FIELDS_ADDED.items():
+        saved.setdefault(name, before)
+    return saved
+
+
 def _soma_canvas(soma_mask, shape, warp=None, trial=None) -> np.ndarray:
     """The soma mask on the consensus canvas (top left).
 
@@ -1010,7 +1024,7 @@ def read_plan(path: str | Path, group: str = "/") -> ExtractionPlan:
             return out
 
         return ExtractionPlan(
-            params=PlanParams(**json.loads(g.attrs["params"])),
+            params=PlanParams(**_saved_params(g.attrs["params"])),
             keep_trials=a["keep_trials"][()].astype(bool),
             template=a["template"][()],
             template_trials=a["template_trials"][()].astype(np.int64),
