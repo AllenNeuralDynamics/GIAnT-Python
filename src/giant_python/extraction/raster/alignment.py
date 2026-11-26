@@ -595,7 +595,9 @@ def align_trials(
         ``clip`` of the whole-pixel estimate
         (:func:`dftregistration_clipped`).
     n_samples : int
-        Largest number of trials the template is made from.
+        Largest number of trials the template is made from. Kept trials
+        whose mean image is all NaN are not among them (unlike MATLAB, where
+        one such trial leaves the whole path without a template).
 
     Returns
     -------
@@ -604,15 +606,21 @@ def align_trials(
     Raises
     ------
     ValueError
-        If no trial is kept.
+        If no trial is kept, or no kept trial has a mean image.
     """
     m = np.asarray(mean_sum, dtype=np.float64)
     keep = np.asarray(keep, dtype=bool).ravel()
     n_trials, h, w = m.shape
     if not keep.any():
         raise ValueError("no trials to align")
+    # a kept trial without a mean image (all NaN) has no correlation with
+    # any other, which would leave the path without a template (MATLAB
+    # samples such a trial and ends with no sources); it is not sampled
+    has_image = keep & ~np.isnan(m).all(axis=(1, 2))
+    if not has_image.any():
+        raise ValueError("no kept trial has a mean image to align")
     s = int(max_shift)
-    samples = template_samples(keep, n_samples)
+    samples = template_samples(has_image, n_samples)
     template = make_consensus_template(m[samples], s)
     shifts = np.full((n_trials, 2), np.nan)
     corr = np.full(n_trials, np.nan)

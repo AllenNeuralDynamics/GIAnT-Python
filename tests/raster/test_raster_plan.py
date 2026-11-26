@@ -321,6 +321,30 @@ def test_plan_of_trials_of_different_sizes(synthetic_plan):
         plan_path(trials)
 
 
+def test_plan_with_a_trial_without_images(synthetic_plan):
+    """A kept trial whose images are all NaN (nothing was imaged often
+    enough) does not enter the template, so the other trials are planned
+    as without it; in MATLAB it would leave the path without sources."""
+    plan, _ = synthetic_plan
+    trials = _synthetic_trials()
+    shape = trials[0].act_im.shape
+    blank = TrialImages(np.full(shape + (2,), NAN), np.full(shape, NAN))
+    with_blank = plan_path(
+        trials[:2] + [blank] + trials[2:], params=PlanParams(peak_th=12.0)
+    )
+    rest = [0, 1, 3, 4, 5]
+    assert with_blank.keep_trials.all()
+    np.testing.assert_array_equal(with_blank.template_trials, rest)
+    np.testing.assert_array_equal(with_blank.valid_trials, rest)
+    np.testing.assert_array_equal(with_blank.shifts[rest], plan.shifts)
+    assert np.isnan(with_blank.shifts[2]).all()
+    np.testing.assert_array_equal(with_blank.act_im, plan.act_im)
+    np.testing.assert_array_equal(with_blank.source_rows, plan.source_rows)
+    np.testing.assert_array_equal(with_blank.source_cols, plan.source_cols)
+    with pytest.raises(ValueError, match="mean image"):
+        plan_path([blank, blank])
+
+
 def test_plan_without_sources():
     """A path whose activity images hold nothing above threshold has no
     sources, pixels or groups, and still writes and reads."""
