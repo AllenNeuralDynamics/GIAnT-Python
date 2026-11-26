@@ -143,7 +143,9 @@ def written(tmp_path):
         score=np.array([0.9, 0.1, np.nan, 0.5]),
         n_events=np.array([10, 7, 2, 6]),
     )
-    params = SiloParams(activity_channel=2).to_matlab(C, 80.0, 4, "a", "b")
+    params = SiloParams(
+        activity_channel=2, footprint_variance="model"
+    ).to_matlab(C, 80.0, 4, "a", "b")
     exp, per = tmp_path / "experiment_summary.h5", tmp_path / "per.h5"
     write_summaries(exp, per, [result, None], params, N_TRIALS, C, 2)
     return exp, per, result

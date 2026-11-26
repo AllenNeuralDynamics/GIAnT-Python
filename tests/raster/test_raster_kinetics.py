@@ -1,7 +1,8 @@
 """Tests of the kinetics test (sourceKinetics, rejectFastSources).
 
 ``data/matlab_kinetics.h5`` holds GIAnT-MATLAB's results (main 5a0673b,
-MATLAB R2024b) on the inputs of ``data/make_matlab_kinetics.m``: rows with
+MATLAB R2024b) on the inputs of ``data/make_matlab_kinetics.m`` (converted
+by ``data/make_matlab_kinetics_h5.py``): rows with
 and without runs of equal values for ``islocalmax``, and three trials of
 ten sources (four with the sensor's kinetics, three with one-frame
 transients, three in between; discarded frames; a source without data in
