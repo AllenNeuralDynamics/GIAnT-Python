@@ -45,7 +45,7 @@ import threading
 import time
 import warnings
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Iterable, Optional, Sequence
 
 import h5py
@@ -102,15 +102,32 @@ def baseline_folder(session: SiloSession, baseline_dir=None) -> Path:
     return Path(baseline_dir) if baseline_dir else session.baselines_dir
 
 
+def registered_name(session: SiloSession, d: int, t: int) -> Path:
+    """The registered movie's file name that the trial table records
+    (``fn_reg_ds``), whether or not the movie is here."""
+    return Path(PurePath(str(session.fn_reg_ds[d, t]).replace("\\", "/")).name)
+
+
 def _network_baseline(session, d, t, baseline_dir) -> Path:
-    """The baseline file of trial-path ``(d, t)``; it must exist."""
+    """The baseline file of trial-path ``(d, t)``; it must exist and have
+    been predicted from the movie that SILo reads."""
     base = _baseline_file(
-        baseline_folder(session, baseline_dir), session.movie(d, t)
+        baseline_folder(session, baseline_dir), registered_name(session, d, t)
     )
     if not base.exists():
         raise FileNotFoundError(
             f"no network baseline: {base} (predict it with --f0-ckpt, or "
             "give the baselines' folder with --baseline-dir)"
+        )
+    source = _attr(base, "source")
+    if isinstance(source, bytes):
+        source = source.decode()
+    movie = session.movie(d, t)
+    if source and movie is not None and str(source) != movie.name:
+        raise ValueError(
+            f"{base.name} was predicted from {source}, SILo reads "
+            f"{movie.name}: predict it again from that movie (or remove "
+            "the other one)"
         )
     return base
 

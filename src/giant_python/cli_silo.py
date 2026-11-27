@@ -516,7 +516,8 @@ def run_silo_command(args: argparse.Namespace) -> int:  # noqa: C901
     if args.command == "silo-localize":
         units = _selected_units(session, args)
         report = {}
-        if args.f0_ckpt and params.localization_baseline == "network":
+        if args.f0_ckpt and params.needs_network_baseline:
+            # also when only extraction uses them (prepare needs the files)
             from .pipeline.silo_baseline import predict_baselines
 
             report["predict"] = predict_baselines(

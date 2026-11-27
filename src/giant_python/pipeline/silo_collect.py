@@ -51,14 +51,20 @@ def _container_hash(
     None if its raw recording or its network baseline is not here (a
     collect machine without them: results are then checked against plan
     and settings only)."""
-    from .silo import _baseline_file, _prepare_hash, baseline_folder
+    from .silo import (
+        _baseline_file,
+        _prepare_hash,
+        baseline_folder,
+        registered_name,
+    )
 
     base = None
     if params.baseline_mode != "fit":
-        movie = session.movie(d, t)
-        if movie is None:
-            return None
-        base = _baseline_file(baseline_folder(session, baseline_dir), movie)
+        # named after the table's registered movie, which need not be here
+        base = _baseline_file(
+            baseline_folder(session, baseline_dir),
+            registered_name(session, d, t),
+        )
         if not base.exists():
             return None
     try:

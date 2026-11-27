@@ -85,6 +85,33 @@ def missing_baselines(session: SiloSession, baseline_dir, units=None) -> list:
     return out
 
 
+def f0_movie(moco_dir, stem: str) -> Optional[Path]:
+    """The registered movie of a trial that ``predict-registered`` reads:
+    ``.tif`` or ``.h5``, the newer where both exist (slap2-f0's
+    ``registered_movies``)."""
+    chosen = None
+    for ext in (".tif", ".h5"):
+        p = Path(moco_dir) / f"{stem}_REGISTERED_DOWNSAMPLED-80Hz{ext}"
+        if p.exists() and (
+            chosen is None or p.stat().st_mtime > chosen.stat().st_mtime
+        ):
+            chosen = p
+    return chosen
+
+
+def _check_movies(session: SiloSession, todo: list) -> None:
+    """Refuse to predict from another movie than SILo reads (a trial with
+    both a TIFF and an HDF5 movie whose newer one is not SILo's)."""
+    for _, _, movie in todo:
+        stem = movie.name[: movie.name.index("_REGISTERED")]
+        other = f0_movie(session.moco_dir, stem)
+        if other is not None and other.name != movie.name:
+            raise ValueError(
+                f"slap2-f0 would predict {stem} from {other.name}, SILo "
+                f"reads {movie.name}: remove one of them"
+            )
+
+
 def _check_checkpoint(session, baseline_dir, units, ckpt: Path) -> None:
     """Warn when existing baseline files name another checkpoint."""
     import h5py
@@ -165,6 +192,7 @@ def predict_baselines(
     record = {"predicted": [], "seconds": 0.0, "checkpoint": identity}
     if not todo:
         return record
+    _check_movies(session, todo)
     exe = f0_command(command)
     baseline_dir.mkdir(parents=True, exist_ok=True)
     keys = sorted({m.name[: m.name.index("_REGISTERED")] for _, _, m in todo})

@@ -9,6 +9,7 @@ the missing files only.
 """
 
 import json
+import os
 import subprocess
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -17,7 +18,7 @@ import h5py
 import numpy as np
 import pytest
 
-from giant_python.cli import build_parser
+from giant_python.cli import build_parser, main
 from giant_python.cli_silo import params_from_args
 from giant_python.extraction.raster import trial as trial_mod
 from giant_python.extraction.raster import trial_data as trial_data_mod
@@ -477,6 +478,16 @@ def test_predict_baselines(tmp_path, monkeypatch):
 
     # a failed or incomplete prediction is an error
     (bdir / "E1T3DMD1_BASELINE-80Hz.h5").unlink()
+    # a trial with both movies, the newer not SILo's: refused before the GPU
+    moco = root / "motion_correction"
+    tif = moco / "E1T3DMD1_REGISTERED_DOWNSAMPLED-80Hz.tif"
+    h5 = tif.with_suffix(".h5")
+    h5.write_bytes(b"")
+    os.utime(h5, (tif.stat().st_mtime + 10, tif.stat().st_mtime + 10))
+    with pytest.raises(ValueError, match="remove one of them"):
+        silo_baseline.predict_baselines(s, params, bdir, ckpt)
+    assert silo_baseline.f0_movie(moco, "E1T3DMD1") == h5
+    h5.unlink()
     monkeypatch.setattr(
         silo_baseline.subprocess,
         "run",
@@ -575,3 +586,55 @@ def test_summary_records_the_baseline_of_the_results_used(tmp_path, fake):
     assert used["file"]["name"].endswith("_BASELINE-80Hz.h5")
     with h5py.File(s.out_dir / "experiment_summary.h5", "r") as f:
         assert json.loads(f.attrs["network_baseline"])[stem] == used
+
+
+def test_baseline_from_another_movie_is_refused(tmp_path, fake):
+    """A baseline file predicted from another movie than SILo reads (its
+    'source') is refused."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    with h5py.File(bdir / "E1T2DMD1_BASELINE-80Hz.h5", "a") as f:
+        f.attrs["source"] = "E1T2DMD1_REGISTERED_DOWNSAMPLED-80Hz.h5"
+    with pytest.raises(ValueError, match="was predicted from"):
+        silo.localize(s, NET, EX, baseline_dir=bdir)
+
+
+def test_collect_checks_baselines_without_movies(tmp_path, fake):
+    """A collect machine without the registered movies still checks the
+    results against the baseline files (named after the trial table's
+    movies): a replaced baseline leaves the results stale."""
+    root = tmp_path / "s"
+    table = make_session(root)
+    bdir = write_baselines(root, tmp_path / "b")
+    silo.run_silo(
+        table, NET, EX, seeds_file=seeds_file(tmp_path), baseline_dir=bdir
+    )
+    for movie in (root / "motion_correction").glob("*_REGISTERED_*"):
+        movie.unlink()
+    s = SiloSession.open(table, inputs="collect")
+    assert s.movie(0, 0) is None
+    silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+    with h5py.File(bdir / "E1T1DMD2_BASELINE-80Hz.h5", "a") as f:
+        f["baseline"][0, 5, 5] = 1.0
+    with pytest.warns(UserWarning, match="left out"):
+        with pytest.raises(FileNotFoundError, match="path 2, trial 1"):
+            silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+
+
+def test_localize_predicts_for_extraction_too(tmp_path, fake, monkeypatch):
+    """silo-localize --f0-ckpt predicts whenever a stage uses the network's
+    baselines, also when localization alone uses the moving median."""
+    table = make_session(tmp_path / "s")
+    calls = []
+    monkeypatch.setattr(
+        silo_baseline,
+        "predict_baselines",
+        lambda *a, **k: calls.append(a[1]) or {"predicted": []},
+    )
+    monkeypatch.setattr(silo, "localize", lambda *a, **k: [])
+    argv = ["silo-localize", str(table), "--f0-ckpt", "x.pt"]
+    assert main(argv + ["--localization-baseline", "median"]) == 0
+    assert len(calls) == 1 and calls[0].baseline_mode == "gain"
+    assert main(argv + ["--baseline", "median"]) == 0
+    assert len(calls) == 1
