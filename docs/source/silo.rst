@@ -14,7 +14,9 @@ the footprint fit holds its variance term at its start (the solver's
 default, ``footprint_variance='fixed'``; ``'model'`` is MATLAB's loss);
 the seeding's Gaussian fits are local and converged, and a residual peak
 that ends within 1.5 pixels of another is rejected (``seed_fit='local'``,
-``seed_merge_px=1.5``; ``'matlab'`` and ``0`` are MATLAB's).
+``seed_merge_px=1.5``; ``'matlab'`` and ``0`` are MATLAB's); and the
+footprints' support is 5 x 5 pixels (``valid_kernel=5``; ``3`` is
+MATLAB's).
 
 .. code-block:: bash
 
@@ -64,8 +66,9 @@ settings it sets, below), and ``trial_peaks``. They are added to the saved
 ``params`` (in camelCase) when they differ from MATLAB's algorithm: a
 default run records
 ``footprintVariance = 'fixed'``, ``seedFit = 'local'`` and
-``seedMergePx = 1.5``, and a run with ``--set footprint_variance=model
---set seed_fit=matlab --set seed_merge_px=0`` has MATLAB's fields exactly.
+``seedMergePx = 1.5`` (and ``validKernel``, MATLAB's own field, at 5 x 5),
+and a run with ``--set footprint_variance=model --set seed_fit=matlab
+--set seed_merge_px=0 --valid-kernel 3`` has MATLAB's fields exactly.
 
 Two seeding options are not MATLAB's (both on by default since the user's
 decision of 2026-11-26):
@@ -105,11 +108,18 @@ lies between 1.20 and 1.56 px with 3 at ``sigma_px`` 1.33, and up to
 for the whole run: it sets the plan's grouping zones (sources whose disks
 of radius ``ceil(1.5 sigma_px + (valid_kernel - 1) / 2)``, 3 px with 3
 and 4 px with 5, touch are solved together) and the solver's support
-together. It is a Python
-setting only: 3, the default, is the setting to compare with MATLAB, and
-the saved ``params`` struct records ``validKernel`` at the run's size.
-A changed value redoes the plan and the stages after it; the stages after
-the plan refuse a plan or container made with another value.
+together. The default is 5 (decision 11 of the SILo port): MATLAB's
+3 x 3 cannot represent footprints wider than about 1.56 px. On injected
+ground truth (GFP and 780125 copies, close pairs) 5 x 5 halves the width
+error of wide and elongated footprints and has 3-9% fewer false events;
+on typical footprints it finds slightly fewer of the smallest events (a
+1-2% share, about half of it chance detections) and sizes events about 1%
+larger; close pairs, traces and F0 are unchanged; the solve stage takes
+about 6-10% more CPU. It is a Python setting only: 3 is the setting to
+compare with MATLAB, and the saved ``params`` struct records
+``validKernel`` at the run's size. A changed value redoes the plan and the stages after it (so
+outputs made with 3 before the default changed are redone); the stages
+after the plan refuse a plan or container made with another value.
 
 The F0 network's baseline
 -------------------------

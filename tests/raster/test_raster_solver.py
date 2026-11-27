@@ -29,7 +29,9 @@ from giant_python.extraction.raster.solver_setup import (
 DATA = Path(__file__).parent / "data"
 SUBPROBLEM = DATA / "matlab_solver_subproblem.h5"
 HELPERS = DATA / "matlab_solver_helpers.h5"
-PARAMS = SolverParams()
+# MATLAB's 3 x 3 support: the outputs are compared with MATLAB's (the
+# default is 5 x 5; test_valid_kernel_lets_a_wide_footprint_be_fit sets it)
+PARAMS = SolverParams(valid_kernel=3)
 # MATLAB's loss for the footprint fit (the default holds its variance)
 MATLAB_LOSS = replace(PARAMS, footprint_variance="model")
 
@@ -476,8 +478,13 @@ def test_valid_kernel_lets_a_wide_footprint_be_fit():
     x = np.convolve(ev, PARAMS.k, mode="same")
     b = np.full((h.size, n), 2.0)
     y = rng.poisson(b + h[:, None] * x[None]).astype(np.float64)[None]
-    sub = Subproblem(y=y, finv=np.ones(y.shape[1:]), sel=sel,
-                     sources_rc=np.array([[6, 6]]), baseline=b)
+    sub = Subproblem(
+        y=y,
+        finv=np.ones(y.shape[1:]),
+        sel=sel,
+        sources_rc=np.array([[6, 6]]),
+        baseline=b,
+    )
     true_w = _rms_width(h, rows, cols)
     widths = {}
     for vk in (3, 5):
