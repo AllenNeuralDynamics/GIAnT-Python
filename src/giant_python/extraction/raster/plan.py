@@ -5,7 +5,9 @@ path between the per-trial localizations and the extraction of the trials,
 and of the grouping at the top of ``extractTrial.m``:
 
 1. the trials' mean and activity images are put on one canvas and aligned
-   (:mod:`~giant_python.extraction.raster.alignment`; rigid only);
+   (:mod:`~giant_python.extraction.raster.alignment`): a shift per trial,
+   refined for the valid trials to an affine map or a patchwise field
+   (``inter_trial_alignment``);
 2. valid trials are those whose mean image matches the template and whose
    activity image covers enough pixels; their aligned activity images are
    averaged into the combined activity image, minus its local median;
@@ -42,6 +44,8 @@ import scipy.ndimage as ndimage
 from .alignment import (
     TrialWarp,
     align_trials,
+    align_trials_affine,
+    align_trials_patchwise,
     mask_to_consensus,
     warp_trial_image,
 )
@@ -81,8 +85,11 @@ class PlanParams:
     max_corr_thresh : float
         Upper limit of the correlation a valid trial must exceed (0.90).
     inter_trial_alignment : str
-        ``"rigid"``; ``"affine"`` and ``"patchwise"`` are not ported yet
-        (``interTrialAlignment``).
+        ``"rigid"`` (a shift per trial), ``"affine"`` (an affine map per
+        valid trial) or ``"patchwise"`` (a smooth displacement field per
+        valid trial on top of its affine plane) (``interTrialAlignment``).
+    align_patch_px : float
+        Imaged pixels per patch of the patchwise field (``alignPatchPx``).
     peak_method : str
         ``"getactimpeaks"``; ``"wmf"`` is not ported yet (``peakMethod``).
     seed_fit : str
@@ -114,6 +121,7 @@ class PlanParams:
     template_trials: int = 20
     max_corr_thresh: float = 0.90
     inter_trial_alignment: str = "rigid"
+    align_patch_px: float = 1500.0
     peak_method: str = "getactimpeaks"
     seed_fit: str = "local"
     seed_merge_px: float = 1.5
@@ -142,7 +150,13 @@ class PlanParams:
             )
         if not self.seed_merge_px >= 0:
             raise ValueError("seed_merge_px must be nonnegative")
-        for name in ("d_xy", "sigma_px", "template_trials", "valid_kernel"):
+        for name in (
+            "d_xy",
+            "sigma_px",
+            "template_trials",
+            "valid_kernel",
+            "align_patch_px",
+        ):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be positive")
         if self.max_shift < 0:
@@ -174,8 +188,8 @@ class TrialImages:
     discard : ndarray of bool, optional
         The trial's discarded frames, carried into the plan.
     half_ims : ndarray of shape (2, rows, cols, channels), optional
-        Mean images of two halves of the trial's frames; not used by the
-        rigid alignment (the patchwise mode will need them).
+        Mean images of two halves of the trial's frames, which weight the
+        patchwise alignment's patches (only that mode uses them).
     """
 
     mean_im: np.ndarray
@@ -274,9 +288,9 @@ def loader_warp(warp: TrialWarp, trial: int):
     -------
     RigidShift or callable
         The trial's shift (added to its motion, MATLAB's ``isShift`` path),
-        or, for an affine map, a function from zero-based consensus
-        ``(rows, cols)`` to zero-based positions in the trial's registered
-        frame (MATLAB's ``trialWarpCoords`` path).
+        or, for an affine map or a patchwise field, a function from
+        zero-based consensus ``(rows, cols)`` to zero-based positions in
+        the trial's registered frame (MATLAB's ``trialWarpCoords`` path).
 
     Raises
     ------
@@ -419,7 +433,10 @@ class ExtractionPlan:
     shifts : ndarray of shape (T, 2)
         Each trial's shift ``(rows, cols)``: consensus pixel ``(r, c)`` is
         at ``(r, c) + shift`` in the trial's registered image; NaN for
-        trials that were not aligned (MATLAB's ``motOutput``).
+        trials that were not aligned (MATLAB's ``motOutput``). For an
+        affine or patchwise alignment, the displacement at the canvas
+        centre (the offsets of the motion records); ``warp`` holds the
+        maps.
     corr : ndarray of shape (T,)
         Correlation of each trial's mean image with the template.
     corr_thresh : float
@@ -611,7 +628,11 @@ def combined_activity_image(
 
 # fields added to PlanParams after plans were first written, with the value
 # that describes plans written before them (MATLAB's seed fit, no merging)
-_PLAN_FIELDS_ADDED = {"seed_fit": "matlab", "seed_merge_px": 0.0}
+_PLAN_FIELDS_ADDED = {
+    "seed_fit": "matlab",
+    "seed_merge_px": 0.0,
+    "align_patch_px": 1500.0,
+}
 
 
 def _saved_params(text: str) -> dict:
@@ -646,6 +667,87 @@ def _soma_canvas(soma_mask, shape, warp=None, trial=None) -> np.ndarray:
             "trials; using the mask without across-trial alignment"
         )
     return mask_to_consensus(out, warp, trial, shape)
+
+
+def _canvas_halves(trials: Sequence, keep: np.ndarray, shape) -> np.ndarray:
+    """The kept trials' half images summed over channels, on the canvas
+    (MATLAB's ``Mhalves``: ``(trials, 2, rows, cols)``); NaN for trials
+    without them."""
+    out = np.full((len(trials), 2) + tuple(shape), np.nan)
+    for k, trial in enumerate(trials):
+        if not keep[k] or trial is None or trial.half_ims is None:
+            continue
+        h = np.asarray(trial.half_ims, dtype=np.float64)
+        if h.ndim == 3:  # one channel without its axis
+            h = h[..., None]
+        s = h.sum(axis=3)  # NaN where a channel is, as the mean images
+        out[k, :, : s.shape[1], : s.shape[2]] = s
+    return out
+
+
+def refine_alignment(
+    warp: TrialWarp,
+    mean_sum: np.ndarray,
+    valid: np.ndarray,
+    params: PlanParams,
+    halves: np.ndarray | None = None,
+):
+    """Refine the rigid alignment of the valid trials (``SILo.m`` after the
+    rigid fit): affine maps or patchwise fields, groupwise. Trials that are
+    aligned but not valid keep their shift (as a field: the shift at every
+    centre).
+
+    Parameters
+    ----------
+    warp : TrialWarp
+        The rigid alignment.
+    mean_sum : ndarray of shape (trials, rows, cols)
+        The trials' mean images summed over channels, on the canvas.
+    valid : ndarray of int
+        The valid trials.
+    params : PlanParams
+        ``inter_trial_alignment`` ('affine' or 'patchwise') and
+        ``align_patch_px``.
+    halves : ndarray of shape (trials, 2, rows, cols), optional
+        The trials' half images summed over channels (patchwise only).
+
+    Returns
+    -------
+    warp : TrialWarp
+        The refined alignment.
+    shifts : ndarray of shape (trials, 2)
+        Each aligned trial's displacement at the canvas centre (MATLAB's
+        updated ``motOutput``: the rigid-equivalent offsets of the motion
+        records).
+    info : AlignmentInfo
+    """
+    n_trials = warp.n_trials
+    start = np.full(warp.affine.shape, np.nan)
+    start[valid] = warp.affine[valid]
+    affine = warp.affine.copy()
+    if params.inter_trial_alignment == "patchwise":
+        fit, info = align_trials_patchwise(
+            mean_sum, start, halves, params.align_patch_px
+        )
+        nodes = fit.nodes
+        disp = np.full((n_trials, nodes.shape[0], 2), np.nan)
+        for t in np.flatnonzero(warp.aligned):
+            a = warp.affine[t]
+            disp[t] = (a[:, :2] @ nodes.T + a[:, 2:3] - nodes.T).T
+        disp[valid] = fit.disp[valid]
+        affine[valid] = fit.affine[valid]
+        out = TrialWarp(affine, nodes, fit.sigma, disp, fit.patch)
+    else:
+        refined, info = align_trials_affine(mean_sum, start)
+        affine[valid] = refined[valid]
+        out = TrialWarp(affine)
+    h, w = mean_sum.shape[1:]
+    x0 = np.array([(h - 1) / 2, (w - 1) / 2])  # MATLAB's (H+1)/2, one-based
+    shifts = np.full((n_trials, 2), np.nan)
+    for t in np.flatnonzero(out.aligned):
+        r_c, c_c = out.coords(t, x0[:1], x0[1:])
+        shifts[t] = [r_c[0] - x0[0], c_c[0] - x0[1]]
+    return out, shifts, info
 
 
 def _nanmean0(stack: np.ndarray) -> np.ndarray:
@@ -683,15 +785,17 @@ def plan_path(  # noqa: C901
         Trials to use among those given (default: all).
     details : dict, optional
         If given, it receives the intermediates that the plan does not
-        keep: ``med_im``, ``nan_frac``, and the sources before pruning
-        (``rows``, ``cols``, ``values``, ``pixels``, ``keep_sources``).
+        keep: ``med_im``, ``nan_frac``, the sources before pruning
+        (``rows``, ``cols``, ``values``, ``pixels``, ``keep_sources``) and,
+        for a refined alignment, ``alignment_info``
+        (:class:`~giant_python.extraction.raster.alignment.AlignmentInfo`).
     seeds : ndarray of shape (n, 4), optional
         ``[amplitude, row, col, sigma]`` (zero-based) of seeds to use
         instead of seeding the combined activity image.
     soma_mask_trial : int, optional
         Zero-based trial on whose registered image ``soma_mask`` was drawn;
-        the mask is moved into the consensus frame by that trial's shift
-        (MATLAB's ``roisToConsensusFrame``). A trial that was not aligned
+        the mask is moved into the consensus frame through that trial's
+        map (MATLAB's ``roisToConsensusFrame``). A trial that was not aligned
         leaves the mask where it is, with a warning.
 
     Returns
@@ -703,14 +807,9 @@ def plan_path(  # noqa: C901
     ValueError
         If no trial is kept.
     NotImplementedError
-        For the alignment and seeding modes that are not ported.
+        For WMF seeding (not ported).
     """
     p = params or PlanParams()
-    if p.inter_trial_alignment != "rigid":
-        raise NotImplementedError(
-            f"{p.inter_trial_alignment} across-trial alignment is not "
-            "ported yet"
-        )
     if seeds is None and p.peak_method != "getactimpeaks":
         raise NotImplementedError(
             "WMF seeding (findSourcesWMF) is not ported yet"
@@ -723,8 +822,9 @@ def plan_path(  # noqa: C901
     mean_ims, act_ims = _canvas(trials, keep)
     shape = act_ims.shape[1:]
 
+    mean_sum = mean_ims.sum(axis=3)
     ali = align_trials(
-        mean_ims.sum(axis=3),
+        mean_sum,
         act_ims,
         keep,
         p.max_shift,
@@ -732,6 +832,7 @@ def plan_path(  # noqa: C901
         p.template_trials,
     )
     warp = TrialWarp.from_shifts(ali.shifts)
+    shifts = ali.shifts.copy()
     aligned = np.flatnonzero(warp.aligned)
     act_aligned = np.full(act_ims.shape, np.nan)
     mean_aligned = np.full(mean_ims.shape, np.nan)
@@ -740,8 +841,29 @@ def plan_path(  # noqa: C901
     valid, corr_thresh, covered = _valid_trials(
         ali.corr, act_aligned, p.max_corr_thresh
     )
+    # the valid trials stay those of the rigid alignment, as in MATLAB
+    grid = {}  # each trial's map of the canvas (rigid: computed per image)
+    if p.inter_trial_alignment != "rigid" and valid.size > 1:
+        halves = (
+            _canvas_halves(trials, keep, shape)
+            if p.inter_trial_alignment == "patchwise"
+            else None
+        )
+        warp, shifts, refine_info = refine_alignment(
+            warp, mean_sum, valid, p, halves
+        )
+        if details is not None:
+            details["alignment_info"] = refine_info
+        grid = {t: warp.grid_coords(t, shape) for t in aligned}
+        for t in aligned:
+            act_aligned[t] = warp_trial_image(
+                act_ims[t], warp, t, coords=grid[t]
+            )
     for t in aligned:
-        mean_aligned[t] = warp_trial_image(mean_ims[t], warp, t)
+        mean_aligned[t] = warp_trial_image(
+            mean_ims[t], warp, t, coords=grid.get(t)
+        )
+    del grid
 
     act_im, med_im, nan_frac = combined_activity_image(
         act_aligned[valid], p.nan_thresh
@@ -791,7 +913,7 @@ def plan_path(  # noqa: C901
         keep_trials=keep,
         template=ali.template,
         template_trials=ali.samples,
-        shifts=ali.shifts,
+        shifts=shifts,
         corr=ali.corr,
         corr_thresh=corr_thresh,
         act_valid_pix=covered,
@@ -863,7 +985,8 @@ def write_plan(
     * attributes ``format``, ``version``, ``params`` (JSON), ``corr_thresh``;
     * ``alignment/``: ``keep_trials``, ``template``, ``template_trials``,
       ``shifts``, ``corr``, ``act_valid_pix``, ``valid_trials`` and
-      ``warp/`` (``affine``, ``nodes``, ``disp``, attribute ``sigma``);
+      ``warp/`` (``affine``, ``nodes``, ``disp``, attribute ``sigma``, and
+      for a patchwise field ``patch``);
     * ``images/``: ``mean_ims``, ``act_ims``, ``mean_aligned``,
       ``act_aligned``, ``mean_im``, ``act_im``, ``soma_mask``,
       ``px_always_valid``;
@@ -907,6 +1030,8 @@ def write_plan(
         w["nodes"] = plan.warp.nodes
         w["disp"] = plan.warp.disp
         w.attrs["sigma"] = plan.warp.sigma
+        if plan.warp.patch is not None:
+            _write_images(w, "patch", plan.warp.patch)
         im = g.create_group("images")
         for name in (
             "mean_ims",
@@ -1013,6 +1138,7 @@ def read_plan(path: str | Path, group: str = "/") -> ExtractionPlan:
             w["nodes"][()],
             float(w.attrs["sigma"]),
             w["disp"][()],
+            w["patch"][()] if "patch" in w else None,
         )
         sel = s["sel"][()].astype(bool)
         sel_cols, sel_rows = np.nonzero(sel.T)

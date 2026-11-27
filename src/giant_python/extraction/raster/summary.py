@@ -406,6 +406,19 @@ def _write_path(  # noqa: C901
     m = min(n_trials, plan.warp.affine.shape[0])
     affine[:m] = plan.warp.affine[:m]
     ew.put(f"{name}/frame_info/trial_alignment_affine", affine)
+    if plan.warp.is_patchwise:
+        # the full map as a displacement field: consensus pixel (r, c) is
+        # read from the trial's registered image at (r, c) + displacement
+        # (the same in zero- and one-based pixels)
+        h, w = plan.shape
+        disp = np.full((n_trials, 2, h, w), np.nan, np.float32)
+        rr = np.arange(h, dtype=np.float64)[:, None]
+        cc = np.arange(w, dtype=np.float64)[None, :]
+        for t in np.flatnonzero(plan.warp.aligned[:m]):
+            r_t, c_t = plan.warp.grid_coords(int(t), (h, w))
+            disp[t, 0] = r_t - rr
+            disp[t, 1] = c_t - cc
+        ew.put(f"{name}/frame_info/trial_alignment_displacement", disp)
 
     # visualizations
     mean_im = np.asarray(plan.mean_im, dtype=np.float64)
@@ -498,6 +511,18 @@ def _centroids(
     return out
 
 
+def _peaks_to_consensus(plan, t: int, peaks: np.ndarray) -> np.ndarray:
+    """A trial's own peaks (found in its registered image) in the consensus
+    frame, ``(n, 2)`` rows and columns: through the inverse of the trial's
+    map, or minus its shift (MATLAB's ``savePerTrialSummaryH5``)."""
+    warp = plan.warp
+    if t < warp.n_trials and warp.aligned[t] and not warp.is_shift(t):
+        rows, cols = warp.inverse(t, peaks[:, 1], peaks[:, 2])
+        return np.column_stack([rows, cols])
+    shift = plan.shifts[t] if t < plan.shifts.shape[0] else np.full(2, np.nan)
+    return peaks[:, 1:3] - shift
+
+
 def _write_per_trial(
     pw: _Writer,
     name: str,
@@ -542,14 +567,8 @@ def _write_per_trial(
             out = np.full((n_trials, most, 3), np.nan)
             for t in np.flatnonzero(n_peaks):
                 p = np.asarray(peaks[t]).reshape(-1, 4)
-                dr, dc = (
-                    plan.shifts[t]
-                    if t < plan.shifts.shape[0]
-                    else (np.nan, np.nan)
-                )
                 out[t, : p.shape[0], 0] = 0
-                out[t, : p.shape[0], 1] = p[:, 1] - dr
-                out[t, : p.shape[0], 2] = p[:, 2] - dc
+                out[t, : p.shape[0], 1:] = _peaks_to_consensus(plan, t, p)
             pw.put(f"{name}/visualizations/per_trial_act_im_peaks", out)
     if not write_sources:
         return

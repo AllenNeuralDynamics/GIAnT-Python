@@ -122,6 +122,23 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         "MATLAB's).",
     )
     g.add_argument(
+        "--alignment",
+        dest="inter_trial_alignment",
+        choices=("rigid", "affine", "patchwise"),
+        default=None,
+        help="Across-trial alignment (MATLAB interTrialAlignment): a shift "
+        "per trial, or refined to an affine map or a patchwise "
+        "displacement field per valid trial (default rigid).",
+    )
+    g.add_argument(
+        "--align-patch-px",
+        dest="align_patch_px",
+        type=int,
+        default=None,
+        help="Imaged pixels per patch of the patchwise field (MATLAB "
+        "alignPatchPx; default 1500).",
+    )
+    g.add_argument(
         "--localization-baseline",
         choices=("median", "network"),
         default=None,
@@ -416,6 +433,8 @@ def params_from_args(args: argparse.Namespace) -> SiloParams:
         "min_kinetic_score",
         "footprint_variance",
         "localization_baseline",
+        "inter_trial_alignment",
+        "align_patch_px",
     ):
         v = getattr(args, name, None)
         if v is not None:

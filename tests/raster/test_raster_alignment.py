@@ -239,13 +239,15 @@ def test_trial_warp_coordinates():
     )
 
 
-def test_patchwise_warp_is_not_ported():
-    """A warp with patch centres is refused, not silently treated as its
-    affine part."""
-    warp = TrialWarp(np.zeros((1, 2, 3)), nodes=np.zeros((3, 2)))
-    assert not warp.is_shift(0)
-    with pytest.raises(NotImplementedError, match="patchwise"):
-        warp.coords(0, 0.0, 0.0)
+def test_patchwise_warp_is_not_a_shift():
+    """A warp with patch centres is not a shift, whatever its affine part,
+    and maps through its field (zero displacements: the identity)."""
+    nodes = np.array([[0, 0], [5, 1], [2, 9.0]])
+    warp = TrialWarp(np.eye(2, 3)[None], nodes=nodes, sigma=3.0)
+    assert not warp.is_shift(0) and warp.is_patchwise
+    r, c = warp.coords(0, np.array([1.5, 3.0]), np.array([2.0, 7.0]))
+    np.testing.assert_allclose(r, [1.5, 3.0], atol=1e-12)
+    np.testing.assert_allclose(c, [2.0, 7.0], atol=1e-12)
 
 
 def test_warp_trial_image():
@@ -263,8 +265,8 @@ def test_warp_trial_image():
     np.testing.assert_array_equal(two[:, :, 1], 2 * out)
     half = warp_trial_image(im, warp, 1)
     np.testing.assert_allclose(half[:5], (im[:5] + im[1:]) / 2)
-    with pytest.raises(NotImplementedError, match="cubic"):
-        warp_trial_image(im, warp, 0, method="cubic")
+    with pytest.raises(ValueError, match="nearest"):
+        warp_trial_image(im, warp, 0, method="nearest")
 
 
 def test_align_trials_recovers_shifts():

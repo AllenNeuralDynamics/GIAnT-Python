@@ -295,8 +295,6 @@ def test_plan_soma_mask_and_given_seeds():
     np.testing.assert_array_equal(loose.soma_mask, drawn)
     with pytest.raises(ValueError, match="soma_mask"):
         plan_path(trials, np.zeros((100, 100), bool))
-    with pytest.raises(NotImplementedError, match="patchwise"):
-        plan_path(trials, params=PlanParams(inter_trial_alignment="patchwise"))
     with pytest.raises(NotImplementedError, match="WMF"):
         plan_path(trials, params=PlanParams(peak_method="wmf"))
 
