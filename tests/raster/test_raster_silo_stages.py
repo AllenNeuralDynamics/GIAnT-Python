@@ -501,6 +501,28 @@ def test_job_needs_its_container(tmp_path, fake):
         silo_solve.solve_job(job, execution=EX)
 
 
+def test_job_without_valid_kernel_is_matlabs(tmp_path, fake):
+    """A job file written before valid_kernel existed (its params lack the
+    field) solves its containers at MATLAB's 3 x 3, which they were
+    prepared for, not at today's default."""
+    import json
+    from dataclasses import replace
+
+    p3 = replace(PARAMS, valid_kernel=3)
+    s = SiloSession.open(make_session(tmp_path))
+    silo.localize(s, p3, EX)
+    silo.plan(s, p3, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, p3, EX)
+    job = silo_solve.dispatch(s, p3, 1, EX)[0]
+    record = json.loads(job.read_text(encoding="utf-8"))
+    del record["params"]["valid_kernel"]
+    job.write_text(json.dumps(record), encoding="utf-8")
+    done = silo_solve.solve_job(job, execution=EX)
+    assert done["items"]
+    results = read_results(s.results_file(0, 0))
+    assert results.results
+
+
 def test_trial_without_data_is_skipped(tmp_path, fake, monkeypatch):
     """A trial whose selected pixels have no sample is marked and left out
     of the summaries, streamed and staged alike."""
