@@ -89,7 +89,11 @@ def test_readout_writes_a_product(session, tmp_path):
         norm["f0_silo_ch1"],
         norm_log(p["readout"]["sources"]["f0_silo_ch1"]),
     )
-    assert "coverage_f0_net" in p["readout"]["user"]
+    user, user_any = p["readout"]["user"], p["readout"]["user_any"]
+    assert (user["n_pixels"] > 0).all()
+    assert "coverage_f0_net" in user_any and "coverage_f0_net" not in user
+    # the MATLAB-style readout reaches pixels outside the common windows
+    assert (user_any["coverage_f0_net"] >= 0).all()
     assert p["trials"]["acquisition"].tolist() == [2, 3, 4, 5]
     assert p["rois"]["sources"].labels[0] == "source 0"
     rep2 = make_spine_summary(
@@ -155,3 +159,47 @@ def test_baselines_need_the_moco_folder(session, tmp_path):
             tmp_path,
             baseline_dir=session["baselines"],
         )
+
+
+def test_activity_uses_the_activity_channel(tmp_path):
+    """Activity comes from ``params/activityChannel``; a trial without
+    traces is NaN, not inactive."""
+    s = syn.make_session(tmp_path, activity_channel=2, missing_trial=1)
+    run = RunSummary(s["run"])
+    assert run.activity_channel() == 2
+    act = run.activity(1)
+    np.testing.assert_allclose(
+        act["mean_dF"][[0, 2, 3], 0], 1000 + 10 * np.array([0, 2, 3]) + 4.5
+    )
+    np.testing.assert_allclose(act["event_frames"][[0, 2, 3], 0], 10)
+    assert np.isnan(act["mean_dF"][1]).all()
+    assert np.isnan(act["event_frames"][1]).all()
+
+
+def test_summary_key_follows_the_paths(tmp_path):
+    """Different path selections give different summaries."""
+    s = syn.make_session(tmp_path)
+    keys = {
+        tuple(sel or ()): make_spine_summary(
+            s["run"], s["table"], tmp_path / "out", paths=sel
+        )["key"]
+        for sel in (None, [1], [2])
+    }
+    assert len(set(keys.values())) == 3
+
+
+def test_network_images_take_a_trial_warp(session, tmp_path):
+    """The extraction plan's TrialWarp works as the trial map."""
+    from giant_python.extraction.raster.alignment import TrialWarp
+    from giant_python.spine.images import network_f0_stack
+
+    run = RunSummary(session["run"])
+    tmap = run.trial_map(1)
+    stems, _ = table_trials(session["table"], 1)
+    args = (session["baselines"], session["moco"], stems)
+    a = network_f0_stack(*args, tmap, run.shape(1), trim_s=0.1)
+    b = network_f0_stack(
+        *args, TrialWarp(tmap.affine), run.shape(1), trim_s=0.1
+    )
+    np.testing.assert_allclose(a.images, b.images, equal_nan=True)
+    assert np.isfinite(a.images).any()

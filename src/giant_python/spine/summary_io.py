@@ -97,11 +97,15 @@ class TrialMap:
         """Number of trials."""
         return self.affine.shape[0]
 
-    def aligned(self, trial: int) -> bool:
-        """Whether a trial has a map."""
+    @property
+    def aligned(self) -> np.ndarray:
+        """Which trials have a map (bool per trial), as
+        :attr:`~giant_python.extraction.raster.alignment.TrialWarp.aligned`.
+        """
         if self.displacement is not None:
-            return bool(np.isfinite(self.displacement[trial]).any())
-        return bool(np.isfinite(self.affine[trial]).all())
+            d = self.displacement.reshape(self.displacement.shape[0], -1)
+            return np.isfinite(d).any(axis=1)
+        return np.isfinite(self.affine).all(axis=(1, 2))
 
     def grid_coords(
         self, trial: int, shape: tuple[int, int]
@@ -285,12 +289,28 @@ class RunSummary:
                 affine[:, :, 2] += affine[:, :, 0] + affine[:, :, 1] - 1
         return TrialMap(affine, None)
 
+    def activity_channel(self) -> int:
+        """The run's activity channel (one-based file channel, the
+        summary's ``params/activityChannel``; 1 if it is not recorded)."""
+        with self._exp() as f:
+            if "params/activityChannel" not in f:
+                return 1
+            return int(np.asarray(f["params/activityChannel"][()]).ravel()[0])
+
     def activity(self, path: int) -> dict:
         """Per-trial activity of each source: the mean of ``dF_ls`` and the
-        number of frames with an event, activity channel, ``(trials,
-        sources)``; NaN for trials that were not extracted."""
+        number of frames with an event, in the run's activity channel,
+        ``(trials, sources)``.
+
+        The summaries keep the temporal traces in file-channel order, so the
+        channel is :meth:`activity_channel`. NaN for trials that were not
+        extracted and for a source without any value in a trial (a trial
+        without extracted sources), so that missing traces do not read as
+        no activity.
+        """
         n = self.trial_num_frames(path).astype(np.int64)
         edges = np.concatenate([[0], np.cumsum(n)])
+        ch = self.activity_channel() - 1
         out = {}
         for name, key in (
             ("mean_dF", "sources/temporal/dF_ls"),
@@ -298,16 +318,19 @@ class RunSummary:
         ):
             if not self.has(path, key):
                 continue
-            x = self.array(path, key, (slice(None), 0))  # sources x frames
+            x = self.array(path, key, (slice(None), ch))  # sources x frames
             x = np.asarray(x, dtype=np.float64)
             res = np.full((n.size, x.shape[0]), np.nan)
             for t in range(n.size):
                 if n[t] == 0:
                     continue
                 seg = x[:, edges[t] : edges[t + 1]]
+                has = np.isfinite(seg).any(axis=1)
                 if name == "mean_dF":
-                    res[t] = np.nanmean(seg, axis=1)
+                    total = np.where(np.isfinite(seg), seg, 0.0).sum(axis=1)
+                    cnt = np.isfinite(seg).sum(axis=1)
+                    res[t] = np.where(has, total / np.maximum(cnt, 1), np.nan)
                 else:
-                    res[t] = np.nansum(seg > 0, axis=1)
+                    res[t] = np.where(has, (seg > 0).sum(axis=1), np.nan)
             out[name] = res
         return out

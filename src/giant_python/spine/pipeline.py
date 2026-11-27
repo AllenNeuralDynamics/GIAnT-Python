@@ -18,7 +18,9 @@ rerun with other readout settings reuses them.
 
 Every image is read out in the same windows: pixels with a value in every
 trial used, in every image (:func:`~giant_python.spine.readout.
-common_valid`), so the variants can be compared trial by trial.
+common_valid`), so the variants can be compared trial by trial. User ROIs
+are also read out as GIAnT-MATLAB's ``user_rois/per_trial_F0``
+(``readout/user_any``), whose windows can differ between trials and images.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .gains import gain_maps, results_files
+from .gains import gain_maps, plan_file, results_files
 from .images import F0Stack, file_identity, network_f0_stack, stack_key
 from .product import FORMAT_VERSION, _code_version, write_product
 from .readout import common_valid, mask_mean, norm_log, project
@@ -248,6 +250,7 @@ def make_spine_summary(  # noqa: C901
             ),
         },
         "trial_table": file_identity(table_path),
+        "paths": [int(n) for n in paths],
         "baseline_dir": str(baseline_dir) if baseline_dir else None,
         "f0_keys": {},
         "gain_results": {},
@@ -284,13 +287,16 @@ def make_spine_summary(  # noqa: C901
             inputs["f0_keys"][n] = key
             report["paths"][n] = {"f0_key": key, "f0_reused": reused}
             if gain_work_dir is not None:
-                inputs["gain_results"][n] = [
-                    [
-                        file_identity(f)
-                        for f in results_files(gain_work_dir, n, t)
-                    ]
-                    for t in range(len(stems))
-                ]
+                inputs["gain_results"][n] = {
+                    "plan": file_identity(plan_file(gain_work_dir, n)),
+                    "results": [
+                        [
+                            file_identity(f)
+                            for f in results_files(gain_work_dir, n, t)
+                        ]
+                        for t in range(len(stems))
+                    ],
+                }
     if images_only:
         report["cache_dir"] = str(cache_dir)
         return report
@@ -378,8 +384,24 @@ def make_spine_summary(  # noqa: C901
         for set_name, rs in rois.items():
             r: dict = {}
             if set_name == "user":
+                # the same windows as the sources: valid pixels only
+                vflat = valid.ravel()
+                r["n_pixels"] = np.array(
+                    [
+                        np.count_nonzero(vflat[rs.pixels(k)[0]])
+                        for k in range(len(rs))
+                    ],
+                    np.int64,
+                )
                 for name, (stack, _) in images.items():
-                    r[name], r[f"coverage_{name}"] = mask_mean(stack, rs)
+                    r[name], _ = mask_mean(stack, rs, valid)
+                # GIAnT-MATLAB's user_rois/per_trial_F0: every pixel with a
+                # value in that trial (windows differ between trials and
+                # images)
+                anyp: dict = {}
+                for name, (stack, _) in images.items():
+                    anyp[name], anyp[f"coverage_{name}"] = mask_mean(stack, rs)
+                readout["user_any"] = anyp
             else:
                 for name, (stack, _) in images.items():
                     r[name], r["n_pixels"] = project(stack, rs, valid)

@@ -242,7 +242,7 @@ def network_f0_stack(
     for t, stem in enumerate(stems):
         if progress is not None:
             progress(t, n, stem)
-        if stem is None or not trial_map.aligned(t):
+        if stem is None or not bool(trial_map.aligned[t]):
             continue
         bpath = baseline_file(baseline_dir, stem)
         apath = Path(moco_dir) / f"{stem}{ALIGNMENT_SUFFIX}"

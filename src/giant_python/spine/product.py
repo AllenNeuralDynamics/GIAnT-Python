@@ -19,8 +19,11 @@ run's consensus frame, zero-based coordinates)::
       rois/<set>/...      ids, labels, rows, cols, ptr, index, weight
                           (:class:`~giant_python.spine.rois.RoiSet`)
       readout/<set>/<name>      (T, R) readout of image <name>
-      readout/<set>/n_pixels    (R,) valid pixels per window (footprints)
-      readout/<set>/coverage_<name>  (T, R) share of pixels (user ROIs)
+      readout/<set>/n_pixels    (R,) valid pixels per window
+      readout/user_any/<name>   (T, R) user ROIs as GIAnT-MATLAB's
+                                user_rois/per_trial_F0 (every pixel with a
+                                value in the trial)
+      readout/user_any/coverage_<name>  (T, R) share of the ROI's pixels
       normalized/<set>/<name>   (T, R) ``norm_log`` of the readout
       normalized/<set>/ok       (R,) windows in the per-trial median
       activity/<set>/<name>     (T, R) per-trial activity (sources)

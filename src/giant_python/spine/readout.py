@@ -10,9 +10,11 @@ as GIAnT-MATLAB's ``spineTrends.m``. Restricting ``h`` to pixels valid in
 all trials keeps the window identical across trials, so a pixel that drops
 out of one trial cannot change the readout of the others.
 
-User ROIs (masks) are read out as GIAnT-MATLAB's ``user_rois/per_trial_F0``
-does: the mean over the mask's pixels that have a value in that trial, with
-the share of such pixels as the coverage.
+User ROIs (masks) are read out as the mean over the mask's pixels, either
+restricted to the same valid pixels as the footprints (identical windows in
+every trial and image), or as GIAnT-MATLAB's ``user_rois/per_trial_F0``
+does: every mask pixel that has a value in that trial, with the share of
+such pixels as the coverage.
 
 :func:`norm_log` is ``spineTrends.m``'s bleaching normalization: the log of
 the size, minus each trial's median over the sources taken into account,
@@ -92,29 +94,40 @@ def project(images: np.ndarray, rois: RoiSet, valid: np.ndarray):
     return out, n_pix
 
 
-def mask_mean(images: np.ndarray, rois: RoiSet):
-    """Mean of each ROI's pixels with a value, per trial (GIAnT-MATLAB's
-    ``user_rois/per_trial_F0``).
+def mask_mean(images: np.ndarray, rois: RoiSet, valid=None):
+    """Mean of each ROI's pixels with a value, per trial.
+
+    Without ``valid`` this is GIAnT-MATLAB's ``user_rois/per_trial_F0``:
+    every pixel with a value in that trial, so the window can change
+    between trials and images. With ``valid`` (:func:`common_valid`) only
+    the ROI's valid pixels are averaged, the same windows in every trial
+    and image.
 
     Returns
     -------
     values : ndarray of float64, shape (trials, rois)
     coverage : ndarray of float64, shape (trials, rois)
-        Share of the ROI's pixels with a value.
+        Share of the ROI's pixels averaged.
     """
     images = np.asarray(images)
     t = images.shape[0]
     flat = images.reshape(t, -1)
+    vflat = None if valid is None else np.asarray(valid, bool).ravel()
     values = np.full((t, len(rois)), np.nan)
     coverage = np.zeros((t, len(rois)))
     for k in range(len(rois)):
         idx, _ = rois.pixels(k)
         if idx.size == 0:
             continue
+        n_all = idx.size
+        if vflat is not None:
+            idx = idx[vflat[idx]]
+            if idx.size == 0:
+                continue
         x = flat[:, idx].astype(np.float64)
         ok = np.isfinite(x)
         n = ok.sum(axis=1)
-        coverage[:, k] = n / idx.size
+        coverage[:, k] = n / n_all
         with np.errstate(invalid="ignore", divide="ignore"):
             values[:, k] = np.where(
                 n > 0,

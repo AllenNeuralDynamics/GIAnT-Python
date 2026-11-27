@@ -78,8 +78,19 @@ def consensus_trial(path: int, t: int) -> np.ndarray:
     return np.where(ok, out, np.nan)
 
 
-def make_session(root: Path, with_f0_silo: bool = True) -> dict:
-    """Write the synthetic session under ``root``; return its folders."""
+def make_session(
+    root: Path,
+    with_f0_silo: bool = True,
+    activity_channel: int = 1,
+    missing_trial: int | None = None,
+) -> dict:
+    """Write the synthetic session under ``root``; return its folders.
+
+    ``dF_ls`` counts up through the frames in file channel 1 and from 1000
+    in file channel 2; ``activity_channel`` is the run's
+    ``params/activityChannel``. ``missing_trial`` (zero-based) gets NaN
+    traces, as a trial without extracted sources.
+    """
     root = Path(root)
     run = root / "run"
     moco = root / "motion_correction"
@@ -90,7 +101,20 @@ def make_session(root: Path, with_f0_silo: bool = True) -> dict:
     affine[:, :, :2] = np.eye(2)
     affine[:, :, 2] = np.asarray(SHIFTS, float)
     fp = footprints()
-    exp, per = {}, {}
+    exp: dict = {
+        "params": {
+            "activityChannel": float(activity_channel),
+            "numChannels": 2.0,
+        }
+    }
+    per: dict = {}
+    dF = np.tile(np.arange(N_TRIALS * 10, dtype=float), (len(SOURCES), 2, 1))
+    dF[:, 1] += 1000
+    ev = np.zeros((len(SOURCES), 2, N_TRIALS * 10))
+    ev[:, 1] = 1.0  # events only in file channel 2
+    if missing_trial is not None:
+        dF[:, :, missing_trial * 10 : (missing_trial + 1) * 10] = np.nan
+        ev[:, :, missing_trial * 10 : (missing_trial + 1) * 10] = np.nan
     rng = np.random.default_rng(0)
     for p in (1, 2):
         imgs = np.stack([consensus_trial(p, t) for t in range(N_TRIALS)])
@@ -102,13 +126,7 @@ def make_session(root: Path, with_f0_silo: bool = True) -> dict:
             },
             "sources": {
                 "spatial": {"profiles": fp[:, None]},
-                "temporal": {
-                    "dF_ls": np.tile(
-                        np.arange(N_TRIALS * 10, dtype=float),
-                        (len(SOURCES), 2, 1),
-                    ),
-                    "events": np.zeros((len(SOURCES), 2, N_TRIALS * 10)),
-                },
+                "temporal": {"dF_ls": dF, "events": ev},
             },
             "frame_info": {
                 "trial_num_frames": np.full((1, N_TRIALS), 10.0),
@@ -179,6 +197,25 @@ def make_session(root: Path, with_f0_silo: bool = True) -> dict:
     return {"run": run, "moco": moco, "baselines": base, "table": table}
 
 
+PLAN_HASH = "plan-a"
+"""The synthetic plans' settings hash."""
+
+RESULT_ATTRS = {"plan_hash": PLAN_HASH, "solve_science": "science-a"}
+"""Attributes of the synthetic results files (with a container hash)."""
+
+
+def write_results(path: Path, subproblems: dict, **attrs) -> None:
+    """A results file with ``subproblems`` (index -> (pixels, info))."""
+    with h5py.File(path, "w") as f:
+        for k, v in {**RESULT_ATTRS, "container_hash": "c", **attrs}.items():
+            f.attrs[k] = v
+        f["subproblems/index"] = np.array(sorted(subproblems))
+        for k, (pix, info) in subproblems.items():
+            g = f.create_group(f"subproblems/{k}")
+            g["pixels"] = np.asarray(pix)
+            g.attrs["info"] = json.dumps(info)
+
+
 def make_gain_work(root: Path, gain_of_trial) -> Path:
     """A minimal 'gain'-mode work folder: a plan per path with the selected
     pixels, and per trial-path one results file with two overlapping
@@ -195,20 +232,22 @@ def make_gain_work(root: Path, gain_of_trial) -> Path:
     for p in (1, 2):
         with h5py.File(work / "plan" / f"path{p}.h5", "w") as f:
             f["sources/sel"] = sel.astype(np.uint8)
+            f.attrs["settings_hash"] = PLAN_HASH
+        halves = (
+            np.arange(0, n_sel // 2 + 1),
+            np.arange(n_sel // 2, n_sel),
+        )
         for t in range(N_TRIALS):
             g0 = float(gain_of_trial(t))
-            name = work / "results" / f"path{p}_trial{t + 1:04d}.h5"
-            with h5py.File(name, "w") as f:
-                f["subproblems/index"] = np.array([0, 1])
-                halves = (
-                    np.arange(0, n_sel // 2 + 1),
-                    np.arange(n_sel // 2, n_sel),
-                )
-                for k, pix in enumerate(halves):
-                    g = f.create_group(f"subproblems/{k}")
-                    g["pixels"] = pix
-                    info = {
-                        "baseline_step": {"gain": [g0 * (k + 1)] * pix.size}
-                    }
-                    g.attrs["info"] = json.dumps(info)
+            write_results(
+                work / "results" / f"path{p}_trial{t + 1:04d}.h5",
+                {
+                    k: (
+                        pix,
+                        {"baseline_step": {"gain": [g0 * (k + 1)] * pix.size}},
+                    )
+                    for k, pix in enumerate(halves)
+                },
+                container_hash=f"c{p}-{t}",
+            )
     return work
