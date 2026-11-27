@@ -491,7 +491,8 @@ class SiloParams:
     GIAnT-MATLAB main's ``setParams('SILo')`` for SLAP2 (``isSLAP2``), with
     its modality defaults resolved (``peakth`` 3, ``minKineticScore`` 0.2,
     ``photonScale`` 25); the footprint fit's variance term is the solver's
-    default (``footprint_variance='model'`` gives MATLAB's loss). MATLAB's
+    default (``footprint_variance='model'`` gives MATLAB's loss), and the
+    footprints' support is 5 x 5 (``valid_kernel=3`` is MATLAB's). MATLAB's
     names are given in brackets; :meth:`to_matlab` returns the ``params``
     struct that SILo saves. The stages' own parameter types are derived
     with :meth:`plan_params`, :meth:`load_params`, :meth:`solver_params` and
@@ -536,8 +537,9 @@ class SiloParams:
         a source has radius ``ceil(2 d_xy)`` (``selRadius``).
     valid_kernel : int
         Side of the square around each source where the footprint fit may
-        put intensity (odd; MATLAB's ``validKernel``, which MATLAB
-        hard-codes as 3 x 3). One setting for the whole run: it sets the
+        put intensity (odd; default 5; MATLAB's ``validKernel``, which
+        MATLAB hard-codes as 3 x 3). One setting for the whole run: it
+        sets the
         plan's grouping zones (radius ``ceil(1.5 sigma_px +
         (valid_kernel - 1) / 2)``, :class:`PlanParams`) and the solver's
         footprints (``SolverParams.valid_kernel``) together. The footprint
@@ -670,7 +672,7 @@ class SiloParams:
     analyze_hz: float = 200.0
     sigma_px: float = 1.33
     d_xy: float = 3.0
-    valid_kernel: int = 3
+    valid_kernel: int = 5
     tau_s: float = 0.024
     tau2_s: float = 0.15
     baseline_window_s: float = 4.0
@@ -1002,7 +1004,8 @@ class SiloParams:
         camelCase) when it differs from MATLAB's algorithm, so that a run
         with MATLAB's algorithm has MATLAB's fields exactly. With the
         defaults that is ``footprintVariance`` alone while the solver's
-        default is ``'fixed'``.
+        default is ``'fixed'``. ``validKernel`` is MATLAB's own field and
+        has the run's size (5 x 5 by default; MATLAB's is 3 x 3).
 
         Parameters
         ----------

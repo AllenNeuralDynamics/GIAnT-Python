@@ -98,11 +98,15 @@ def synthetic_plan():
 
 def test_plan_params():
     """Radii follow MATLAB (selRadius = ceil(2 dXY); zones of
-    ceil(1.5 sigma + 1)); options are validated."""
+    ceil(1.5 sigma + (validKernel - 1) / 2): MATLAB's 3 x 3 gives
+    ceil(1.5 sigma + 1), the default 5 x 5 one more); options are
+    validated."""
     p = PlanParams()
-    assert p.sel_radius == 6 and p.zone_radius == 3
+    assert p.valid_kernel == 5
+    assert p.sel_radius == 6 and p.zone_radius == 4
+    assert PlanParams(valid_kernel=3).zone_radius == 3
     assert PlanParams(d_xy=2.2, sigma_px=2.0).sel_radius == 5
-    assert PlanParams(sigma_px=2.0).zone_radius == 4
+    assert PlanParams(sigma_px=2.0, valid_kernel=3).zone_radius == 4
     with pytest.raises(ValueError, match="inter_trial_alignment"):
         PlanParams(inter_trial_alignment="elastic")
     with pytest.raises(ValueError, match="peak_method"):
@@ -447,9 +451,11 @@ def _matlab_case(case):
             min_peak_distance=int(a["minPeakDistance"]),
             d_xy=float(a["dXY"]),
             sigma_px=float(a["sigma_px"]),
-            # MATLAB's algorithm (the defaults are the local fit, merging)
+            # MATLAB's algorithm (the defaults are the local fit, merging
+            # and the 5 x 5 support)
             seed_fit="matlab",
             seed_merge_px=0.0,
+            valid_kernel=3,
         )
     keep = ref["keep_trials"].astype(bool)
     trials = [

@@ -40,7 +40,10 @@ from giant_python.models.params import (
 # the settings that make SiloParams MATLAB's algorithm (the defaults differ
 # from it in the footprint fit and the seed fit)
 MATLAB_ALGORITHM = dict(
-    footprint_variance="model", seed_fit="matlab", seed_merge_px=0.0
+    footprint_variance="model",
+    seed_fit="matlab",
+    seed_merge_px=0.0,
+    valid_kernel=3,
 )
 
 MATLAB_FIELDS = {
@@ -351,12 +354,15 @@ def test_seed_fit_settings_reach_the_plan_and_keep_old_hashes():
 
 def test_valid_kernel_is_one_setting_for_plan_and_solver():
     """The footprint support reaches the plan's zones and the solver
-    together; 3 (MATLAB's) leaves every stage's settings as before the
-    setting existed, another value changes the plan's and the solve's
-    only; the saved params struct records validKernel at its size."""
-    a, b = SiloParams(), SiloParams(valid_kernel=5)
-    assert a.valid_kernel == PlanParams.valid_kernel == 3
-    assert a.valid_kernel == SolverParams.valid_kernel
+    together (default 5 x 5, one default for the three types); 3 (MATLAB's)
+    leaves every stage's settings as before the setting existed, so outputs
+    made then stay current with it; another value changes the plan's and
+    the solve's only; the saved params struct records validKernel at its
+    size."""
+    a, b = SiloParams(valid_kernel=3), SiloParams()
+    assert b.valid_kernel == PlanParams.valid_kernel == 5
+    assert b.valid_kernel == SolverParams.valid_kernel
+    assert a.plan_params().valid_kernel == a.solver_params().valid_kernel == 3
     assert b.plan_params().valid_kernel == b.solver_params().valid_kernel == 5
     assert a.plan_params().zone_radius == 3
     assert b.plan_params().zone_radius == 4

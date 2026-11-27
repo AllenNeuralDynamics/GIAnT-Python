@@ -312,6 +312,7 @@ def test_valid_kernel_through_the_run(tmp_path, fake):
     from giant_python.extraction.raster.plan import read_plan
 
     p5 = replace(PARAMS, valid_kernel=5)
+    p3 = replace(PARAMS, valid_kernel=3)  # MATLAB's
     seeds = seeds_file(tmp_path)
     table = make_session(tmp_path / "streamed")
     silo.run_silo(table, p5, EX, seeds_file=seeds)
@@ -326,11 +327,11 @@ def test_valid_kernel_through_the_run(tmp_path, fake):
     assert c.params["valid_kernel"] == 5
     # the solve and collect stages refuse another support
     with pytest.raises(ValueError, match="valid_kernel=5"):
-        silo_solve.dispatch(s, PARAMS, 1, EX)
+        silo_solve.dispatch(s, p3, 1, EX)
     for job in silo_solve.dispatch(s, p5, 1, EX):
         silo_solve.solve_job(job, execution=EX)
     with pytest.raises(ValueError, match="valid_kernel=5"):
-        silo_collect.collect(s, PARAMS, EX)
+        silo_collect.collect(s, p3, EX)
     silo_collect.collect(s, p5, EX)
     staged = _all_results(s)
     assert staged.keys() == streamed.keys()
@@ -343,14 +344,14 @@ def test_valid_kernel_through_the_run(tmp_path, fake):
     assert record["valid_kernel"] == 5
     # a solver at 3 on these containers is refused before anything runs
     with pytest.raises(ValueError, match="--valid-kernel 5"):
-        silo_solve.solve_containers(s, PARAMS, EX)
+        silo_solve.solve_containers(s, p3, EX)
     # a plan at 5 is refused by a prepare at 3; planning at 3 redoes it
     with pytest.raises(ValueError, match="valid_kernel=5"):
-        silo.prepare(s, PARAMS, EX)
-    assert silo.plan(s, PARAMS, EX, seeds=_seeds(s, tmp_path))[0]["file"]
+        silo.prepare(s, p3, EX)
+    assert silo.plan(s, p3, EX, seeds=_seeds(s, tmp_path))[0]["file"]
     assert read_plan(s.plan_file(0)).params.valid_kernel == 3
-    silo.prepare(s, PARAMS, EX)
-    silo_solve.solve_containers(s, PARAMS, EX)
+    silo.prepare(s, p3, EX)
+    silo_solve.solve_containers(s, p3, EX)
     three = _all_results(s)
     assert three.keys() == staged.keys()
     assert any(
@@ -578,7 +579,7 @@ def test_cli(tmp_path, fake, capsys):
         ]
     )
     p = params_from_args(args)
-    assert p.valid_kernel == 3
+    assert p.valid_kernel == 5  # the default
     for cmd in ("silo", "silo-plan", "silo-prepare", "silo-collect"):
         assert (
             params_from_args(
