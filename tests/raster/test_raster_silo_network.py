@@ -901,3 +901,94 @@ def test_one_checkpoint_per_run(tmp_path, monkeypatch):
     ckpt.write_bytes(b"retrained weights")  # same name, other model
     with pytest.raises(ValueError, match="another checkpoint"):
         silo_baseline.predict_baselines(s, NET, bdir, ckpt)
+
+
+def _copy_tree(src: Path, dest: Path) -> Path:
+    """A copy whose files have new modification times (as a data asset's
+    files carry their upload times)."""
+    import shutil
+
+    shutil.copytree(src, dest, copy_function=shutil.copyfile)
+    for f in dest.rglob("*"):
+        if f.is_file():
+            st = f.stat()
+            os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 7_000_000_000))
+    return dest
+
+
+def test_records_with_digests_identify_copied_files(tmp_path, monkeypatch):
+    """Records written with digests=True still identify the baseline,
+    movie and alignment files after they are copied elsewhere (another
+    modification time), and refuse a copy whose content changed; records
+    without digests refuse any copy, as before."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    for d in range(N_PATHS):  # movies with content, so that digests differ
+        for t in range(N_TRIALS):
+            s.movie(d, t).write_bytes(bytes([d, t]) * 64)
+    bdir = tmp_path / "b"
+    write_baselines(root, bdir)
+    stem = "E1T2DMD2"
+    (bdir / f"{stem}_BASELINE-80Hz.h5").unlink()
+    ckpt = tmp_path / "s6_test.pt"
+    ckpt.write_bytes(b"weights")
+    monkeypatch.setattr(
+        silo_baseline.shutil, "which", lambda c: f"/bin/{Path(c).name}"
+    )
+
+    def fake_run(args, **kw):
+        """Write the file asked for."""
+        dest = bdir / f"{stem}_BASELINE-80Hz.h5"
+        dest.write_bytes((bdir / "E1T1DMD1_BASELINE-80Hz.h5").read_bytes())
+        with h5py.File(dest, "a") as f:
+            f.attrs["source"] = f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif"
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(silo_baseline.subprocess, "run", fake_run)
+    rec = silo_baseline.predict_baselines(s, NET, bdir, ckpt, digests=True)
+    assert rec["predicted"] == [[2, 2]]
+    base = bdir / f"{stem}_BASELINE-80Hz.h5"
+    record = json.loads(silo_baseline.record_path(base).read_text())
+    for name, f in (
+        ("baseline", base),
+        ("movie", s.movie(1, 1)),
+        ("alignment", s.alignment(1, 1)),
+    ):
+        assert record[name]["sha256"] == silo_baseline.file_sha256(f)
+        assert record[name]["mtime_ns"] == file_id(f)["mtime_ns"]
+
+    # the registration and the baselines copied, as two data assets
+    root2 = _copy_tree(root, tmp_path / "asset_reg")
+    bdir2 = _copy_tree(bdir, tmp_path / "asset_base")
+    s2 = SiloSession.open(root2, moco_dir=root2 / "motion_correction")
+    base2 = bdir2 / base.name
+    assert file_id(base2)["mtime_ns"] != record["baseline"]["mtime_ns"]
+    args = (base2, s2.movie(1, 1), s2.alignment(1, 1))
+    assert silo_baseline.check_baseline_record(*args, NET) == record
+    assert silo_baseline.same_file(record["movie"], s2.movie(1, 1))
+    # the stages take the copies (the localization checks the record)
+    assert silo._network_baseline(s2, NET, 1, 1, bdir2) == base2
+    # another movie than the one predicted from (same name and size)
+    other_movie = s2.movie(1, 1)
+    other_movie.write_bytes(bytes([9, 9]) * 64)
+    with pytest.raises(ValueError, match="from another movie"):
+        silo_baseline.check_baseline_record(*args, NET)
+    # a changed copy of the baseline (same name and size)
+    data = bytearray(base2.read_bytes())
+    data[-1] ^= 0xFF
+    base2.write_bytes(bytes(data))
+    with pytest.raises(ValueError, match="does not describe"):
+        silo_baseline.check_baseline_record(base2, None, args[2], NET)
+
+    # without digests (the default) a copy is not identified
+    bdir3 = _copy_tree(bdir, tmp_path / "copy_plain")
+    rec3 = silo_baseline.record_path(bdir3 / base.name)
+    old = json.loads(rec3.read_text())
+    for k in ("baseline", "movie", "alignment"):
+        old[k].pop("sha256")
+    rec3.write_text(json.dumps(old))
+    with pytest.raises(ValueError, match="does not describe"):
+        silo_baseline.check_baseline_record(
+            bdir3 / base.name, None, s.alignment(1, 1), NET
+        )
+    assert not silo_baseline.same_file(None, base)

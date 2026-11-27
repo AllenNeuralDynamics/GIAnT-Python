@@ -15,6 +15,12 @@ SHA-256 at prediction time), and :func:`check_baseline_record` refuses a
 baseline whose record does not fit the run. A file without a record (made
 elsewhere) is used as it is: its checkpoint is then known only by the
 path and step the file names.
+
+Files are identified by name, size and modification time. A record written
+with ``digests=True`` also holds each file's SHA-256, so that it still
+identifies the files after they are copied or moved (a Code Ocean data
+asset's files carry their upload times): a file whose modification time
+differs is then accepted if its content has the recorded SHA-256.
 """
 
 from __future__ import annotations
@@ -48,9 +54,8 @@ _PREDICTION_SETTINGS = (
 _SHA_CACHE: dict = {}
 
 
-def checkpoint_identity(path) -> dict:
-    """A checkpoint's name, size and SHA-256 (cached per path, size and
-    modification time)."""
+def file_sha256(path) -> str:
+    """A file's SHA-256 (cached per path, size and modification time)."""
     path = Path(path)
     st = path.stat()
     key = (str(path.resolve()), st.st_size, st.st_mtime_ns)
@@ -60,7 +65,15 @@ def checkpoint_identity(path) -> dict:
             for block in iter(lambda: f.read(1 << 20), b""):
                 h.update(block)
         _SHA_CACHE[key] = h.hexdigest()
-    return {"name": path.name, "size": st.st_size, "sha256": _SHA_CACHE[key]}
+    return _SHA_CACHE[key]
+
+
+def checkpoint_identity(path) -> dict:
+    """A checkpoint's name, size and SHA-256 (cached per path, size and
+    modification time)."""
+    path = Path(path)
+    sha = file_sha256(path)
+    return {"name": path.name, "size": path.stat().st_size, "sha256": sha}
 
 
 def baseline_path(baseline_dir, movie: Path) -> Path:
@@ -100,6 +113,34 @@ def _file_id(path: Path) -> dict:
     return file_id(Path(path))
 
 
+def _identity(path: Path, digest: bool) -> dict:
+    """A file's identity for a record: :func:`_file_id`, with its SHA-256
+    when ``digest``."""
+    out = _file_id(path)
+    if digest:
+        out["sha256"] = file_sha256(path)
+    return out
+
+
+def same_file(recorded: Optional[dict], path: Path) -> bool:
+    """Whether a recorded identity is ``path``'s: the same name and size,
+    and the same modification time, or (a file moved or copied since, e.g.
+    into a data asset, whose files carry their upload times) the same
+    SHA-256 when the record has one."""
+    if not recorded:
+        return False
+    now = _file_id(path)
+    if (
+        recorded.get("name") != now["name"]
+        or recorded.get("size") != now["size"]
+    ):
+        return False
+    if recorded.get("mtime_ns") == now["mtime_ns"]:
+        return True
+    sha = recorded.get("sha256")
+    return bool(sha) and sha == file_sha256(path)
+
+
 def prediction_settings(params: SiloParams) -> dict:
     """The run's settings that a baseline's prediction depends on."""
     return {n: getattr(params, n) for n in _PREDICTION_SETTINGS}
@@ -112,6 +153,7 @@ def write_baseline_record(
     params,
     checkpoint: dict,
     done: bool = True,
+    digests: bool = False,
 ) -> Path:
     """Record how a baseline file was predicted (see the module).
 
@@ -119,13 +161,18 @@ def write_baseline_record(
     file's identity left empty), so that a file written by a prediction
     that then fails or is stopped still has its settings; and again with
     the file's identity once it is there.
+
+    With ``digests`` the baseline, movie and alignment files' identities
+    also hold their SHA-256, so that the record still identifies them after
+    they are copied or moved to another place (:func:`same_file`), for
+    example when the baselines and the registration become data assets.
     """
     path = record_path(baseline)
     rec = {
         "format": RECORD_FORMAT,
-        "baseline": _file_id(baseline) if done else None,
-        "movie": _file_id(movie),
-        "alignment": _file_id(alignment),
+        "baseline": _identity(baseline, digests) if done else None,
+        "movie": _identity(movie, digests),
+        "alignment": _identity(alignment, digests),
         "settings": prediction_settings(params),
         "checkpoint": checkpoint,
     }
@@ -148,7 +195,9 @@ def check_baseline_record(
     ValueError
         If the record is not of this file (replaced since), or the file was
         predicted with other settings, or from another movie or alignment
-        than the run's.
+        than the run's. Files are compared by :func:`same_file`: a file
+        moved or copied since (another modification time) passes only if
+        the record has its SHA-256 and the content still has it.
     """
     path = record_path(baseline)
     if not path.exists():
@@ -157,8 +206,8 @@ def check_baseline_record(
     again = f"predict {Path(baseline).name} again (remove it and its record)"
     # a record without the file's identity was written before a prediction
     # that did not finish: the file (written whole by slap2-f0) is its
-    if rec.get("baseline") is not None and rec["baseline"] != _file_id(
-        baseline
+    if rec.get("baseline") is not None and not same_file(
+        rec["baseline"], baseline
     ):
         raise ValueError(
             f"{path.name} does not describe {Path(baseline).name} (replaced "
@@ -171,7 +220,7 @@ def check_baseline_record(
             f"this run has {given}: {again}"
         )
     for name, f in (("movie", movie), ("alignment", alignment)):
-        if f is not None and rec.get(name) != _file_id(f):
+        if f is not None and not same_file(rec.get(name), f):
             raise ValueError(
                 f"{Path(baseline).name} was predicted from another {name} "
                 f"file than {Path(f).name} is now: {again}"
@@ -324,6 +373,7 @@ def predict_baselines(
     command: Optional[str] = None,
     verbose: bool = False,
     out_frames: Optional[int] = None,
+    digests: bool = False,
 ) -> dict:
     """Predict the missing baselines with ``slap2-f0 predict-registered``.
 
@@ -357,6 +407,11 @@ def predict_baselines(
         memory instead of failing, several times slower; a fixed size
         (512 on an 8 GB card) avoids that. Tiles overlap by the network's
         reach, so the baseline is the same (to float16 rounding).
+    digests : bool
+        Also record the SHA-256 of the baseline, movie and alignment files
+        (:func:`write_baseline_record`), so that the records still identify
+        them after the files are copied or moved (data assets). Costs one
+        read of each file.
 
     Returns
     -------
@@ -393,6 +448,7 @@ def predict_baselines(
             params,
             identity,
             done=False,
+            digests=digests,
         )
     args = _predict_args(
         exe, session, params, ckpt, baseline_dir, todo, device, out_frames
@@ -409,6 +465,7 @@ def predict_baselines(
                 session.alignment(d, t),
                 params,
                 identity,
+                digests=digests,
             )
     if proc.returncode != 0:
         raise RuntimeError(
