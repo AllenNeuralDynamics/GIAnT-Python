@@ -37,25 +37,40 @@ WEIGHTS = {
 """Which frame count weights each averaged map."""
 
 
+NORMALISED = {
+    "var_rel": (("var", "var_ph"), lambda a, b: a / b - 1),
+    "slow_rel": (("slow_var", "slow_var_ph"), lambda a, b: a / b - 1),
+    "fast_rel": (("fast_var", "fast_var_ph"), lambda a, b: a / b - 1),
+    "fast_skew_rel": (
+        ("fast_m3", "fast_m3_ph", "fast_var_ph"),
+        lambda m3, m3ph, v: (m3 - m3ph) / v**1.5,
+    ),
+    "zero_excess": (("zero_share", "zero_ph"), lambda a, b: a - b),
+}
+"""Each normalised map: the averaged maps it is formed from, and how."""
+
+
 def _normalised(m: dict) -> dict:
-    """The normalised maps from averaged moments and expectations."""
+    """The normalised maps from averaged moments and expectations (those
+    whose inputs are there)."""
+    out = {}
     with np.errstate(invalid="ignore", divide="ignore"):
-        return {
-            "var_rel": m["var"] / m["var_ph"] - 1,
-            "slow_rel": m["slow_var"] / m["slow_var_ph"] - 1,
-            "fast_rel": m["fast_var"] / m["fast_var_ph"] - 1,
-            "fast_skew_rel": (m["fast_m3"] - m["fast_m3_ph"])
-            / m["fast_var_ph"] ** 1.5,
-            "zero_excess": m["zero_share"] - m["zero_ph"],
-        }
+        for name, (inputs, fn) in NORMALISED.items():
+            if all(k in m for k in inputs):
+                out[name] = fn(*(m[k] for k in inputs))
+    return out
 
 
-def _resample(img: np.ndarray, warp, trial: int) -> np.ndarray:
-    """A trial's ``(channels, rows, cols)`` map in the consensus frame."""
+def _resample(img: np.ndarray, warp, trial: int, shape) -> np.ndarray:
+    """A trial's ``(channels, rows, cols)`` map in the consensus frame,
+    placed at the top left of the ``shape`` canvas first (NaN elsewhere),
+    as SILo places trials of different sizes."""
     from ...extraction.raster.alignment import warp_trial_image
 
+    canvas = np.full((img.shape[0],) + tuple(shape), np.nan)
+    canvas[:, : img.shape[1], : img.shape[2]] = img
     return np.moveaxis(
-        warp_trial_image(np.moveaxis(img, 0, -1), warp, trial), -1, 0
+        warp_trial_image(np.moveaxis(canvas, 0, -1), warp, trial), -1, 0
     )
 
 
@@ -78,7 +93,9 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
     Returns
     -------
     dict
-        Maps ``(channels, rows, cols)`` in the consensus frame: the frame
+        Maps ``(channels, rows, cols)`` in the consensus frame (trials of
+        different sizes are placed at the top left of the largest, as SILo
+        places them): the frame
         counts summed, the moments and expectations averaged, the
         normalised maps formed from them, and ``n_trials`` (trials with data
         at each pixel).
@@ -87,23 +104,31 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
 
     if warp is None:
         warp = TrialWarp.from_shifts(shifts)
+    used = [
+        t for t, st in enumerate(stats) if st is not None and warp.aligned[t]
+    ]
+    shape = (0, 0)
+    if used:
+        shape = tuple(
+            max(stats[t]["maps"]["mean"].shape[d] for t in used)
+            for d in (1, 2)
+        )
     sums, wsum, out = {}, {}, {}
-    for t, st in enumerate(stats):
-        if st is None or not warp.aligned[t]:
-            continue
-        maps = st["maps"]
+    for t in used:
+        maps = stats[t]["maps"]
         for wname, names in WEIGHTS.items():
-            w = _resample(np.nan_to_num(maps[wname]), warp, t)
+            w = _resample(np.nan_to_num(maps[wname]), warp, t, shape)
             w = np.nan_to_num(w)
             out[wname] = out.get(wname, 0) + w
             for name in names:
                 if name not in maps:
                     continue
-                v = _resample(maps[name], warp, t)
+                v = _resample(maps[name], warp, t, shape)
                 ok = np.isfinite(v) & (w > 0)
                 sums[name] = sums.get(name, 0) + np.where(ok, w * v, 0)
                 wsum[name] = wsum.get(name, 0) + np.where(ok, w, 0)
-        has = _resample(np.isfinite(maps["mean"]).astype(float), warp, t)
+        valid = np.isfinite(maps["mean"]).astype(float)
+        has = _resample(valid, warp, t, shape)
         out["n_trials"] = out.get("n_trials", 0) + np.nan_to_num(has == 1)
     with np.errstate(invalid="ignore", divide="ignore"):
         for name in sums:

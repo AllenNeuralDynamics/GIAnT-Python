@@ -55,10 +55,13 @@ def read_alignment(path: Union[str, Path]) -> dict:
     dict
         ``ds`` (int64 frame times), ``motion`` ``(frames, 2)``,
         ``n_channels``, ``align_hz``, ``trim_rows``, ``trim_cols`` (one-based),
-        ``out_shape`` (rows, cols), ``compensated`` and ``settings`` (the
-        recorded registration settings, MATLAB names, or None).
+        ``out_shape`` (rows, cols), ``compensated``, ``compensation`` (the
+        saved ``slap2/onlineCompensation`` record when enabled, else None)
+        and ``settings`` (the recorded registration settings, MATLAB names,
+        or None).
     """
     with h5py.File(path, "r") as f:
+        row_major = "row_major" in f and bool(np.asarray(f["row_major"]).any())
         ds = _vector(f, "DSframes")
         out = {
             "ds": ds.astype(np.int64),
@@ -76,12 +79,48 @@ def read_alignment(path: Union[str, Path]) -> dict:
             ),
             "settings": None,
         }
+        out["compensation"] = (
+            _compensation_record(f["slap2/onlineCompensation"], row_major)
+            if out["compensated"]
+            else None
+        )
         saved = f.attrs.get("align_params")
     if saved is not None:
         out["settings"] = json.loads(saved)
     if not np.array_equal(out["ds"], ds):
         raise ValueError(f"{path}: DSframes are not whole lines")
     return out
+
+
+def _compensation_record(grp: h5py.Group, row_major: bool) -> dict:
+    """The fields of a saved ``onlineCompensation`` record that decide
+    where samples are placed."""
+    mapping = np.asarray(grp["mapping"][()], dtype=np.float64)
+    return {
+        "refOffset": _vector(grp, "refOffset"),
+        "frameRefX": _vector(grp, "frameRefX"),
+        "frameRefY": _vector(grp, "frameRefY"),
+        "mapping": mapping if row_major else mapping.T,
+        "yLead": _vector(grp, "yLead"),
+    }
+
+
+def _check_compensation(dat, source, ds, saved: Optional[dict]) -> None:
+    """Refuse a trial whose online compensation, rebuilt from the raw
+    recording, is not the one its registration saved (other offsets,
+    references, mapping or y lead would place the samples elsewhere)."""
+    from ..registration.compensation import compensation_record
+
+    if source.compensation is None:
+        return
+    rec = compensation_record(source.compensation, source.references(ds))
+    for key, value in saved.items():
+        mine = np.asarray(rec[key], dtype=np.float64).ravel()
+        if not np.array_equal(mine, np.asarray(value).ravel()):
+            raise ValueError(
+                f"{dat}: online compensation ({key}) differs from the "
+                "alignment file's record"
+            )
 
 
 def registration_params(alignment: dict, table_settings: Optional[dict]):
@@ -128,6 +167,7 @@ def _source(dat, first, last, alignment, params, device):
         and np.array_equal(win.trim_cols, alignment["trim_cols"])
     ):
         raise ValueError(f"{dat}: registration window differs from trimRows")
+    _check_compensation(dat, source, ds, alignment.get("compensation"))
     return layout, source, ds
 
 

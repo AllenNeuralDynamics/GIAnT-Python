@@ -68,7 +68,8 @@ class GainCurve:
     g2, g3 : ndarray of float64
         ``(K,)`` variance and third cumulant per unit mean.
     nu_per_mu : ndarray of float64
-        ``(K,)`` rate of non-zero samples per unit mean.
+        ``(K,)`` rate of non-zero samples per unit mean (NaN for a group
+        without zeros).
     n_slots : ndarray of int64
         ``(K,)`` slots in each group.
     """
@@ -90,7 +91,8 @@ class GainCurve:
 
         Linear in ``log(mean)`` between the groups' means and constant
         beyond the first and last group (0 for the pair terms of a curve
-        without pairs).
+        without pairs). The non-zero rate uses the groups that have zeros
+        (NaN if none has).
 
         Returns
         -------
@@ -106,11 +108,13 @@ class GainCurve:
             ("pair", self.mu_pair, ("c2", "c3a", "c3b")),
         ):
             for y in ys:
-                if mu.size == 0:
+                v = np.asarray(getattr(self, y), dtype=np.float64)
+                ok = np.isfinite(v)
+                if not ok.any():
                     fill = np.nan if name == "single" else 0.0
                     out[y] = np.full(mean.shape, fill)
                 else:
-                    out[y] = np.interp(x, np.log(mu), getattr(self, y))
+                    out[y] = np.interp(x, np.log(mu[ok]), v[ok])
         out["nu"] = mean * out.pop("nu_per_mu")
         bad = ~np.isfinite(mean)
         for a in out.values():
@@ -287,7 +291,8 @@ def curve_from_sums(sums: np.ndarray, n_bins: int = N_BINS) -> GainCurve:
 
     Slots with at least 3 triples and a positive mean are sorted by mean
     (ties by slot) and split into ``n_bins`` groups of equal size (sizes
-    differ by at most one); groups without photons are dropped.
+    differ by at most one); groups without photons are dropped. A group
+    without zeros keeps its gains; its non-zero rate is NaN.
     """
     n_valid, total, zeros, n_trip, s1, s2, s3 = sums.T
     use = np.flatnonzero((n_trip >= 3) & (total > 0))
@@ -305,7 +310,7 @@ def curve_from_sums(sums: np.ndarray, n_bins: int = N_BINS) -> GainCurve:
             (mu, s2[grp].sum() / den, s3[grp].sum() / den, nu / mu, grp.size)
         )
     arr = np.array(rows, dtype=np.float64).reshape(-1, 5)
-    keep = np.isfinite(arr).all(1)
+    keep = np.isfinite(arr[:, :3]).all(1)
     arr = arr[keep]
     return GainCurve(
         mu=arr[:, 0],

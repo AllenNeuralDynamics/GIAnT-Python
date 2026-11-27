@@ -237,6 +237,24 @@ def _shared_pulses(rate, nxt, rng, p_split=0.35, k=5.0, theta=22.0):
     return out.astype(np.int16)
 
 
+def test_gain_groups_without_zeros_keep_their_gains():
+    """Bright groups that have no zero sample keep their gains; the
+    non-zero rate comes from the groups that have zeros."""
+    rng = np.random.default_rng(4)
+    rate = np.repeat(np.geomspace(0.05, 60, 320)[:, None], 2000, 1)
+    x = (100 * rng.poisson(rate)).astype(np.int16)
+    curve = curve_from_sums(slot_sums(torch.from_numpy(x[None]), 0))
+    assert curve.mu.size == 16
+    assert np.isnan(curve.nu_per_mu[-1])  # no zeros at ~50 photons
+    np.testing.assert_allclose(curve.g2, 100, rtol=0.05)  # >= 2000 photons
+    assert np.isfinite(curve.g3).all()
+    np.testing.assert_allclose(curve.g3[:8], 1e4, rtol=0.1)  # dim: precise
+    at = curve.at(curve.mu)
+    assert np.isfinite(at["nu"]).all()
+    ok = np.isfinite(curve.nu_per_mu)
+    np.testing.assert_allclose(at["nu"][ok], (curve.mu * curve.nu_per_mu)[ok])
+
+
 def test_gain_curve_of_compound_poisson():
     """Gains equal E[A^2]/E[A] and E[A^3]/E[A] of the pulse heights."""
     rng = np.random.default_rng(3)
@@ -441,6 +459,67 @@ def test_failed_statistics_leave_registration(
             np.testing.assert_array_equal(f[k][()], g[k][()])
 
 
+def test_command_checks_online_compensation(tmp_path, monkeypatch):
+    """For an online-compensated trial the command rebuilds the
+    compensation registration saved (same maps) and refuses a trial whose
+    saved record differs."""
+    from giant_python.pipeline.reg_stats import trial_stats
+
+    from .synthetic import online_offsets
+
+    layout = make_layout(
+        tmp_path / "online_DMD1-TRIAL000001.dat", n_cycles=1400, seed=5
+    )
+    write_recording(layout, seed=6, online=online_offsets(layout.total_lines))
+    monkeypatch.setattr(multiroi, "raster_layout", lambda path: layout)
+    params = multiroi.MultiRoiRegistrationParams(
+        maxshift=6, compensate_online=True
+    )
+    d = tmp_path / "reg"
+    d.mkdir()
+    args = (layout.files[0], 1, 6000, d / MOVIE, d / ADATA)
+    multiroi.register_trial(*args, params)
+    a = read_stats(stats_path(d / MOVIE))
+    cmd = tmp_path / "cmd" / stats_path(d / MOVIE).name
+    trial_stats(*args, cmd, "cpu", {"maxshift": 6})
+    b = read_stats(cmd)
+    for k in a["maps"]:
+        np.testing.assert_array_equal(a["maps"][k], b["maps"][k], err_msg=k)
+    with h5py.File(d / ADATA, "r+") as f:
+        lead = f["slap2/onlineCompensation/yLead"]
+        lead[...] = lead[()] + 1
+    with pytest.raises(ValueError, match="yLead"):
+        trial_stats(*args, tmp_path / "other.h5", "cpu", {"maxshift": 6})
+
+
+def test_statistics_file_that_cannot_be_moved(
+    patched, tmp_path, monkeypatch, caplog
+):
+    """If the statistics file cannot be moved into place, the movie and the
+    alignment file are published all the same, without statistics (an
+    earlier statistics file is removed)."""
+    import os
+
+    layout = patched
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6)
+    stale = stats_path(tmp_path / MOVIE)
+    stale.write_bytes(b"from an earlier registration")
+    replace = os.replace
+
+    def refuse_stats(src, dst):
+        """os.replace, refusing the statistics file."""
+        if Path(dst) == stale:
+            raise PermissionError("locked")
+        return replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", refuse_stats)
+    multiroi.register_trial(
+        layout.files[0], 1, 3000, tmp_path / MOVIE, tmp_path / ADATA, params
+    )
+    assert "not published" in caplog.text
+    assert sorted(p.name for p in tmp_path.iterdir()) == [ADATA, MOVIE]
+
+
 def test_reg_stats_command(patched, tmp_path):
     """The CLI writes the statistics of a table's trials once."""
     from giant_python.cli import main
@@ -516,6 +595,25 @@ def test_combine_trials_weights_by_frames():
     # trial 2's first column is missing; shifted by one column it lands
     # left of the frame, and its last column has no data
     assert out["n_trials"][0, 5, -1] == 1
+
+
+def test_combine_trials_of_different_sizes():
+    """Trials of different registered sizes share the largest canvas
+    (top left, as SILo's)."""
+    trials = []
+    for shape in ((1, 20, 30), (1, 18, 32)):
+        maps = {k: np.full(shape, 50.0) for k in ("n_valid", "n_blocks",
+                                                  "n_fast")}  # fmt: skip
+        for k in ("mean", "var", "var_ph", "zero_share", "zero_ph"):
+            maps[k] = np.full(shape, 1.0)
+        trials.append({"maps": maps})
+    out = combine_trials(trials, shifts=np.zeros((2, 2)))
+    assert out["n_valid"].shape == (1, 20, 32)
+    assert out["n_trials"][0, 5, 5] == 2
+    assert out["n_trials"][0, 19, 5] == 1  # rows 18-19: the first only
+    assert out["n_trials"][0, 5, 31] == 1  # cols 30-31: the second only
+    assert out["n_trials"][0, 19, 31] == 0
+    assert np.isnan(out["var"][0, 19, 31])
 
 
 def test_pair_sums_match_definition(tmp_path):
