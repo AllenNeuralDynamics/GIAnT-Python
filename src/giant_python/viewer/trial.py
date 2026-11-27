@@ -4,10 +4,13 @@ The registered 80 Hz movie of the trial (the activity channel, in the
 trial's own registered frame, not resampled), the runs' fitted activity
 rendered into it (:mod:`~giant_python.viewer.render`), and the F0
 network's baseline when a baseline folder is given. Arrays are held for
-the valid pixels only (as the F0 viewer and the exporter define them:
-missing in less than ``nanThresh`` of the frames, motion discards
-counted as missing). The activity is not stored per frame: a frame or a
-trace is the footprints (sparse) times the sources' 80 Hz traces.
+the valid pixels only, as the exporter defines them: missing in less than
+``nanThresh`` of the frames with SILo's motion discards counted as
+missing. The frames blanked afterwards because their kernel weight lies
+mostly on discarded 200 Hz frames do not count (they are blank at every
+pixel, and the exporter's training targets cover the same pixels). The
+activity is not stored per frame: a frame or a trace is the footprints
+(sparse) times the sources' 80 Hz traces.
 """
 
 from __future__ import annotations
@@ -429,6 +432,8 @@ def load_trial(
     The movie is NaN at SILo's motion discards (``recNegErr``, as
     ``loadAndProcessTrialAsync``) and at the frames whose kernel weight
     falls mostly on SILo's discarded 200 Hz frames (the exporter's rule).
+    Valid pixels are decided on the motion discards alone, as the
+    exporter decides them (see the module docstring).
     Both time kernels (:func:`render_dt`) are rendered; ``kernel`` is the
     one :meth:`TrialMovie.frame` uses by default.
     """

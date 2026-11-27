@@ -214,7 +214,7 @@ details.defs li { margin: 3px 0; }
     <summary>What the panels show</summary>
     <ul>
       <li><b>Activity image</b> (Sources view): SILo's combined activity image of the path on its consensus canvas (all trials), or one trial's, as in <code>experiment_summary.h5</code> and <code>per_trial_summary.h5</code>. Markers sit at the kept sources' footprint centroids, the kinetics-rejected sources' pixels and, when the run kept its plan, the seeds whose pixel got no source.</li>
-      <li><b>Aligned movie</b> (Movie view): the trial's registered 80 Hz movie (<code>*_REGISTERED_DOWNSAMPLED-80Hz</code>, activity channel) in the trial's own registered frame, not resampled. Blank (NaN) at SILo's motion discards and at frames whose kernel weight lies mostly on SILo's discarded 200 Hz frames; only pixels missing in less than <code>nanThresh</code> of the frames are shown.</li>
+      <li><b>Aligned movie</b> (Movie view): the trial's registered 80 Hz movie (<code>*_REGISTERED_DOWNSAMPLED-80Hz</code>, activity channel) in the trial's own registered frame, not resampled. Blank (NaN) at SILo's motion discards and at frames whose kernel weight lies mostly on SILo's discarded 200 Hz frames; only pixels missing in less than <code>nanThresh</code> of the frames, counting the motion discards (as SILo's trial loader and the exporter count them), are shown.</li>
       <li><b>Fitted activity</b>: every kept source's footprint times its denoised trace (<code>dF_denoised</code>), rendered in the movie's pixels and frames following the F0 network's training-data exporter. Time: each 80 Hz frame averages SILo's 200 Hz traces at its frame lines with weights <code>exp(−|Δline| / dt)</code> within <code>max(3 dt, P)</code> lines (P: lines per cycle), leaving out SILo's discarded frames. With the <b>exporter's</b> kernel dt is the movie's own (<code>ceil(mean(diff(DSframes)))</code>, 134 lines on these rigs), as the training-data exporter does; but the 200 Hz frames are themselves averages (dt200 = 54 lines), so this smooths fast events twice and keeps 93–95% of an event's 80 Hz peak on noiseless injected events. The <b>matched</b> kernel (the default) uses <code>√(dt² − dt200²)</code> (≈ 123 lines) and keeps 97–99%. The Time kernel menu switches between them. Space: the trial's footprints are moved from the consensus canvas into the trial's frame through the trial's across-trial map (rigid, affine or patchwise), bilinearly; the exporter instead searched a rigid offset per trial by correlation and blurred the footprints to match the movie's shape (here a fixed blur, 0 unless the server was started with <code>--blur</code>). Kinetics-rejected sources are not included (their traces are not in the summary).</li>
       <li><b>Residual</b> = aligned movie − fitted activity: what a training target made from this run would be. <b>Residual − baseline</b> = movie − activity − the F0 network's baseline (only with <code>--baseline-dir</code>).</li>
       <li><b>Units</b>: raw counts of the registered movie (each pixel's weighted mean of its raw SLAP2 samples); SILo's traces and F0 are in the same units (footprints sum to 1, so a trace is the source's total over its footprint).</li>
@@ -291,9 +291,16 @@ async function init() {
   await setPath(S.meta.paths[0].path);
 }
 function pathMeta() { return S.meta.paths.find((p) => p.path === S.path); }
+function resetMovie() {  // the movie view's trial-path state: none loaded, nothing pending
+  B.seq++; B.st = null; B.trial = null; B.frame = null; B.trace = null; B.lastKey = undefined;
+  B.events = []; B.ev = -1; B.evSrc = null; B.pending = false;
+  if (B.playing) togglePlay();
+  updateEvInfo(); $("evinfo").textContent = "No source picked: pick one in the Sources view to step through its largest events.";
+}
 async function setPath(d) {
   S.path = d; $("path").value = d;
   A.images = {}; A.sel = null; A.detail = null; A.traces = null; A.view = { z: 1, cx: 0, cy: 0 };
+  resetMovie();
   fillTrialSelect();
   await loadSources();
   if (S.view === "B") { const t = firstMovieTrial(); if (t !== null) loadTrial(t); }
@@ -337,8 +344,11 @@ function imgKey(which) {
 }
 async function getImage(k) {
   if (A.images[k.key]) return A.images[k.key];
-  const { buf } = await getBin(`/api/image?path=${S.path}&run=${encodeURIComponent(k.run)}&kind=${k.kind}&trial=${k.trial}`);
+  const cache = A.images, path = S.path, w = A.w, h = A.h;
+  const { buf } = await getBin(`/api/image?path=${path}&run=${encodeURIComponent(k.run)}&kind=${k.kind}&trial=${k.trial}`);
   const data = new Float32Array(buf);
+  // another path was picked meanwhile: its cache and size differ
+  if (cache !== A.images || path !== S.path || data.length !== w * h) return null;
   const e = { data, lo: pct(data, 0.005), hi: pct(data, 0.998), canvas: document.createElement("canvas"), stamp: "" };
   if (!(e.hi > e.lo)) e.hi = e.lo + 1;
   e.canvas.width = A.w; e.canvas.height = A.h;
@@ -421,10 +431,11 @@ function drawPanel(cid, e) {
 }
 async function renderA() {
   if (!A.src) return;
-  const kl = imgKey("selL"), kr = imgKey("selR");
+  const kl = imgKey("selL"), kr = imgKey("selR"), src = A.src;
   let el, er;
   try { [el, er] = await Promise.all([getImage(kl), getImage(kr)]); }
   catch (e) { setStatus(e.message, true); return; }
+  if (!el || !er || src !== A.src) return;  // stale: another path or run list
   A.marks = computeMarks();
   drawPanel("cL", A.flick ? er : el); drawPanel("cR", er);
 }
@@ -455,9 +466,9 @@ function nearestMark(c, ev) {
   return { best, r, c: cc };
 }
 async function selectMark(m) {
+  const seq = ++A.seq;
   A.sel = m; renderA(); A.detail = null; A.traces = null; showDetail(); drawACharts();
   if (m.kind === "rej" || m.kind === "seed") return;
-  const seq = ++A.seq;
   try {
     const [d, tb] = await Promise.all([
       getJSON(`/api/source?path=${S.path}&run=${encodeURIComponent(m.run)}&id=${m.i}`),
@@ -618,6 +629,7 @@ function buildLayerToggles() {
 }
 async function loadTrial(t, jump) {
   const seq = ++B.seq, d = S.path, key = `${d}/${t}`;
+  B.st = null; B.frame = null; B.trace = null;  // requests wait for the new trial's layout
   B.trial = t; $("btrial").value = t;
   setStatus(`loading path ${d} trial ${t + 1} (reading the movie, rendering the activity)…`);
   const poll = setInterval(async () => { try { const p = await getJSON(`/api/progress?key=${encodeURIComponent(key)}`); if (p.msg && seq === B.seq) setStatus(`path ${d} trial ${t + 1}: ${p.msg}`); } catch (e) {} }, 700);
@@ -990,7 +1002,7 @@ function showView(v, noLoad) {
   document.querySelectorAll(".bonly").forEach((e) => e.classList.toggle("hidden", v !== "B"));
   if (v === "A") { renderA(); drawACharts(); }
   else if (noLoad) return;
-  else if (B.st === null || B.lastKey === undefined || B.lastKey.d !== S.path) { const t = firstMovieTrial(); if (t !== null) loadTrial(t); }
+  else if (B.trial === null || B.lastKey === undefined || B.lastKey.d !== S.path) { const t = firstMovieTrial(); if (t !== null) loadTrial(t); }
   else { sizeTiles(); requestFrame(); drawBCharts(); }
 }
 $("tabA").onclick = () => showView("A");

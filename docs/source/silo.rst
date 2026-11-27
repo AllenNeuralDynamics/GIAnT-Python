@@ -408,7 +408,8 @@ or small region below:
   registered frame, not resampled. It is blank at SILo's motion discards
   (``recNegErr``, as the trial loader) and at the frames whose time kernel
   falls mostly on SILo's discarded 200 Hz frames; only the pixels missing
-  in less than ``nanThresh`` of the frames are shown (held in memory: the
+  in less than ``nanThresh`` of the frames, counting the motion discards as
+  the trial loader and the exporter do, are shown (held in memory: the
   movie as float32 and the baseline as float16, the activity computed per
   request from sparse footprints).
 * *Fitted activity*: every kept source's footprint times its denoised
