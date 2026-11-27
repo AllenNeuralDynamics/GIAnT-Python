@@ -27,12 +27,12 @@ import numpy as np
 
 WEIGHTS = {
     "n_valid": (
-        "mean", "var", "var_q", "var_ph", "zero_share", "zero_ph",
-        "gain_g2", "gain_g3", "sigma8_ph",
+        "mean", "var", "var_q", "var_qa", "var_ph", "zero_share", "zero_ph",
+        "gain_g2", "gain_g3", "gain_c2", "gain_c3a", "gain_c3b", "sigma8_ph",
     ),
-    "n_blocks": ("slow_var", "slow_q", "slow_var_ph"),
-    "n_fast": ("fast_var", "fast_q", "fast_var_ph", "fast_m3", "fast_q3",
-               "fast_m3_ph"),
+    "n_blocks": ("slow_var", "slow_q", "slow_qa", "slow_var_ph"),
+    "n_fast": ("fast_var", "fast_q", "fast_qa", "fast_var_ph", "fast_m3",
+               "fast_q3", "fast_q3a", "fast_q3b", "fast_m3_ph"),
 }  # fmt: skip
 """Which frame count weights each averaged map."""
 
@@ -97,6 +97,8 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
             w = np.nan_to_num(w)
             out[wname] = out.get(wname, 0) + w
             for name in names:
+                if name not in maps:
+                    continue
                 v = _resample(maps[name], warp, t)
                 ok = np.isfinite(v) & (w > 0)
                 sums[name] = sums.get(name, 0) + np.where(ok, w * v, 0)

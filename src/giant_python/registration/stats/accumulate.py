@@ -37,7 +37,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .maps import finish_maps
+from .maps import ZERO_NU, finish_maps
 
 BLOCK = 64
 """Frames per block of the slow part (and per processing step)."""
@@ -57,6 +57,8 @@ GEO_CHUNK = 32
 """Frames whose photon-noise sums are formed at a time."""
 PER_CHANNEL = ("F", "B", "C", "K")
 """Per-frame photon-noise sums kept per channel (see the module text)."""
+SHARED = ("G0", "R0", "N0", "QA2", "QA3a", "QA3b", "M0")
+"""Per-frame photon-noise sums shared by the channels (see geometry)."""
 
 
 def _capacity(n: int, cap: int) -> int:
@@ -226,9 +228,7 @@ class TrialStatsAccumulator:
         self.block_done = 0
         self.profile = False
         self.timing = {}
-        lay = self.geo.former.layout
-        k_max = 2 * self.geo.reach // lay.lines_per_cycle + 1
-        self.n_hist = 4 * int(self.geo.pixel_lines.shape[1]) * k_max + 1
+        self.shared_zero = [g.shared_zero_fraction() for g in self.gains]
 
     # ---------------------------------------------------------------- intake
 
@@ -292,7 +292,7 @@ class TrialStatsAccumulator:
         self.ring.extend(n_new)
         if self.hist is not None and self.hist.shape[1] < self.acc.cap:
             pad = self.hist.new_zeros(
-                (self.c, self.acc.cap - self.hist.shape[1], self.n_hist)
+                (self.c, self.acc.cap - self.hist.shape[1], ZERO_NU.size)
             )
             self.hist = torch.cat([self.hist, pad], 1)
         if self.lagbuf is not None:
@@ -341,8 +341,8 @@ class TrialStatsAccumulator:
         self._spatial_factor(g0, g1)
         frames = range(g0, g1)
         self.ring.put("G0", frames, out["G"][0][None], 0.0)
-        self.ring.put("R0", frames, out["R0"][None], 0.0)
-        self.ring.put("N0", frames, out["N0"][None], 0.0)
+        for name in SHARED[1:]:
+            self.ring.put(name, frames, out[name][None], 0.0)
         per = self._per_channel(g0, g1, f_ext, out)
         for name in PER_CHANNEL:
             self.ring.put(name, frames, per[name], 0.0)
@@ -419,7 +419,7 @@ class TrialStatsAccumulator:
         span = range(s0, s1)
         rows = {
             name: self.ring.rows(name, span)
-            for name in ("x", "v", "G0", "R0", "N0") + PER_CHANNEL
+            for name in ("x", "v") + SHARED + PER_CHANNEL
         }
         bins = []
         for ch in range(self.c):
@@ -463,6 +463,9 @@ class _BlockChannel:
         self.g0 = rows["G0"][0] * vf
         self.r0 = rows["R0"][0] * vf
         self.n0 = rows["N0"][0]
+        self.qa2 = rows["QA2"][0] * vf
+        self.qa3 = (rows["QA3a"][0] * vf, rows["QA3b"][0] * vf)
+        self.m0 = rows["M0"][0]
         self.f, self.b, self.cr, self.k = (rows[n][ch] for n in PER_CHANNEL)
         self.rows = slice(self.b0 - self.s0, self.b1 - self.s0)
         self.bin_means = None
@@ -474,7 +477,7 @@ class _BlockChannel:
             self._slow()
         self.bin_means = self._bins()
         self._fast()
-        self._zero_hist()
+        self._zeros()
 
     def _add(self, name: str, value: torch.Tensor) -> None:
         """Add to the per-pixel sums ``name`` of this channel."""
@@ -496,6 +499,7 @@ class _BlockChannel:
         self._add("zeros", zero.double().sum(0))
         self._add("s0", self.g0[rows].sum(0).double())
         self._add("s1", self.f[rows].sum(0).double())
+        self._add("sq", self.qa2[rows].sum(0).double())
 
     def _slow(self) -> None:
         """The mean of the block, its photon-noise variance and its
@@ -505,14 +509,19 @@ class _BlockChannel:
         okj = nj >= BLOCK_MIN
         mean = self.x0[a:b].sum(0) / nj.clamp(min=1)
         w = self._pairs_within(a, b).double()
+        own = self.g0[a:b].sum(0).double()
         cross = self.cr[a - 1].double() if a > 0 else torch.zeros_like(nj)
         zero = torch.zeros_like(nj)
         prev_n = self.acc["slow_prev_n"][self.ch]
         both = okj & (prev_n >= BLOCK_MIN)
+        n2 = nj.clamp(min=1) ** 2
         self._add("nb", okj.double())
         self._add("sb", torch.where(okj, mean, zero))
         self._add("sb2", torch.where(okj, mean * mean, zero))
-        self._add("vb", torch.where(okj, w / nj.clamp(min=1) ** 2, zero))
+        self._add("vb", torch.where(okj, w / n2, zero))
+        self._add("vbl", torch.where(okj, (w - own) / n2, zero))
+        qa = self.qa2[a:b].sum(0).double()
+        self._add("vbq", torch.where(okj, qa / n2, zero))
         den = (nj * prev_n).clamp(min=1)
         self._add("cb", torch.where(both, cross / den, zero))
         self.acc["slow_prev_n"][self.ch] = nj
@@ -533,9 +542,11 @@ class _BlockChannel:
         g = self.g0[rows].reshape(nb, BIN_T, n).sum(1)
         f = self.f[rows].reshape(nb, BIN_T, n).sum(1)
         ends = self.cr[a + BIN_T - 1 : a + nb * BIN_T : BIN_T]
-        w = (g + 2 * f - 2 * ends).double()
-        var = torch.where(ok, w / cnt.clamp(min=1) ** 2, 0.0)
-        self._add("v8", var.sum(0))
+        lag = (2 * f - 2 * ends).double()
+        qa = self.qa2[rows].reshape(nb, BIN_T, n).sum(1).double()
+        n2 = cnt.clamp(min=1) ** 2
+        for name, w in (("v8", g.double() + lag), ("v8l", lag), ("v8q", qa)):
+            self._add(name, torch.where(ok, w / n2, 0.0).sum(0))
         self._add("n8", ok.double().sum(0))
         return torch.where(ok, mean, float("nan")).float()
 
@@ -566,9 +577,9 @@ class _BlockChannel:
         self._add("sz", z.sum(0))
         self._add("sz2", (z * z).sum(0))
         self._add("sz3", (z * z * z).sum(0))
-        q2, q3 = self._fast_photon(rc, lo, hi, nn.float())
-        self._add("q2", torch.where(ok, q2.double(), zero).sum(0))
-        self._add("q3", torch.where(ok, q3.double(), zero).sum(0))
+        ph = self._fast_photon(rc, lo, hi, nn.float())
+        for name, v in ph.items():
+            self._add(name, torch.where(ok, v.double(), zero).sum(0))
 
     def _fast_photon(self, rc, lo, hi, n):
         """Photon-noise variance and third cumulant of the fast part of
@@ -585,20 +596,41 @@ class _BlockChannel:
         pairs = _window(cs_pairs, lo, hi) - 2 * self.cr[hi]
         lc = lsum[rc]
         q2 = self.g0[rc] - 2 * lc / n + pairs / n**2
+        g0w = _window(_cumsum0(self.g0), lo, hi)
+        own = self.g0[rc] - 2 * self.g0[rc] / n + g0w / n**2
+        qaw = _window(_cumsum0(self.qa2), lo, hi)
+        qa = self.qa2[rc] - 2 * self.qa2[rc] / n + qaw / n**2
         l2 = _window(_cumsum0(lsum * lsum), lo, hi)
         q3 = self.r0[rc] - 3 * self.k[rc] / n + 3 * lc * lc / n**2
-        return q2, q3 - l2 / n**3
+        q3 = q3 - l2 / n**3
+        r0 = self.r0[rc]
+        safe = torch.where(r0 > 0, r0, torch.ones_like(r0))
+        scale = [torch.where(r0 > 0, q[rc] / safe, 0.0) for q in self.qa3]
+        return {
+            "q2": q2,
+            "q2l": q2 - own,
+            "qa": qa,
+            "q3": q3,
+            "q3a": q3 * scale[0],
+            "q3b": q3 * scale[1],
+        }
 
-    def _zero_hist(self) -> None:
-        """Count valid frames by their number of contributing samples."""
+    def _zeros(self) -> None:
+        """Add ``exp(-nu N_eff)`` of every valid frame at the rates
+        :data:`ZERO_NU`, with ``N_eff = N0 - shared M0`` (pairs of
+        consecutive samples share zero events)."""
         o = self.o
         rows = self.rows
         n = self.v.shape[1]
         if o.hist is None:
             o.hist = torch.zeros(
-                (o.c, o.acc.cap, o.n_hist),
+                (o.c, o.acc.cap, ZERO_NU.size),
                 dtype=torch.float32,
                 device=o.device,
             )
-        idx = self.n0[rows].round().long().clamp(0, o.n_hist - 1)
-        o.hist[self.ch, :n].scatter_add_(1, idx.T, self.v[rows].T.float())
+        n_eff = self.n0[rows] - o.shared_zero[self.ch] * self.m0[rows]
+        v = self.v[rows].float()
+        for j in range(0, ZERO_NU.size, 8):
+            nu = torch.from_numpy(ZERO_NU[j : j + 8].astype(np.float32))
+            e = torch.exp(-n_eff[:, :, None] * nu.to(o.device))
+            o.hist[self.ch, :n, j : j + 8] += (e * v[:, :, None]).sum(0)

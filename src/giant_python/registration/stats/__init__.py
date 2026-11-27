@@ -62,6 +62,11 @@ def new_accumulator(source, ds, margin: int, n_channels: int):
     -------
     TrialStatsAccumulator
     """
-    gains = measure_gain_curves(source.former._samples)
+    from .gain import next_slots
+
+    lay = source.former.layout
+    gains = measure_gain_curves(
+        source.former._samples, next_slots(lay.slot_line, lay.slot_pos)
+    )
     geometry = FrameGeometry(source, ds, margin)
     return TrialStatsAccumulator(geometry, gains, n_channels)

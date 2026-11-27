@@ -39,6 +39,20 @@ Per frame the outputs are, at a set of output pixels:
   ``Rp[l] = A3(t, t + l, t + l)``;
 * ``N0``: the number of samples with a non-zero coefficient (for the
   photon-noise share of zeros).
+
+Consecutive samples on a line share photons (:mod:`.gain`), so a registered
+pixel's photon noise also has terms from pairs ``(s, n)`` of consecutive
+samples that both enter it (in two of its raw pixels, usually neighbours
+along the line): ``2 c2 mu sum a_s a_n`` in the variance and ``3 mu sum
+(c3a a_s^2 a_n + c3b a_s a_n^2)`` in the third cumulant. Both samples are
+on the same line, so they have the same kernel weight. Per frame:
+
+* ``QA2 = sum a_s a_n``, ``QA3a = sum a_s^2 a_n``, ``QA3b = sum a_s a_n^2``
+  over such pairs, and ``M0``, the number of pairs both of whose samples
+  have a non-zero coefficient.
+
+These are exact for a frame with itself; for two frames that share samples
+the accumulator scales them by the pixel's own ratio (see ``maps``).
 """
 
 from __future__ import annotations
@@ -62,6 +76,22 @@ pixels; bounds memory)."""
 
 CORNERS = ((0, 0), (0, 1), (1, 0), (1, 1))
 """Bilinear neighbours ``(a, b)`` in ``interp_frame``'s order."""
+
+NEIGHBOURS = tuple(
+    (dr, dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if (dr, dc) != (0, 0)
+)
+"""Directions from a sample's pixel to the next sample's pixel that two
+corners of one output pixel can have."""
+
+
+def corner_pairs(delta):
+    """``[(k, k2)]``: corners ``k`` and ``k2`` with ``k2 = k + delta``."""
+    out = []
+    for k, (a, b) in enumerate(CORNERS):
+        a2, b2 = a + delta[0], b + delta[1]
+        if 0 <= a2 <= 1 and 0 <= b2 <= 1:
+            out.append((k, 2 * a2 + b2))
+    return out
 
 
 def bilinear_corners(motion_r: float, motion_c: float, margin: int):
@@ -205,6 +235,11 @@ class FrameGeometry:
         if source.compensation is not None:
             self.refs = source.references(self.ds)
         self._incidence = {}
+        self._adjacent = {}
+        self.slot_dirs = self._slot_directions()
+        self.directions = sorted(
+            {tuple(int(v) for v in d) for d in self.slot_dirs[1].tolist()}
+        )
         self.tables = self._precompute()
 
     # ------------------------------------------------------------ raw sums
@@ -215,6 +250,61 @@ class FrameGeometry:
             keep = self.source.pixels
             return keep, torch.arange(keep.numel(), device=self.device)
         return self.source._destination(dr, dc)
+
+    def _slot_directions(self):
+        """Slots of the plane whose next sample is in a neighbouring pixel.
+
+        Returns
+        -------
+        slots : ndarray of int
+            Layout slot indices.
+        dirs : ndarray of int ``(n, 2)``
+            Row and column from the slot's pixel to the next sample's.
+        """
+        from .gain import next_slots
+
+        lay = self.former.layout
+        nxt = next_slots(lay.slot_line, lay.slot_pos)
+        on_plane = lay.line_fast_z[lay.slot_line - 1] == 1
+        s = np.flatnonzero((nxt >= 0) & on_plane)
+        n = nxt[s]
+        pr, pc = (lay.slot_pixel - 1) // lay.n_cols, (
+            lay.slot_pixel - 1
+        ) % lay.n_cols
+        d = np.stack([pr[n] - pr[s], pc[n] - pc[s]], 1)
+        near = (np.abs(d) <= 1).all(1) & (d != 0).any(1)
+        return s[near], d[near]
+
+    def adjacency(self, dr: int, dc: int, delta) -> torch.Tensor:
+        """``(P, n_win + 1)`` float32: slots on line ``l`` of the window
+        pixel whose next sample is at ``pixel + delta`` (displacement
+        ``(dr, dc)``)."""
+        key = (int(dr), int(dc), tuple(delta))
+        if key not in self._adjacent:
+            lay = self.former.layout
+            p = lay.lines_per_cycle
+            m = torch.zeros(
+                (p, self.n_win + 1), dtype=torch.float32, device=self.device
+            )
+            slots, dirs = self.slot_dirs
+            sel = slots[(dirs == np.asarray(delta)).all(1)]
+            keep, dest = self._destinations(dr, dc)
+            where = np.full(self.former.pixels.size, -1, dtype=np.int64)
+            where[keep.cpu().numpy()] = dest.cpu().numpy()
+            pix = np.searchsorted(self.former.pixels, lay.slot_pixel[sel])
+            to = where[pix]
+            ok = to >= 0
+            lines = torch.from_numpy(lay.slot_line[sel][ok] - 1)
+            m.index_put_(
+                (
+                    lines.to(self.device),
+                    torch.from_numpy(to[ok]).to(self.device),
+                ),
+                torch.ones(int(ok.sum()), device=self.device),
+                accumulate=True,
+            )
+            self._adjacent[key] = m
+        return self._adjacent[key]
 
     def incidence(self, dr: int, dc: int) -> torch.Tensor:
         """``(P, n_win + 1)`` float32: line ``l`` has a slot of the window
@@ -337,19 +427,33 @@ class FrameGeometry:
                 t = tab[:, r[0] : r[-1] + 1]
             else:
                 t = tab[:, torch.from_numpy(r[sel]).to(self.device)]
-            m = self.incidence(*key)
-            img = (t.reshape(-1, t.shape[-1]) @ m).reshape(
-                t.shape[:2] + (m.shape[1],)
-            )
+            img = self._images(key, t, which)
             if sel.size != b - a:
                 full = img.new_zeros((img.shape[0], b - a, img.shape[2]))
                 full[:, torch.from_numpy(sel).to(self.device)] = img
                 img = full
             total = img if total is None else total + img
         if total is None:
-            q = 4 if which == 1 else 3 * self.n_lags
+            q = 4 + 3 * len(self.directions) if which == 1 else 3 * self.n_lags
             total = torch.zeros((q, b - a, self.n_win + 1), device=self.device)
         return total
+
+    def _images(self, key, t: torch.Tensor, which: int) -> torch.Tensor:
+        """Line tables ``t`` ``(q, frames, P)`` on the window pixels; for the
+        single sums also, per direction of :attr:`directions`, ``sum w^2``,
+        ``sum w^3`` and the sample count over the slots whose next sample is
+        in that direction (appended in that order)."""
+        flat = t.reshape(-1, t.shape[-1])
+        m = self.incidence(*key)
+        imgs = [(flat @ m).reshape(t.shape[:2] + (m.shape[1],))]
+        if which == 1:
+            sub = t[[2, 3, 0]].reshape(-1, t.shape[-1])
+            for delta in self.directions:
+                ma = self.adjacency(key[0], key[1], delta)
+                imgs.append(
+                    (sub @ ma).reshape((3,) + t.shape[1:2] + (m.shape[1],))
+                )
+        return torch.cat(imgs) if len(imgs) > 1 else imgs[0]
 
     # ----------------------------------------------------- registered sums
 
@@ -445,19 +549,42 @@ class FrameGeometry:
         """
         c = torch.from_numpy(coef.astype(np.float32)).to(self.device)
         acc = [0.0, 0.0, 0.0, 0.0]
+        adj = [0.0, 0.0, 0.0, 0.0]
+        nq = single.shape[0]
         for k in range(4):
-            g = torch.gather(single, 2, cidx[:, k][None].expand(4, -1, -1))
+            g = torch.gather(single, 2, cidx[:, k][None].expand(nq, -1, -1))
             ck = c[:, k : k + 1]
             pw = ((ck > 0).float(), ck, ck * ck, ck * ck * ck)
             for j in range(4):
                 acc[j] = acc[j] + pw[j] * g[j]
+            self._adjacent_terms(adj, g, c, k)
         n0, d_g, q2, q3 = acc
         d_a = 1.0 / varfac.float()
         ok = torch.isfinite(d_a) & (d_a > 0) & (d_g > 0)
         zero = torch.zeros_like(d_g)
         n2 = torch.where(ok, torch.sqrt(d_g * d_a), zero)
         n3 = torch.where(ok, (d_g * d_a * d_a) ** (1.0 / 3), zero)
-        return dict(n0=n0, d_g=d_g, q2=q2, q3=q3, n2=n2, n3=n3, ok=ok)
+        qa2, qa3a, qa3b, m0 = (a + zero for a in adj)
+        return dict(
+            n0=n0, d_g=d_g, q2=q2, q3=q3, n2=n2, n3=n3, ok=ok,
+            qa2=qa2, qa3a=qa3a, qa3b=qa3b, m0=m0,
+        )  # fmt: skip
+
+    def _adjacent_terms(self, adj: list, g, c, k: int) -> None:
+        """Add corner ``k``'s pairs of consecutive samples to ``adj``
+        (``sum c c' w^2``, ``sum c^2 c' w^3``, ``sum c c'^2 w^3``, pair
+        counts), from its gathered sums ``g``."""
+        for i, delta in enumerate(self.directions):
+            for k1, k2 in corner_pairs(delta):
+                if k1 != k:
+                    continue
+                c1, c2 = c[:, k1 : k1 + 1], c[:, k2 : k2 + 1]
+                w2, w3, cnt = g[4 + 3 * i], g[5 + 3 * i], g[6 + 3 * i]
+                adj[0] = adj[0] + c1 * c2 * w2
+                adj[1] = adj[1] + c1 * c1 * c2 * w3
+                adj[2] = adj[2] + c1 * c2 * c2 * w3
+                both = ((c1 > 0) & (c2 > 0)).float()
+                adj[3] = adj[3] + both * cnt
 
     def registered(self, f0, f1, f_ext, out_idx, motion, present, varfac):
         """Photon-noise sums of frames ``[f0, f1)`` at output pixels.
@@ -477,8 +604,9 @@ class FrameGeometry:
         -------
         dict of torch.Tensor (float32)
             ``G`` ``(1 + n_lags, n, n_idx)``, ``R0`` ``(n, n_idx)``, ``R``
-            and ``Rp`` ``(n_lags, n, n_idx)``, ``N0`` ``(n, n_idx)``, with
-            ``n = f1 - f0``; 0 where a frame has no defined value.
+            and ``Rp`` ``(n_lags, n, n_idx)``, ``N0``, ``QA2``, ``QA3a``,
+            ``QA3b`` and ``M0`` ``(n, n_idx)``, with ``n = f1 - f0``; 0
+            where a frame has no defined value.
         """
         n = f1 - f0
         off, coef, _ = self.corners(motion, present)
@@ -488,9 +616,14 @@ class FrameGeometry:
         ok = nrm["ok"][:n]
         zero = torch.zeros_like(nrm["d_g"][:n])
         g0 = torch.where(ok, nrm["q2"][:n] / nrm["n2"][:n] ** 2, zero)
+        n2s, n3c = nrm["n2"][:n] ** 2, nrm["n3"][:n] ** 3
         out = {
-            "R0": torch.where(ok, nrm["q3"][:n] / nrm["n3"][:n] ** 3, zero),
+            "R0": torch.where(ok, nrm["q3"][:n] / n3c, zero),
             "N0": torch.where(ok, nrm["n0"][:n], zero),
+            "QA2": torch.where(ok, nrm["qa2"][:n] / n2s, zero),
+            "QA3a": torch.where(ok, nrm["qa3a"][:n] / n3c, zero),
+            "QA3b": torch.where(ok, nrm["qa3b"][:n] / n3c, zero),
+            "M0": torch.where(ok, nrm["m0"][:n], zero),
         }
         lag3 = 3 * self.n_lags
         pairs = zero.new_zeros((lag3, n, zero.shape[1]))

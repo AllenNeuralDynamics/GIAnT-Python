@@ -21,14 +21,22 @@ from giant_python.registration.stats import (
     read_stats,
     stats_path,
 )
-from giant_python.registration.stats.gain import curve_from_sums, slot_sums
+from giant_python.io.slap2_raster import RasterLayout
+from giant_python.registration.stats.gain import (
+    curve_from_sums,
+    next_slots,
+    pair_curve,
+    pair_sums,
+    slot_sums,
+)
 from giant_python.registration.stats.geometry import (
     FrameGeometry,
     bilinear_corners,
 )
 from giant_python.registration.stats.session import combine_trials
 
-from .synthetic import make_layout, write_recording
+from .synthetic import HEADER_WORDS, LINE_HEADER_BYTES, make_layout
+from .synthetic import write_recording
 
 MOVIE = "E1T1DMD1_REGISTERED_DOWNSAMPLED-80Hz.h5"
 ADATA = "E1T1DMD1_ALIGNMENTDATA.h5"
@@ -170,6 +178,62 @@ def _compound_poisson(rate, rng, k=5.0, theta=22.0):
     for j in range(int(n.max())):
         use = n > j
         out[use] += np.round(rng.gamma(k, theta, int(use.sum())))
+    return out.astype(np.int16)
+
+
+def scan_layout(path: Path, n_cycles: int) -> RasterLayout:
+    """A raster scanned row by row: line ``r + 2`` samples row ``8 + r``,
+    columns 10-39 from left to right (so consecutive samples on a line are
+    horizontal neighbours); line 1 has no samples."""
+    n_rows, n_cols, n_ch, rows = 36, 50, 2, 20
+    p = rows + 1
+    slot_line, slot_pos, slot_pixel = [], [], []
+    for r in range(rows):
+        for j, c in enumerate(range(10, 40)):
+            slot_line.append(r + 2)
+            slot_pos.append(j)
+            slot_pixel.append((8 + r) * n_cols + c + 1)
+    n_per = np.array([0] + [30] * rows)
+    header_words = LINE_HEADER_BYTES // 2
+    line_words = header_words + n_ch * n_per
+    line_header = np.concatenate([[0], np.cumsum(line_words)[:-1]])
+    return RasterLayout(
+        files=(str(path),),
+        file_cycles=np.array([n_cycles]),
+        file_offset_words=np.array([HEADER_WORDS]),
+        words_per_cycle=int(line_words.sum()),
+        lines_per_cycle=p,
+        n_rows=n_rows,
+        n_cols=n_cols,
+        num_channels=n_ch,
+        line_period_s=1 / 1600.0,
+        line_header_bytes=LINE_HEADER_BYTES,
+        line_header_words=line_header,
+        row_base=line_header + header_words,
+        n_per_channel=n_per,
+        line_fast_z=np.ones(p, dtype=np.int64),
+        fast_zs=np.array([-20.0]),
+        slot_line=np.array(slot_line),
+        slot_pos=np.array(slot_pos),
+        slot_pixel=np.array(slot_pixel),
+    )
+
+
+def _shared_pulses(rate, nxt, rng, p_split=0.35, k=5.0, theta=22.0):
+    """Compound-Poisson samples whose pulses are sometimes shared with the
+    next sample on the line: with probability ``p_split`` a fraction
+    ``U(0, 0.5)`` of a pulse goes to the next sample."""
+    n = rng.poisson(rate)
+    out = np.zeros(rate.shape)
+    has = nxt >= 0
+    for j in range(int(n.max())):
+        use = n > j
+        a = np.zeros(rate.shape)
+        a[use] = np.round(rng.gamma(k, theta, int(use.sum())))
+        split = (rng.random(rate.shape) < p_split) & has[..., :, None]
+        moved = np.round(a * rng.random(rate.shape) * 0.5) * split
+        out += a - moved
+        out[..., nxt[has], :] += moved[..., has, :]
     return out.astype(np.int16)
 
 
@@ -394,3 +458,72 @@ def test_combine_trials_weights_by_frames():
     # trial 2's first column is missing; shifted by one column it lands
     # left of the frame, and its last column has no data
     assert out["n_trials"][0, 5, -1] == 1
+
+
+def test_pair_sums_match_definition(tmp_path):
+    """Sums over pairs of consecutive samples equal their definition."""
+    layout = scan_layout(tmp_path / "scan_DMD1-TRIAL000001.dat", 600)
+    samples = np.ones((2, layout.slot_line.size, 600), dtype=np.int16)
+    source, ds = _source(layout, samples)
+    m = 6
+    motion = _motion(ds.size, seed=3)
+    geo = FrameGeometry(source, ds, m)
+    assert (0, 1) in geo.directions
+    vfs = torch.stack([vf.reshape(-1) for _, vf in
+                       _registered(source, ds, motion, m)])  # fmt: skip
+    ok = torch.nonzero(torch.isfinite(vfs[:30]).all(0)).ravel()
+    pix = ok[:: max(1, ok.numel() // 6)][:6]
+    f0, f1 = 8, 14
+    e = f1 + geo.n_lags
+    res = geo.registered(
+        f0, f1, e, pix, motion[f0:e], np.ones(e - f0, bool), vfs[f0:e][:, pix]
+    )
+    nxt = next_slots(layout.slot_line, layout.slot_pos)
+    for j, p in enumerate(pix.tolist()):
+        for t in range(f0, f1):
+            at = _coefficients(layout, source, ds, motion, m, t, p)
+            pairs = [
+                (v, at[(nxt[s], c)])
+                for (s, c), v in at.items()
+                if nxt[s] >= 0 and (nxt[s], c) in at
+            ]
+            g0 = sum(v * v for v in at.values())
+            want = (
+                sum(a * b for a, b in pairs),
+                sum(a * a * b for a, b in pairs),
+                sum(a * b * b for a, b in pairs),
+            )
+            for name, ref in zip(("QA2", "QA3a", "QA3b"), want):
+                assert abs(res[name][t - f0, j] - ref) <= 1e-5 * g0
+
+
+def test_shared_pulses_read_zero(tmp_path):
+    """Pulses shared by consecutive samples correlate neighbouring pixels;
+    with the pair terms, photon noise still reads 0 after registration's
+    bilinear resampling mixes them."""
+    layout = scan_layout(tmp_path / "scan_DMD1-TRIAL000001.dat", 1600)
+    nxt = next_slots(layout.slot_line, layout.slot_pos)
+    rng = np.random.default_rng(7)
+    shape = (layout.slot_line.size, layout.num_cycles)
+    rate = np.stack([np.full(shape, 0.1), np.full(shape, 2.0)])
+    samples = _shared_pulses(rate, nxt, rng)
+    curve = pair_curve(pair_sums(torch.from_numpy(samples), 1, nxt))
+    rho = np.median(curve["c2"]) / 132.0
+    assert 0.05 < rho < 0.2
+    res = _stats(layout, samples, last=11000.0)
+    maps = res["maps"]
+    use = _interior(maps)
+    assert use.sum() > 300
+    for ch in range(2):
+        assert np.mean(maps["var_qa"][ch][use]) > 0
+        # at this size the dim channel's skewness varies by about 0.08
+        # between seeds (the pixels share the measured gains)
+        for name, tol in (
+            ("var_rel", 0.03),
+            ("fast_rel", 0.03),
+            ("slow_rel", 0.1),
+            ("fast_skew_rel", 0.15 if ch == 0 else 0.06),
+            ("zero_excess", 0.005),
+        ):
+            mean = np.mean(maps[name][ch][use])
+            assert abs(mean) < tol, (ch, name, mean)

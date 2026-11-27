@@ -114,26 +114,54 @@ integer sums over all cycles the trial's frames read). A pixel's gains
 held constant beyond the first and last group. The rate of non-zero
 samples, ``nu = -log(share of zeros)``, is stored per unit mean.
 
+Consecutive samples on a line share photons: a pulse that falls on the
+boundary between two samples is split between them. On SLAP2 the sample and
+the next one (86-88% of the time the next pixel along the row, otherwise one
+row up or down) are correlated by about 0.17-0.25 (channel 1) and 0.12-0.15
+(channel 2), with third cross-cumulants of 0.12-0.18 of ``kappa3``; a
+pixel's own samples, on different lines and cycles, are uncorrelated.
+Registration's bilinear resampling mixes neighbouring raw pixels, so this
+correlation adds about 8% to a registered pixel's photon variance (more at
+half-pixel shifts). The same second differences give, for every pair of
+consecutive samples ``(s, n)``, ``c2 = cov / mu``, ``c3a = kappa(s, s, n) /
+mu`` and ``c3b = kappa(s, n, n) / mu``, measured as curves over the pairs'
+mean (``gain/mu_pair, c2, c3a, c3b``), and the share of a pair's non-zero
+events that make both samples non-zero (``gain/zero_shared``; the trial's
+value, the median over the dimmer half of the pair groups, is the attribute
+``zero_shared``).
+
 A registered frame is linear in the raw samples: frame formation weights the
 samples of raw pixel ``k`` with ``w_s(t) = exp(-|t - l_s| / dt)`` within
 ``max(3 dt, P)`` lines, and registration resamples by a rigid shift with
 bilinear coefficients weighted by the raw pixels' summed weights, so that
 ``x_t(p) = sum_s a_ts x_s`` with ``a_ts = c_t(ab) w_s(t) / D_t(p)`` and
-``D_t(p) = 1 / varFacDS``. With the samples independent and of the pixel's
-mean ``mu``,
+``D_t(p) = 1 / varFacDS``. With the samples of the pixel's mean ``mu``,
+independent but for consecutive pairs,
 
 .. code-block:: text
 
-   Cov(x_t, x_u)      = g2 mu A2(t, u),     A2(t, u)    = sum_s a_ts a_us
-   kappa3(x_t, x_t, x_u) = g3 mu A3(t, t, u), A3(t, t, u) = sum_s a_ts^2 a_us
+   Cov(x_t, x_u) = mu (g2 A2(t, u) + 2 c2 QA2(t, u))
+   A2(t, u)  = sum_s a_ts a_us,   QA2(t, u) = sum over pairs (s, n) of
+               (a_ts a_un + a_tn a_us) / 2
+   kappa3(x_t) = mu (g3 A3(t, t, t) + 3 c3a QA3a(t) + 3 c3b QA3b(t))
+   A3(t, t, u) = sum_s a_ts^2 a_us,  QA3a = sum a_ts^2 a_tn,
+               QA3b = sum a_ts a_tn^2
 
 Frames ``t`` and ``t + l`` share samples for ``l <= n_lags`` (6 at 80 Hz
 for rasters of up to 402 lines per cycle). These sums are computed exactly,
 frame by frame, from the raster's layout, the frame times and each frame's
 motion, assuming every sample in reach is valid; they are rescaled by the
 actual ``D_t(p)`` from ``varFacDS`` (where samples were invalid the
-remaining ones are taken as proportional). Each moment's expectation then
-follows from its estimator:
+remaining ones are taken as proportional). The pair sums are exact for a
+frame with itself; for two different frames that share samples they are
+taken as the samples' own sums times the pixel's ratio ``r = sum_t QA2(t, t)
+/ sum_t A2(t, t)`` (a pair lies on one line, so its kernel overlap between
+frames is that of the samples), and the fast third cumulant's pair part is
+its own-frame part's share of ``R0`` applied to the whole (within 0.5% at
+SLAP2's pair correlations in tests). Each second moment's expectation is
+``mu (g2 m_q + 2 c2 m_qa)``, where ``m_q`` comes from the ``A2`` and
+``m_qa`` from the ``QA2`` sums in the same way; each follows from its
+estimator:
 
 ``var_q``
    ``S0 / n - (S0 + 2 S1) / n^2`` with ``S0 = sum_t A2(t, t)`` and ``S1``
@@ -154,7 +182,9 @@ follows from its estimator:
    A3(t, t, u)``; the last two terms (products of three coefficients of
    which two belong to other frames, about 0.5% of the total) are
    approximated, within 0.25% of the exact third cumulant on synthetic
-   layouts.
+   layouts. ``fast_q3a`` and ``fast_q3b`` are the means of the same times
+   ``QA3a / R0`` and ``QA3b / R0``; ``fast_m3_ph = mu (g3 fast_q3 + 3 c3a
+   fast_q3a + 3 c3b fast_q3b)``.
 ``sigma8_ph``
    ``sqrt(g2 mu v8)`` with ``v8`` the mean over valid 8-frame bins of the
    photon variance of the bin's mean; a 2 x 2 bin's photon variance is
@@ -164,13 +194,16 @@ follows from its estimator:
    by which bilinear interpolation's shared raw pixels raise the variance of
    a 2 x 2 sum (equal raw pixels assumed).
 ``zero_ph``
-   ``sum_N h(N) exp(-N nu) / n``: a frame is exactly 0 when all of its
-   ``N`` contributing samples are, and ``h`` counts the valid frames by
-   ``N``.
+   a frame is exactly 0 when all of its ``N`` contributing samples are;
+   with ``M`` of them in consecutive pairs that has probability ``exp(-nu
+   (N - phi M))`` (``phi``: the trial's ``zero_shared``). Its sum over the
+   pixel's valid frames is accumulated at 33 rates from 1e-4 to 2 per
+   sample and interpolated at the pixel's rate ``nu``.
 
-For each moment ``m`` the file holds ``m``, ``m_q`` (the expectation per
-unit of ``g mu``: a property of frame formation and registration only),
-``m_ph = g mu m_q`` and the normalised map:
+For each moment ``m`` the file holds ``m``, ``m_q`` and ``m_qa`` (for the
+fast third moment ``fast_q3``, ``fast_q3a``, ``fast_q3b``: the expectation's
+parts per unit of the gains, properties of frame formation and
+registration only), ``m_ph`` and the normalised map:
 
 * ``var_rel = var / var_ph - 1``, ``slow_rel``, ``fast_rel`` likewise
   (``sqrt(1 + rel)`` is the SD relative to photon noise);
@@ -217,21 +250,22 @@ centres, 8 valid blocks)::
    ├── (attributes) stats_version, layout, created, source (registration |
    │   reg-stats), movie, movie_size, alignment, alignment_digest (SHA-256
    │   of DSframes, motionDSr, motionDSc), align_hz, n_frames, n_lags,
-   │   n_index, spatial_factor, device
+   │   n_index, spatial_factor, zero_shared, device
    ├── maps/
-   │   ├── n_valid, mean, var, var_q, var_ph, var_rel
+   │   ├── n_valid, mean, var, var_q, var_qa, var_ph, var_rel
    │   ├── zero_share, zero_ph, zero_excess
-   │   ├── n_blocks, slow_var, slow_q, slow_var_ph, slow_rel
-   │   ├── n_fast, fast_var, fast_q, fast_var_ph, fast_rel,
-   │   │   fast_m3, fast_q3, fast_m3_ph, fast_skew_rel
-   │   └── gain_g2, gain_g3, sigma8_ph
+   │   ├── n_blocks, slow_var, slow_q, slow_qa, slow_var_ph, slow_rel
+   │   ├── n_fast, fast_var, fast_q, fast_qa, fast_var_ph, fast_rel,
+   │   │   fast_m3, fast_q3, fast_q3a, fast_q3b, fast_m3_ph, fast_skew_rel
+   │   └── gain_g2, gain_g3, gain_c2, gain_c3a, gain_c3b, sigma8_ph
    ├── svd/
    │   ├── time_courses      (channels, 3, time bins)
    │   ├── singular_values, var_share, skew, lag1   (channels, 3)
    │   ├── total_var, n_space (channels,), n_bins
    │   └── weight, weight_ph (channels, 3, cols, rows)
    └── gain/
-       └── mu, g2, g3, nu_per_mu, n_slots   (channels, groups)
+       ├── mu, g2, g3, nu_per_mu, n_slots              (channels, groups)
+       └── mu_pair, c2, c3a, c3b, zero_shared, n_pairs (channels, groups)
 
 Cost
 ----
