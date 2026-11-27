@@ -301,6 +301,64 @@ def test_streamed_and_staged_runs_agree(tmp_path, fake):
     assert many, "three jobs split a container into ranges"
 
 
+def test_valid_kernel_through_the_run(tmp_path, fake):
+    """One footprint support for the whole run: streamed and staged runs
+    at 5 agree, differ from 3, and record it; a changed support redoes the
+    plan; the stages after the plan refuse files made with another one."""
+    import json
+    from dataclasses import replace
+
+    from giant_python.extraction.raster.container import read_container
+    from giant_python.extraction.raster.plan import read_plan
+
+    p5 = replace(PARAMS, valid_kernel=5)
+    seeds = seeds_file(tmp_path)
+    table = make_session(tmp_path / "streamed")
+    silo.run_silo(table, p5, EX, seeds_file=seeds)
+    s1 = SiloSession.open(table)
+    streamed = _all_results(s1)
+    assert read_plan(s1.plan_file(0)).params.valid_kernel == 5
+    s = SiloSession.open(make_session(tmp_path / "staged"))
+    silo.localize(s, p5, EX)
+    silo.plan(s, p5, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, p5, EX)
+    c = read_container(s.container_file(0, 0), data=False)
+    assert c.params["valid_kernel"] == 5
+    # the solve and collect stages refuse another support
+    with pytest.raises(ValueError, match="valid_kernel=5"):
+        silo_solve.dispatch(s, PARAMS, 1, EX)
+    for job in silo_solve.dispatch(s, p5, 1, EX):
+        silo_solve.solve_job(job, execution=EX)
+    with pytest.raises(ValueError, match="valid_kernel=5"):
+        silo_collect.collect(s, PARAMS, EX)
+    silo_collect.collect(s, p5, EX)
+    staged = _all_results(s)
+    assert staged.keys() == streamed.keys()
+    for key in staged:
+        for name, value in staged[key].items():
+            np.testing.assert_array_equal(value, streamed[key][name])
+    with h5py.File(s.out_dir / "experiment_summary.h5") as f:
+        assert f["params"]["validKernel"].shape == (5, 5)
+    record = json.loads((s.work_dir / "collect.json").read_text())
+    assert record["valid_kernel"] == 5
+    # a solver at 3 on these containers is refused before anything runs
+    with pytest.raises(ValueError, match="--valid-kernel 5"):
+        silo_solve.solve_containers(s, PARAMS, EX)
+    # a plan at 5 is refused by a prepare at 3; planning at 3 redoes it
+    with pytest.raises(ValueError, match="valid_kernel=5"):
+        silo.prepare(s, PARAMS, EX)
+    assert silo.plan(s, PARAMS, EX, seeds=_seeds(s, tmp_path))[0]["file"]
+    assert read_plan(s.plan_file(0)).params.valid_kernel == 3
+    silo.prepare(s, PARAMS, EX)
+    silo_solve.solve_containers(s, PARAMS, EX)
+    three = _all_results(s)
+    assert three.keys() == staged.keys()
+    assert any(
+        not np.array_equal(three[k]["footprints"], staged[k]["footprints"])
+        for k in staged
+    )
+
+
 def test_settings_change_redoes_units(tmp_path, fake):
     """A changed solver setting redoes the solve stage only."""
     s = SiloSession.open(make_session(tmp_path))
@@ -520,6 +578,14 @@ def test_cli(tmp_path, fake, capsys):
         ]
     )
     p = params_from_args(args)
+    assert p.valid_kernel == 3
+    for cmd in ("silo", "silo-plan", "silo-prepare", "silo-collect"):
+        assert (
+            params_from_args(
+                build_parser().parse_args([cmd, "t.h5", "--valid-kernel", "5"])
+            ).valid_kernel
+            == 5
+        )
     assert (p.lam, p.nmf_iter, p.footprint_variance, p.peak_th) == (
         0.5,
         3,
@@ -632,5 +698,9 @@ def test_pool_workers_are_spawned_with_their_thread_counts():
 
     with make_pool(1, 2) as pool:
         assert pool._mp_context.get_start_method() == "spawn"
-        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        for name in (
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+        ):
             assert pool.submit(os.getenv, name).result() == "2"

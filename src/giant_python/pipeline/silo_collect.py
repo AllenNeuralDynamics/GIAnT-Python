@@ -150,6 +150,7 @@ def path_result(
         _check_same,
         _recorded,
         check_plan_localizations,
+        check_plan_support,
         read_user_rois,
     )
 
@@ -163,6 +164,7 @@ def path_result(
         "baseline_source",
     )
     plan = read_plan(pf)
+    check_plan_support(f"the plan {pf.name}", plan, params)
     labels, masks = read_user_rois(pf)
     sp = params.solver_params()
     n = session.n_trials
@@ -320,6 +322,7 @@ def collect(
         "created": pm["endTime"],
         "baseline_source": params.baseline_source,
         "baseline_mode": params.baseline_mode,
+        "valid_kernel": params.valid_kernel,
         "network_baseline": used,
         "localization_network_baseline": localized,
         "kept_sources": kept,

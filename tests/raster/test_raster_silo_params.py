@@ -262,6 +262,11 @@ def test_python_only_settings_are_recorded_when_not_matlabs():
         {"baseline_window_s": 0.1},
         {"seed_fit": "other"},
         {"seed_merge_px": -1.0},
+        {"valid_kernel": 4},
+        {"valid_kernel": 0},
+        {"valid_kernel": -3},
+        {"valid_kernel": 5.0},
+        {"valid_kernel": True},
     ],
 )
 def test_invalid_values_are_rejected(kwargs):
@@ -342,6 +347,32 @@ def test_seed_fit_settings_reach_the_plan_and_keep_old_hashes():
     m = a.to_matlab(2, 80.0)
     assert (m["seedFit"], m["seedMergePx"]) == ("local", 1.5)
     assert "seedFit" not in matlab.to_matlab(2, 80.0)
+
+
+def test_valid_kernel_is_one_setting_for_plan_and_solver():
+    """The footprint support reaches the plan's zones and the solver
+    together; 3 (MATLAB's) leaves every stage's settings as before the
+    setting existed, another value changes the plan's and the solve's
+    only; the saved params struct records validKernel at its size."""
+    a, b = SiloParams(), SiloParams(valid_kernel=5)
+    assert a.valid_kernel == PlanParams.valid_kernel == 3
+    assert a.valid_kernel == SolverParams.valid_kernel
+    assert b.plan_params().valid_kernel == b.solver_params().valid_kernel == 5
+    assert a.plan_params().zone_radius == 3
+    assert b.plan_params().zone_radius == 4
+    for stage in ("localize", "plan", "prepare", "solve", "collect"):
+        assert "valid_kernel" not in a.stage_settings(stage)
+    for stage in ("localize", "prepare", "collect"):
+        assert a.stage_settings(stage) == b.stage_settings(stage)
+    for stage in ("plan", "solve"):
+        assert b.stage_settings(stage) == {
+            **a.stage_settings(stage),
+            "valid_kernel": 5,
+        }
+    ma, mb = a.to_matlab(2, 80.0), b.to_matlab(2, 80.0)
+    assert set(ma) == set(mb)  # validKernel is MATLAB's own field
+    np.testing.assert_array_equal(ma["validKernel"], np.ones((3, 3), bool))
+    np.testing.assert_array_equal(mb["validKernel"], np.ones((5, 5), bool))
 
 
 def test_execution_options():

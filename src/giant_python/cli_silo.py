@@ -118,8 +118,18 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         "--footprint-variance",
         choices=("model", "fixed"),
         default=None,
-        help="Variance term of the footprint fit (default 'model', "
-        "MATLAB's).",
+        help="Variance term of the footprint fit (default 'fixed', the "
+        "solver's; 'model' is MATLAB's).",
+    )
+    g.add_argument(
+        "--valid-kernel",
+        type=int,
+        default=None,
+        help="Side of the square around each source where its footprint "
+        "may put intensity, pixels (odd; default 3, MATLAB's validKernel). "
+        "Sets the plan's grouping zones and the solver's footprints "
+        "together; give every stage the same value. 3 is the setting to "
+        "compare with MATLAB.",
     )
     g.add_argument(
         "--alignment",
@@ -432,6 +442,7 @@ def params_from_args(args: argparse.Namespace) -> SiloParams:
         "peak_th",
         "min_kinetic_score",
         "footprint_variance",
+        "valid_kernel",
         "localization_baseline",
         "inter_trial_alignment",
         "align_patch_px",

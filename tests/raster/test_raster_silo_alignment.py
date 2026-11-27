@@ -103,19 +103,26 @@ def test_patchwise_streamed_and_staged_runs_agree(tmp_path, halves):
 
 def test_localize_redoes_files_without_halves(tmp_path, halves):
     """Files localized for a rigid plan lack the half images: a patchwise
-    plan refuses them and the patchwise localize stage redoes them; files
-    with half images stay current for a rigid run."""
+    plan refuses them and the patchwise localize stage redoes them. Rigid
+    and affine runs accept files with and without half images and redo
+    neither, so existing localizations stay usable."""
     s = SiloSession.open(make_session(tmp_path))
     rigid = replace(PATCHWISE, inter_trial_alignment="rigid")
+    affine = replace(PATCHWISE, inter_trial_alignment="affine")
     assert len(silo.localize(s, rigid, EX)) == N_PATHS * N_TRIALS
     assert read_localization(s.localize_file(0, 0)).half_ims is None
+    for p in (rigid, affine):
+        assert silo.localize_jobs(s, p) == []
+        assert silo.plan_one(s, p, 0, overwrite=True).exists()
     with pytest.raises(ValueError, match="half images"):
         silo.plan_one(s, PATCHWISE, 0)
     jobs = silo.localize_jobs(s, PATCHWISE)
     assert len(jobs) == N_PATHS * N_TRIALS
     silo.localize(s, PATCHWISE, EX)
     assert silo.localize_jobs(s, PATCHWISE) == []
-    assert silo.localize_jobs(s, rigid) == []
+    for p in (rigid, affine):
+        assert silo.localize_jobs(s, p) == []
+        assert silo.plan_one(s, p, 0, overwrite=True).exists()
     assert silo.plan_one(s, PATCHWISE, 0).exists()
 
 
