@@ -110,8 +110,8 @@ class PlanParams:
     sigma_px : float
         Gaussian sigma of the PSF in pixels (``sigma_px``).
     valid_kernel : int
-        Side of the footprints' ``validKernel`` (3), which widens the zones
-        that group sources.
+        Side of the footprints' support (``validKernel``; 5 by default,
+        MATLAB's is 3), which widens the zones that group sources.
     min_source_pixels : int
         A source needs more selected pixels than this (5).
     """
@@ -130,7 +130,7 @@ class PlanParams:
     min_peak_distance: int = 1
     d_xy: float = 3.0
     sigma_px: float = 1.33
-    valid_kernel: int = 3
+    valid_kernel: int = 5
     min_source_pixels: int = 5
 
     def __post_init__(self) -> None:
@@ -629,12 +629,14 @@ def combined_activity_image(
     return act_im - med_im, med_im, nan_frac
 
 
-# fields added to PlanParams after plans were first written, with the value
-# that describes plans written before them (MATLAB's seed fit, no merging)
+# fields added to PlanParams after plans were first written, or whose
+# default changed, with the value that describes plans written before them
+# (MATLAB's seed fit, no merging, its patch size, its 3 x 3 support)
 _PLAN_FIELDS_ADDED = {
     "seed_fit": "matlab",
     "seed_merge_px": 0.0,
     "align_patch_px": 1500.0,
+    "valid_kernel": 3,
 }
 
 

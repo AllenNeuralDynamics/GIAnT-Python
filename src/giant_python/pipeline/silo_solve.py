@@ -515,7 +515,10 @@ def solve_job(
     containers_dir = Path(containers_dir or root / "containers")
     results_dir = Path(results_dir or root / "results")
     ex = execution or SiloExecution()
-    params = SiloParams(**job["params"])
+    # job files written before valid_kernel existed were made for MATLAB's
+    # 3 x 3 support (their containers record none, which means 3), not for
+    # today's default
+    params = SiloParams(**{"valid_kernel": 3, **job["params"]})
     options = SolverOptions(**job["solver"])
     t0 = time.perf_counter()
     done = {}

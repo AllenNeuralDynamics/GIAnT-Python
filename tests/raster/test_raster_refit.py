@@ -32,7 +32,9 @@ from giant_python.extraction.raster.solver_setup import (
 )
 
 SUBPROBLEM = Path(__file__).parent / "data" / "matlab_solver_subproblem.h5"
-PARAMS = SolverParams()
+# MATLAB's 3 x 3 support, which the MATLAB subproblem's thresholds below
+# were set with (the default is 5 x 5)
+PARAMS = SolverParams(valid_kernel=3)
 
 
 def test_find_events():
