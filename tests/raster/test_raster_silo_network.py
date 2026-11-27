@@ -869,3 +869,35 @@ def test_collect_checks_the_localization_baseline(tmp_path, fake):
     assert median_loc.stage_settings("solve") == NET.stage_settings("solve")
     with pytest.raises(ValueError, match="localization_baseline='network'"):
         silo_collect.collect(s, median_loc, EX, baseline_dir=bdir)
+
+
+def test_one_checkpoint_per_run(tmp_path, monkeypatch):
+    """Baselines kept from an earlier prediction must have been made with
+    the given checkpoint (its SHA-256, not only its name)."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    (bdir / "E1T2DMD2_BASELINE-80Hz.h5").unlink()
+    ckpt = tmp_path / "s6_test.pt"
+    ckpt.write_bytes(b"weights")
+    monkeypatch.setattr(
+        silo_baseline.shutil, "which", lambda c: f"/bin/{Path(c).name}"
+    )
+
+    def fake_run(args, **kw):
+        """Write the one file asked for."""
+        src = bdir / "E1T1DMD1_BASELINE-80Hz.h5"
+        dest = bdir / "E1T2DMD2_BASELINE-80Hz.h5"
+        dest.write_bytes(src.read_bytes())
+        with h5py.File(dest, "a") as f:
+            f.attrs["source"] = "E1T2DMD2_REGISTERED_DOWNSAMPLED-80Hz.tif"
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(silo_baseline.subprocess, "run", fake_run)
+    silo_baseline.predict_baselines(s, NET, bdir, ckpt)
+    assert (
+        silo_baseline.predict_baselines(s, NET, bdir, ckpt)["predicted"] == []
+    )
+    ckpt.write_bytes(b"retrained weights")  # same name, other model
+    with pytest.raises(ValueError, match="another checkpoint"):
+        silo_baseline.predict_baselines(s, NET, bdir, ckpt)

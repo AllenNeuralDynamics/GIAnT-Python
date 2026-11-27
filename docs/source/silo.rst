@@ -122,7 +122,8 @@ several times slower (the baselines are the same, to float16 rounding).
 GIAnT-Python does not import slap2-f0. Beside each file it predicts it
 writes a record (``<trial>_BASELINE-80Hz.json``: those settings, the movie,
 alignment and baseline files, the checkpoint's SHA-256 at prediction
-time); a baseline whose record does not fit the run is refused, and the
+time); a baseline whose record does not fit the run, or that another
+checkpoint (by its SHA-256) made, is refused, and the
 summary takes the checkpoint's identity from the record. Files made
 elsewhere (without a record) are used as they are; slap2-f0 records only
 the checkpoint's path and step in them.

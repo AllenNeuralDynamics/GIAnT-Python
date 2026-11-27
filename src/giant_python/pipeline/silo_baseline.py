@@ -223,6 +223,29 @@ def _check_movies(session: SiloSession, todo: list) -> None:
             )
 
 
+def _check_kept(session, params, baseline_dir, units, todo, identity):
+    """The baseline files that are kept must fit the run: their records
+    (:func:`check_baseline_record`), and the checkpoint they were predicted
+    with must be this one (by its SHA-256), so that one run does not mix
+    the predictions of two models."""
+    for d, t in _units(session, units):
+        if (d, t) in todo:
+            continue
+        base = baseline_path(baseline_dir, session.movie(d, t))
+        rec = check_baseline_record(
+            base, session.movie(d, t), session.alignment(d, t), params
+        )
+        made = (rec or {}).get("checkpoint") or {}
+        if made.get("sha256") and made["sha256"] != identity["sha256"]:
+            raise ValueError(
+                f"{base.name} was predicted with another checkpoint "
+                f"({made.get('name')}, SHA-256 {made['sha256'][:12]}...) "
+                f"than {identity['name']} ({identity['sha256'][:12]}...): "
+                "remove it and its record to predict it again, or give "
+                "that checkpoint"
+            )
+
+
 def _check_checkpoint(session, baseline_dir, units, ckpt: Path) -> None:
     """Warn when existing baseline files name another checkpoint."""
     import h5py
@@ -355,14 +378,7 @@ def predict_baselines(
     _check_checkpoint(session, baseline_dir, units, ckpt)
     todo = missing_baselines(session, baseline_dir, units)
     have = {(d, t) for d, t, _ in todo}
-    for d, t in _units(session, units):  # files kept: they must fit
-        if (d, t) not in have:
-            check_baseline_record(
-                baseline_path(baseline_dir, session.movie(d, t)),
-                session.movie(d, t),
-                session.alignment(d, t),
-                params,
-            )
+    _check_kept(session, params, baseline_dir, units, have, identity)
     record = {"predicted": [], "seconds": 0.0, "checkpoint": identity}
     if not todo:
         return record
