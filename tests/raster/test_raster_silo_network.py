@@ -412,6 +412,7 @@ def test_run_silo_default_source(tmp_path, fake, monkeypatch):
     seen = []
 
     def stop(session, params, *args, **kw):
+        """Record the params and stop the run."""
         seen.append(params)
         raise RuntimeError("stop")
 
@@ -444,6 +445,7 @@ def test_predict_baselines(tmp_path, monkeypatch):
     )
 
     def fake_run(args, **kw):
+        """slap2-f0 stood in for: write the files asked for."""
         calls.append(args)
         keys = args[args.index("--files") + 1].split(",")
         for k in keys:
@@ -538,6 +540,30 @@ def test_predict_baselines(tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="exited with 3"):
         silo_baseline.predict_baselines(s, params, bdir, ckpt)
+
+    # a run that writes a file and then fails: the file has its record, so
+    # a retry with other settings does not reuse it unchecked
+    def fail_after_one(args, **kw):
+        """Write the files, then fail."""
+        fake_run(args, **kw)
+        return subprocess.CompletedProcess(args, 1)
+
+    monkeypatch.setattr(silo_baseline.subprocess, "run", fail_after_one)
+    with pytest.raises(RuntimeError, match="exited with 1"):
+        silo_baseline.predict_baselines(s, params, bdir, ckpt)
+    written = bdir / "E1T3DMD1_BASELINE-80Hz.h5"
+    rec = json.loads(silo_baseline.record_path(written).read_text())
+    assert rec["baseline"]["name"] == written.name
+    with pytest.raises(ValueError, match="was predicted with"):
+        silo_baseline.predict_baselines(s, other, bdir, ckpt)
+    # stopped before the record got the file's identity: its settings hold
+    rec["baseline"] = None
+    silo_baseline.record_path(written).write_text(json.dumps(rec))
+    args = (written, s.movie(0, 2), s.alignment(0, 2))
+    assert silo_baseline.check_baseline_record(*args, params) is not None
+    with pytest.raises(ValueError, match="was predicted with"):
+        silo_baseline.check_baseline_record(*args, other)
+    written.unlink()
     monkeypatch.setattr(
         silo_baseline.subprocess,
         "run",

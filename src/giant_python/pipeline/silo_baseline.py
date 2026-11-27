@@ -106,13 +106,24 @@ def prediction_settings(params: SiloParams) -> dict:
 
 
 def write_baseline_record(
-    baseline: Path, movie: Path, alignment: Path, params, checkpoint: dict
+    baseline: Path,
+    movie: Path,
+    alignment: Path,
+    params,
+    checkpoint: dict,
+    done: bool = True,
 ) -> Path:
-    """Record how a baseline file was predicted (see the module)."""
+    """Record how a baseline file was predicted (see the module).
+
+    Written before the prediction runs with ``done=False`` (the baseline
+    file's identity left empty), so that a file written by a prediction
+    that then fails or is stopped still has its settings; and again with
+    the file's identity once it is there.
+    """
     path = record_path(baseline)
     rec = {
         "format": RECORD_FORMAT,
-        "baseline": _file_id(baseline),
+        "baseline": _file_id(baseline) if done else None,
         "movie": _file_id(movie),
         "alignment": _file_id(alignment),
         "settings": prediction_settings(params),
@@ -144,7 +155,11 @@ def check_baseline_record(
         return None
     rec = json.loads(path.read_text())
     again = f"predict {Path(baseline).name} again (remove it and its record)"
-    if rec.get("baseline") != _file_id(baseline):
+    # a record without the file's identity was written before a prediction
+    # that did not finish: the file (written whole by slap2-f0) is its
+    if rec.get("baseline") is not None and rec["baseline"] != _file_id(
+        baseline
+    ):
         raise ValueError(
             f"{path.name} does not describe {Path(baseline).name} (replaced "
             f"since?): remove the record, or {again}"
@@ -231,6 +246,19 @@ def _check_checkpoint(session, baseline_dir, units, ckpt: Path) -> None:
         )
 
 
+def _run(args: list, log: Path, verbose: bool):
+    """Run a command, its output shown or appended to ``log``."""
+    env = dict(os.environ)
+    if verbose:
+        return subprocess.run(args, env=env)
+    with open(log, "a", encoding="utf-8") as out:
+        out.write(" ".join(args) + "\n")
+        out.flush()
+        return subprocess.run(
+            args, stdout=out, stderr=subprocess.STDOUT, env=env
+        )
+
+
 def predict_baselines(
     session: SiloSession,
     params: SiloParams,
@@ -300,6 +328,15 @@ def predict_baselines(
     _check_movies(session, todo)
     exe = f0_command(command)
     baseline_dir.mkdir(parents=True, exist_ok=True)
+    for d, t, movie in todo:  # the settings, before any file is written
+        write_baseline_record(
+            baseline_path(baseline_dir, movie),
+            movie,
+            session.alignment(d, t),
+            params,
+            identity,
+            done=False,
+        )
     keys = sorted({m.name[: m.name.index("_REGISTERED")] for _, _, m in todo})
     args = [
         exe,
@@ -324,17 +361,17 @@ def predict_baselines(
     ]
     t0 = time.perf_counter()
     log = baseline_dir / "predict.log"
-    env = dict(os.environ)
-    if verbose:
-        proc = subprocess.run(args, env=env)
-    else:
-        with open(log, "a", encoding="utf-8") as out:
-            out.write(" ".join(args) + "\n")
-            out.flush()
-            proc = subprocess.run(
-                args, stdout=out, stderr=subprocess.STDOUT, env=env
-            )
+    proc = _run(args, log, verbose)
     record["seconds"] = time.perf_counter() - t0
+    for d, t, movie in todo:  # the files written, also by a failed run
+        if baseline_path(baseline_dir, movie).exists():
+            write_baseline_record(
+                baseline_path(baseline_dir, movie),
+                movie,
+                session.alignment(d, t),
+                params,
+                identity,
+            )
     if proc.returncode != 0:
         raise RuntimeError(
             f"slap2-f0 predict-registered exited with {proc.returncode}"
@@ -345,14 +382,6 @@ def predict_baselines(
         raise RuntimeError(
             "slap2-f0 predict-registered wrote no baseline for "
             + ", ".join(m.name for _, _, m in left)
-        )
-    for d, t, movie in todo:
-        write_baseline_record(
-            baseline_path(baseline_dir, movie),
-            movie,
-            session.alignment(d, t),
-            params,
-            identity,
         )
     record["predicted"] = [[d + 1, t + 1] for d, t, _ in todo]
     return record
