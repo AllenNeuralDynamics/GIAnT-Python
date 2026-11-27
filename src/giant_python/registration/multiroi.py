@@ -610,17 +610,23 @@ def open_trial(dat_path, first_line, last_line, params, device):
     return layout, FrameFormer(layout, samples, c0, 1, device), init, ds, dtk
 
 
-def trial_stats(source, ds, margin: int, n_channels: int) -> StatsWorker:
+def trial_stats(
+    source, ds, margin: int, n_channels: int
+) -> Optional[StatsWorker]:
     """Start the trial's statistics (:class:`.stats.worker.StatsWorker`):
     on a GPU their accumulator is set up on a thread of its own while the
     template is built, and then takes the registered frames there. A
     failure is logged and registration goes on without statistics."""
     from .stats import new_accumulator
 
-    return StatsWorker(
-        lambda: new_accumulator(source, ds, margin, n_channels),
-        source.former.device,
-    )
+    try:
+        return StatsWorker(
+            lambda: new_accumulator(source, ds, margin, n_channels),
+            source.former.device,
+        )
+    except Exception:  # e.g. no CUDA stream: registration goes on
+        log.exception("summary statistics cannot start; continuing without")
+        return None
 
 
 def _template_and_sink(source, init, ds, params, dtype, paths, stats, timer):

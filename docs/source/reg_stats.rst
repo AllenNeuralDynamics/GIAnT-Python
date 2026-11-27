@@ -339,3 +339,10 @@ arithmetic, memory-bound, at about 40 ms per frame. Registration on the CPU
 can leave the statistics out (``--no-stats``) and ``giant reg-stats
 --device cuda`` add them later (27 s for this trial, reading the raw
 recording and the movie again).
+
+Memory grows with the trial in one place: the shared modes keep every
+pixel's 8-frame bin means until the trial ends (frames / 8 x pixels x
+channels x 4 bytes: 0.1 GB for this 28 s trial, about 2.3 GB for a
+10-minute one), and their decomposition uses the smaller of the time-bin
+and spatial-bin Gram matrices. Everything else is held for a few blocks of
+frames at a time.

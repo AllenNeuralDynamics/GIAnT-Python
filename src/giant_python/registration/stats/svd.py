@@ -83,8 +83,10 @@ def _bin_sigma(bin_var: np.ndarray, members: np.ndarray):
 def _components(y: np.ndarray, k: int):
     """Top ``k`` signed components of ``y`` ``(n_bins, n_space)``.
 
-    From the eigenvectors of ``y y^T`` (time bins x time bins), which are
-    the left singular vectors; ``v = y^T u / s``.
+    From the eigenvectors of the smaller Gram matrix: ``y y^T`` (time bins
+    x time bins; its eigenvectors are the left singular vectors) or, for a
+    trial with more time bins than spatial bins, ``y^T y`` (then ``u = y v
+    / s``). Memory and time go with the smaller side squared and cubed.
 
     Returns
     -------
@@ -93,12 +95,16 @@ def _components(y: np.ndarray, k: int):
     total : float
         ``sum(y^2)`` (the sum of all squared singular values).
     """
-    gram = y @ y.T
+    tall = y.shape[0] > y.shape[1]
+    gram = y.T @ y if tall else y @ y.T
     evals, evecs = np.linalg.eigh(gram)
     order = np.argsort(evals)[::-1][: min(k, evals.size)]
     s = np.sqrt(np.maximum(evals[order], 0.0))
     u = evecs[:, order]
-    sign = np.sign((y.T @ u).sum(0))
+    if tall:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            u = (y @ u) / np.where(s > 0, s, np.nan)
+    sign = np.sign(np.nan_to_num((y.T @ u).sum(0)))
     sign[sign == 0] = 1
     return u * sign, s, float(np.trace(gram))
 

@@ -277,6 +277,26 @@ def test_gain_sums_do_not_overflow():
     np.testing.assert_allclose(curve.g3, 3e18 / (6 * 980), rtol=1e-12)
 
 
+def test_components_of_tall_and_wide_inputs():
+    """The top components equal numpy's SVD whichever Gram matrix is
+    smaller (more time bins than spatial bins, or fewer)."""
+    from giant_python.registration.stats.svd import _components
+
+    rng = np.random.default_rng(9)
+    for shape in ((40, 300), (300, 40)):
+        y = rng.normal(size=shape) + np.outer(
+            np.sin(np.arange(shape[0]) / 5), rng.normal(size=shape[1])
+        )
+        u, s, total = _components(y, 3)
+        uu, ss, _ = np.linalg.svd(y, full_matrices=False)
+        np.testing.assert_allclose(s, ss[:3], rtol=1e-9)
+        np.testing.assert_allclose(
+            np.abs(u.T @ uu[:, :3]), np.eye(3), atol=1e-8
+        )
+        assert (np.sum(y.T @ u, 0) >= 0).all()
+        assert total == pytest.approx(np.sum(y**2))
+
+
 def test_regression_weights_of_undetermined_pixels():
     """A pixel whose valid bins leave a time course flat gets NaN weights
     (not an error); the others are fitted."""
@@ -502,7 +522,7 @@ def test_rerun_without_stats_removes_old_file(patched, tmp_path):
     assert not stats_path(tmp_path / MOVIE).exists()
 
 
-@pytest.mark.parametrize("step", ["setup", "add", "finish", "write"])
+@pytest.mark.parametrize("step", ["start", "setup", "add", "finish", "write"])
 def test_failed_statistics_leave_registration(
     patched, tmp_path, step, monkeypatch, caplog
 ):
@@ -526,7 +546,9 @@ def test_failed_statistics_leave_registration(
         """A broken step."""
         raise RuntimeError("broken statistics")
 
-    if step == "setup":
+    if step == "start":
+        monkeypatch.setattr(multiroi, "StatsWorker", fail)
+    elif step == "setup":
         monkeypatch.setattr(accumulate.TrialStatsAccumulator, "__init__", fail)
     elif step == "add":
         monkeypatch.setattr(accumulate.TrialStatsAccumulator, "_block", fail)
@@ -550,7 +572,7 @@ def test_failed_statistics_leave_registration(
     multiroi.register_trial(
         layout.files[0], 1, 3000, d / MOVIE, d / ADATA, params
     )
-    assert "summary statistics failed" in caplog.text
+    assert "summary statistics" in caplog.text
     assert not stats_path(d / MOVIE).exists()
     assert sorted(p.name for p in d.iterdir()) == [ADATA, MOVIE]
     with h5py.File(d / MOVIE) as f, h5py.File(ref / MOVIE) as g:
