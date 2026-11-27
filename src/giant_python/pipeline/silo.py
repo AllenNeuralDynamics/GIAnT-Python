@@ -168,6 +168,27 @@ def _has_halves(path) -> bool:
     return bool(_attr(path, "half_ims"))
 
 
+def check_plan_alignment(what: str, plan, params: SiloParams) -> None:
+    """Refuse to extract or collect with another across-trial alignment
+    than the plan's: the trials are read through the plan's maps, and the
+    summaries record these settings."""
+    _check_same(
+        what,
+        plan.params.inter_trial_alignment,
+        params.inter_trial_alignment,
+        "inter_trial_alignment",
+        "--alignment",
+    )
+    if params.inter_trial_alignment == "patchwise":
+        _check_same(
+            what,
+            int(plan.params.align_patch_px),
+            int(params.align_patch_px),
+            "align_patch_px",
+            "--align-patch-px",
+        )
+
+
 def check_plan_support(what: str, plan, params: SiloParams) -> None:
     """Refuse to extract with a footprint support other than the one the
     plan's zones were made for (``valid_kernel``: one per run)."""
@@ -906,6 +927,7 @@ def prepare(
                 _attr(f, "settings_hash"),
             )
             check_plan_support(f"the plan {f.name}", plans[d][0], params)
+            check_plan_alignment(f"the plan {f.name}", plans[d][0], params)
         p, rois, ph = plans[d]
         base = _extraction_baseline(session, params, d, t, baseline_dir)
         h = _prepare_hash(session, params, ph, d, t, base)
@@ -1236,6 +1258,7 @@ def stream(  # noqa: C901
             "baseline_source",
         )
         check_plan_support(f"the plan {pf.name}", plan, params)
+        check_plan_alignment(f"the plan {pf.name}", plan, params)
         placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
         for t in (int(x) for x in plan.valid_trials):

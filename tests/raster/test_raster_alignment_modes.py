@@ -169,6 +169,13 @@ def test_kmeans_finds_separated_clusters():
     start = np.array([[0.0, 0], [0.5, 0], [1000, 1000]])
     labels, cen = kmeans(x, 3, start=start)
     assert np.bincount(labels, minlength=3).min() > 0
+    # the farthest point of a singleton is not moved (that would empty it)
+    pts = np.array([[0.0, 0], [10, 0], [11, 0]])
+    labels, cen = kmeans(
+        pts, 3, start=np.array([[5.0, 0], [10.5, 0], [1e3, 0]])
+    )
+    assert np.isfinite(cen).all()
+    assert sorted(np.bincount(labels, minlength=3)) == [1, 1, 1]
 
 
 def test_patches_have_their_size():

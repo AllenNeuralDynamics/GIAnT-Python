@@ -842,7 +842,7 @@ def plan_path(  # noqa: C901
         ali.corr, act_aligned, p.max_corr_thresh
     )
     # the valid trials stay those of the rigid alignment, as in MATLAB
-    grid = {}  # each trial's map of the canvas (rigid: computed per image)
+    refined = False
     if p.inter_trial_alignment != "rigid" and valid.size > 1:
         halves = (
             _canvas_halves(trials, keep, shape)
@@ -854,16 +854,15 @@ def plan_path(  # noqa: C901
         )
         if details is not None:
             details["alignment_info"] = refine_info
-        grid = {t: warp.grid_coords(t, shape) for t in aligned}
-        for t in aligned:
-            act_aligned[t] = warp_trial_image(
-                act_ims[t], warp, t, coords=grid[t]
-            )
+        refined = True
     for t in aligned:
-        mean_aligned[t] = warp_trial_image(
-            mean_ims[t], warp, t, coords=grid.get(t)
-        )
-    del grid
+        # a refined map's positions of the canvas, shared by the trial's two
+        # images and released before the next trial (rigid: per image)
+        grid = warp.grid_coords(t, shape) if refined else None
+        if refined:
+            act_aligned[t] = warp_trial_image(act_ims[t], warp, t, coords=grid)
+        mean_aligned[t] = warp_trial_image(mean_ims[t], warp, t, coords=grid)
+        del grid
 
     act_im, med_im, nan_frac = combined_activity_image(
         act_aligned[valid], p.nan_thresh

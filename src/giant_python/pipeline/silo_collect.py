@@ -149,6 +149,7 @@ def path_result(
         _check_localizations,
         _check_same,
         _recorded,
+        check_plan_alignment,
         check_plan_localizations,
         check_plan_support,
         read_user_rois,
@@ -165,6 +166,7 @@ def path_result(
     )
     plan = read_plan(pf)
     check_plan_support(f"the plan {pf.name}", plan, params)
+    check_plan_alignment(f"the plan {pf.name}", plan, params)
     labels, masks = read_user_rois(pf)
     sp = params.solver_params()
     n = session.n_trials

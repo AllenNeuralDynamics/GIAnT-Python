@@ -1206,8 +1206,14 @@ def kmeans(
         labels = np.full(x.shape[0], -1)
         for _ in range(max_iter):
             dist, new = cKDTree(cen).query(x)
-            for j in np.setdiff1d(np.arange(k), new):  # empty: singleton
-                far = int(np.argmax(dist))
+            counts = np.bincount(new, minlength=k)
+            for j in np.flatnonzero(counts == 0):
+                # MATLAB's 'singleton': the point farthest from its
+                # centroid, taken from a cluster that keeps a member
+                movable = counts[new] > 1
+                far = int(np.argmax(np.where(movable, dist, -1.0)))
+                counts[new[far]] -= 1
+                counts[j] = 1
                 new[far] = j
                 dist[far] = 0.0
                 cen[j] = x[far]

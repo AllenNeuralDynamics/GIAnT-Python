@@ -126,6 +126,21 @@ def test_localize_redoes_files_without_halves(tmp_path, halves):
     assert silo.plan_one(s, PATCHWISE, 0).exists()
 
 
+def test_later_stages_refuse_another_alignment(tmp_path, halves):
+    """Prepare and collect use the plan's maps and record the settings:
+    another alignment, or another patch size for patchwise, is refused."""
+    s = SiloSession.open(make_session(tmp_path))
+    silo.localize(s, PATCHWISE, EX)
+    silo.plan(s, PATCHWISE, EX)
+    rigid = replace(PATCHWISE, inter_trial_alignment="rigid")
+    other = replace(PATCHWISE, align_patch_px=300)
+    for p in (rigid, other):
+        with pytest.raises(ValueError, match="align"):
+            silo.prepare(s, p, EX)
+        with pytest.raises(ValueError, match="align"):
+            silo_collect.collect(s, p, EX)
+
+
 @pytest.mark.parametrize("mode", ["affine", "patchwise"])
 def test_plan_with_a_refined_alignment(tmp_path, mode):
     """The valid trials get the refined maps (the same valid trials as
