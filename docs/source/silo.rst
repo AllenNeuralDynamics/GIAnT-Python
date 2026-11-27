@@ -59,11 +59,10 @@ processes and threads, device, precision); it does not change results.
 
 Settings that MATLAB does not have are fields too: ``footprint_variance``
 (default: the solver's, now ``'fixed'``), the seeding options below
-(defaults: the plan stage's), the localization options of the F0-network
-work (``localization_baseline='network'`` with ``--baseline-dir``,
-``localization_surround``, ``localization_null``, ...; their defaults are
-MATLAB's), and ``trial_peaks``. They are added to the saved ``params`` (in
-camelCase) when they differ from MATLAB's algorithm: a default run records
+(defaults: the plan stage's), the baseline (``baseline_source`` and the
+settings it sets, below), and ``trial_peaks``. They are added to the saved
+``params`` (in camelCase) when they differ from MATLAB's algorithm: a
+default run records
 ``footprintVariance = 'fixed'``, ``seedFit = 'local'`` and
 ``seedMergePx = 1.5``, and a run with ``--set footprint_variance=model
 --set seed_fit=matlab --set seed_merge_px=0`` has MATLAB's fields exactly.
@@ -93,6 +92,84 @@ these options existed (with MATLAB's fit); ``seed_fit='matlab'`` with
 ``seed_merge_px=0`` keeps those current. The ported function
 :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`, and the
 standalone per-trial localization, keep MATLAB's fit as their own default.
+
+The F0 network's baseline
+-------------------------
+
+``baseline_source='network'`` (``--baseline network``) localizes and
+extracts with the baselines of the F0 network (slap2-F0-network,
+``slap2-f0 predict-registered``: one ``<trial>_BASELINE-80Hz.h5`` per
+registered trial-path, on its registered 80 Hz frame, in movie counts)
+instead of MATLAB's moving median and baseline fit. It is the default when
+the baselines are given:
+
+.. code-block:: bash
+
+   # baselines made beforehand (e.g. a GPU step of a pipeline)
+   giant silo path/to/trial_table.h5 --baseline-dir path/to/baselines
+   # or predicted here for the trial-paths without one (needs slap2-f0)
+   giant silo path/to/trial_table.h5 --f0-ckpt path/to/slap2_f0_s6_ft.pt
+
+``--f0-ckpt`` runs ``slap2-f0 predict-registered`` (found on the PATH, or
+``--f0-command``) once for every trial-path without a baseline file,
+with the run's ``activity_channel``, ``nan_thresh``, ``motion_thresh`` and
+``discard_initial_s``, on the GPU (``--f0-device cpu`` works, many times
+slower), into ``--baseline-dir`` or ``<work-dir>/baselines``.
+On a GPU that also drives a display, give ``--f0-out-frames 512`` (on an
+8 GB card): the default tile size fills the free memory, and Windows spills
+what does not fit into shared system memory instead of failing, which runs
+several times slower (the baselines are the same, to float16 rounding).
+GIAnT-Python does not import slap2-f0. Beside each file it predicts it
+writes a record (``<trial>_BASELINE-80Hz.json``: those settings, the movie,
+alignment and baseline files, the checkpoint's SHA-256 at prediction
+time); a baseline whose record does not fit the run, or that another
+checkpoint (by its SHA-256) made, is refused, and the
+summary takes the checkpoint's identity from the record. Files made
+elsewhere (without a record) are used as they are; slap2-f0 records only
+the checkpoint's path and step in them.
+
+``baseline_source`` sets the defaults of the settings that go with the
+baseline; any of them can still be set:
+
+============================  ===============  ======================
+setting                       ``'median'``     ``'network'``
+============================  ===============  ======================
+``localization_baseline``     ``'median'``     ``'network'``
+``localization_surround``     True             False
+``localization_null``         ``'none'``       ``'bootstrap'``
+``peak_th``                   3                8
+``baseline_mode``             ``'fit'`` (R0)   ``'gain'`` (N1)
+============================  ===============  ======================
+
+The localization settings are those recommended for the network's baseline
+(slap2-F0-network#6: no surround, the bootstrap null, the variance floor
+kept, threshold 8). ``baseline_mode`` is the solver's: 'gain' holds the
+network's baseline times one gain per pixel, fitted once after the first
+activity fit (N1 of the SILo port's baseline test, within its tolerances
+of refitting MATLAB's baseline model starting from the network's, at
+fewer parameters); 'fixed' holds it as it is (N0), 'fit_from' refits it
+(N3), 'fit' is MATLAB's own fit.
+
+``prepare`` (and the streaming run) maps each trial's baseline onto the
+selected pixels: bilinear at the pixels' positions in the trial's
+registered frame (the across-trial map the data are read through), divided
+by ``photonScale``, kept at the registration's frames in the container's
+``/baseline``; each subproblem's baseline is interpolated from it to the
+extraction's frames (:mod:`~giant_python.extraction.raster.baseline_map`).
+Pixels without a network value start from MATLAB's ``splitFreq`` baseline.
+A container's settings hash covers its baseline file, so new baselines
+redo the containers made from them. ``experiment_summary.h5`` records
+``baseline_source``, ``baseline_mode`` and, per trial-path, the baseline
+file and the checkpoint that extraction used (``network_baseline``, JSON)
+and that localization used (``localization_network_baseline``); the ``params``
+struct records the settings that differ from MATLAB's.
+
+The staged commands take the same settings as ``giant silo``. Those that
+read the baselines (``silo-localize``, which also takes ``--f0-ckpt``,
+and ``silo-prepare``) default to the network with ``--baseline-dir``; the
+others (``silo-plan``, ``silo-dispatch``, ``silo-collect``) need
+``--baseline network`` (or the same ``--params``). Each stage refuses files
+made with another baseline than its settings say.
 
 Stages
 ------

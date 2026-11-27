@@ -33,7 +33,7 @@ import math
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 import h5py
 import numpy as np
@@ -223,7 +223,12 @@ class SubproblemGroup:
     sel: np.ndarray
     sources_rc: np.ndarray
 
-    def subproblem(self, y: np.ndarray, finv: np.ndarray) -> Subproblem:
+    def subproblem(
+        self,
+        y: np.ndarray,
+        finv: np.ndarray,
+        baseline: Optional[np.ndarray] = None,
+    ) -> Subproblem:
         """The group's subproblem in one trial.
 
         Parameters
@@ -233,6 +238,9 @@ class SubproblemGroup:
             (``TrialData.y``).
         finv : ndarray of shape (pixels, frames)
             Its variance multiplier (``TrialData.finv``).
+        baseline : ndarray of shape (pixels, frames), optional
+            The group's external baseline (``Subproblem.baseline``), at the
+            group's pixels only.
 
         Returns
         -------
@@ -248,6 +256,7 @@ class SubproblemGroup:
             sources=np.asarray(self.sources, dtype=np.int64),
             row0=int(self.row0),
             col0=int(self.col0),
+            baseline=baseline,
         )
 
 

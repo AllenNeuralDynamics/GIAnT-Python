@@ -6,6 +6,15 @@ kinetics test, and writes ``experiment_summary.h5`` and
 ``per_trial_summary.h5`` in GIAnT-MATLAB's schema, then the trial table's
 ``source_extraction`` fields (``analysis_params``, ``fn_raw``), as
 ``SILo.m`` does at its end.
+
+With the network's baseline, ``experiment_summary.h5`` also gets the
+attributes ``baseline_source``, ``baseline_mode``, ``localization_baseline``,
+``network_baseline`` (JSON: per trial-path, the baseline file and the
+network's checkpoint that extraction used) and
+``localization_network_baseline`` (the same for localization, which
+decided the seeds); the ``params`` struct records
+the settings that differ from MATLAB's (``baselineSource``,
+``baselineMode``, ``peakth``, ``localizationSurround``, ...).
 """
 
 from __future__ import annotations
@@ -37,14 +46,31 @@ def _results_files(session: SiloSession, d: int, t: int) -> list:
     )
 
 
-def _container_hash(session, params, plan_hash, d, t) -> Optional[str]:
+def _container_hash(
+    session, params, plan_hash, d, t, baseline_dir=None
+) -> Optional[str]:
     """The prepare hash of trial-path ``(d, t)`` from its current inputs;
-    None if its raw recording is not here (a collect machine without the
-    raw data: results are then checked against plan and settings only)."""
-    from .silo import _prepare_hash
+    None if its raw recording or its network baseline is not here (a
+    collect machine without them: results are then checked against plan
+    and settings only)."""
+    from .silo import (
+        _baseline_file,
+        _prepare_hash,
+        baseline_folder,
+        registered_name,
+    )
 
+    base = None
+    if params.baseline_mode != "fit":
+        # named after the table's registered movie, which need not be here
+        base = _baseline_file(
+            baseline_folder(session, baseline_dir),
+            registered_name(session, d, t),
+        )
+        if not base.exists():
+            return None
     try:
-        return _prepare_hash(session, params, plan_hash, d, t)
+        return _prepare_hash(session, params, plan_hash, d, t, base)
     except OSError:
         return None
 
@@ -91,9 +117,18 @@ def _outcome_loader(files: list, solver_params):
 
 
 def path_result(
-    session: SiloSession, params: SiloParams, d: int
+    session: SiloSession,
+    params: SiloParams,
+    d: int,
+    baseline_dir=None,
+    provenance: Optional[dict] = None,
 ) -> Optional[object]:
     """Everything the summaries need of path ``d``, read from its files.
+
+    ``provenance``, if given, gets the network baseline (its identity, as
+    the results files record it) of each trial-path assembled here, keyed
+    ``path<d>_trial<tttt>``: from the files that are used, not from earlier
+    runs' files left in the folder.
 
     Returns
     -------
@@ -110,11 +145,23 @@ def path_result(
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.stage_files import read_localization
     from ..extraction.raster.summary import PathResult, read_alignment_record
-    from .silo import read_user_rois
+    from .silo import (
+        _check_localizations,
+        _check_same,
+        _recorded,
+        check_plan_localizations,
+        read_user_rois,
+    )
 
     pf = session.plan_file(d)
     if not pf.exists():
         return None
+    _check_same(
+        f"the plan {pf.name}",
+        _recorded(pf, "baseline_source"),
+        params.baseline_source,
+        "baseline_source",
+    )
     plan = read_plan(pf)
     labels, masks = read_user_rois(pf)
     sp = params.solver_params()
@@ -122,6 +169,8 @@ def path_result(
     trials: list = [None] * n
     alignment: list = [None] * n
     peaks: list = [None] * n
+    check_plan_localizations(session, d)  # its peaks, its baselines
+    _check_localizations(session, params, d)  # what the summary records
     for t in range(n):
         f = session.localize_file(d, t)
         if session.keep[d, t] and f.exists():
@@ -136,7 +185,7 @@ def path_result(
             _results_files(session, d, t),
             plan_hash,
             science,
-            _container_hash(session, params, plan_hash, d, t),
+            _container_hash(session, params, plan_hash, d, t, baseline_dir),
         )
         if not files:
             raise FileNotFoundError(
@@ -145,6 +194,10 @@ def path_result(
                 f"{session.results_dir}"
             )
         trials[t] = _outcome_loader(files, sp)
+        if provenance is not None:
+            used = _baseline_identity(files)
+            if used is not None:
+                provenance[f"path{d + 1}_trial{t + 1:04d}"] = used
         alignment[t] = read_alignment_record(session.alignment(d, t))
     z = attr(pf, "z_depth")
     return PathResult(
@@ -182,6 +235,7 @@ def collect(
     update_table: bool = True,
     start_time: Optional[str] = None,
     save_subproblems_dir: str = "",
+    baseline_dir=None,
 ) -> dict:
     """Stage ``collect``: the summaries and the trial table's fields.
 
@@ -197,6 +251,10 @@ def collect(
         ``startTime`` to record (default: now).
     save_subproblems_dir : str
         ``saveSubproblemsDir`` to record.
+    baseline_dir : str or Path, optional
+        Folder of the network's baselines (default: the session's), to
+        check the results against them; without the files there the
+        results are checked against plan and settings only.
 
     Returns
     -------
@@ -209,7 +267,11 @@ def collect(
     ex = execution or SiloExecution()
     start_time = start_time or now()
     t0 = time.perf_counter()
-    results = [path_result(session, params, d) for d in range(session.n_paths)]
+    used: dict = {}
+    results = [
+        path_result(session, params, d, baseline_dir, used)
+        for d in range(session.n_paths)
+    ]
     kept = {}
     for d, r in enumerate(results):
         if r is None:
@@ -238,11 +300,28 @@ def collect(
         session.num_channels,
         params.activity_channel,
     )
+    localized = localization_baselines(session)
+    if params.needs_network_baseline or params.baseline_source != "median":
+        # MATLAB's algorithm leaves the file as MATLAB writes it
+        with h5py.File(session.out_dir / "experiment_summary.h5", "a") as f:
+            f.attrs["baseline_source"] = params.baseline_source
+            f.attrs["baseline_mode"] = params.baseline_mode
+            f.attrs["localization_baseline"] = params.localization_baseline
+            if used:
+                f.attrs["network_baseline"] = json.dumps(used, sort_keys=True)
+            if localized:
+                f.attrs["localization_network_baseline"] = json.dumps(
+                    localized, sort_keys=True
+                )
     t2 = time.perf_counter()
     if update_table:
         update_trial_table(session, pm)
     record = {
         "created": pm["endTime"],
+        "baseline_source": params.baseline_source,
+        "baseline_mode": params.baseline_mode,
+        "network_baseline": used,
+        "localization_network_baseline": localized,
         "kept_sources": kept,
         "kinetics_seconds": t1 - t0,
         "write_seconds": t2 - t1,
@@ -253,6 +332,37 @@ def collect(
     tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
     os.replace(tmp, path)
     return record
+
+
+def localization_baselines(session: SiloSession) -> dict:
+    """The network baselines the planned paths' trials were localized with
+    (which decided the seeds), keyed ``path<d>_trial<tttt>``; empty with
+    the moving median."""
+    from .silo import check_plan_localizations, localization_baseline
+
+    out = {}
+    for d in range(session.n_paths):
+        if not session.plan_file(d).exists():
+            continue
+        check_plan_localizations(session, d)
+        for t in range(session.n_trials):
+            if session.keep[d, t] and session.localize_file(d, t).exists():
+                used = localization_baseline(session, d, t)
+                if used is not None:
+                    out[f"path{d + 1}_trial{t + 1:04d}"] = used
+    return out
+
+
+def _baseline_identity(files: list) -> Optional[dict]:
+    """The network baseline recorded in a trial's results files (they are
+    of one container, so they record the same), or None."""
+    for f in files:
+        value = attr(f, "network_baseline")
+        if value:
+            if isinstance(value, bytes):
+                value = value.decode()
+            return json.loads(value)
+    return None
 
 
 def read_kept(path) -> dict:
