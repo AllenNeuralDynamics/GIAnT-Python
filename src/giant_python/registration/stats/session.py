@@ -90,6 +90,11 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
         Instead of ``warp``: rigid shifts (consensus pixel ``(r, c)`` is at
         ``(r + dr, c + dc)`` in the trial), NaN for trials left out.
 
+    Raises
+    ------
+    ValueError
+        If the trials' statistics differ in their number of channels.
+
     Returns
     -------
     dict
@@ -113,6 +118,8 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
             max(stats[t]["maps"]["mean"].shape[d] for t in used)
             for d in (1, 2)
         )
+        if len({stats[t]["maps"]["mean"].shape[0] for t in used}) > 1:
+            raise ValueError("the trials' statistics differ in channels")
     sums, wsum, out = {}, {}, {}
     for t in used:
         maps = stats[t]["maps"]

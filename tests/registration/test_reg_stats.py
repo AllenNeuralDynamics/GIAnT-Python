@@ -714,6 +714,13 @@ def test_combine_trials_of_different_sizes():
     assert out["n_trials"][0, 5, 31] == 1  # cols 30-31: the second only
     assert out["n_trials"][0, 19, 31] == 0
     assert np.isnan(out["var"][0, 19, 31])
+    two = {
+        "maps": {
+            k: np.concatenate([v, v]) for k, v in trials[1]["maps"].items()
+        }
+    }
+    with pytest.raises(ValueError, match="channels"):
+        combine_trials([trials[0], two], shifts=np.zeros((2, 2)))
 
 
 def test_pair_sums_match_definition(tmp_path):
