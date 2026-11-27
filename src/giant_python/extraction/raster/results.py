@@ -129,6 +129,16 @@ class ResultsFile:
     attrs: dict
 
 
+def _json_default(value):
+    """NumPy values in a solver's info as JSON types (the baseline modes'
+    per-pixel gains are arrays)."""
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
 def write_results(
     path,
     record: TrialRecord,
@@ -186,7 +196,9 @@ def write_results(
                 g["ls"] = np.asarray(r.ls)
                 g["f0"] = np.asarray(r.f0)
                 g["snr"] = np.asarray(r.snr)
-                g.attrs["info"] = json.dumps(r.info, sort_keys=True)
+                g.attrs["info"] = json.dumps(
+                    r.info, sort_keys=True, default=_json_default
+                )
         os.replace(tmp, path)
     except BaseException:
         if tmp.exists():

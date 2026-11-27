@@ -466,6 +466,12 @@ class SiloSession:
         """Folder of the solver jobs."""
         return self.work_dir / "jobs"
 
+    @property
+    def baselines_dir(self) -> Path:
+        """Default folder of the network's baselines (where ``--f0-ckpt``
+        writes them when no ``--baseline-dir`` is given)."""
+        return self.work_dir / "baselines"
+
 
 def write_skip(
     path: Path, reason: str, settings_hash: str, plan_hash: str = ""

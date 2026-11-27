@@ -170,10 +170,19 @@ def results_attrs(
     Besides the settings hash and the container's identity it records
     ``solve_settings`` (:func:`solve_settings`), ``solve_science``
     (:func:`solve_science`) and ``plan_hash`` (the plan the container was
-    made from), which the collect stage checks.
+    made from), which the collect stage checks, and, when the solver used
+    the container's network baseline (a ``baseline_mode`` other than
+    'fit'), ``network_baseline`` (JSON: its identity).
     """
     src = getattr(container, "source", {}) or {}
-    plan_hash = (getattr(container, "params", {}) or {}).get("plan", "")
+    cparams = getattr(container, "params", {}) or {}
+    plan_hash = cparams.get("plan", "")
+    extra = {}
+    if cparams.get("baseline") and params.baseline_mode != "fit":
+        # only a baseline the solver used ('fit' ignores the container's)
+        extra["network_baseline"] = json.dumps(
+            cparams["baseline"], sort_keys=True
+        )
     return {
         "settings_hash": h,
         "solve_settings": solve_settings(params, options),
@@ -189,7 +198,34 @@ def results_attrs(
         "photon_scale": float(container.photon_scale),
         "extracted": int(extracted),
         "span": np.asarray(span, np.int64),
+        **extra,
     }
+
+
+def check_container(container, params: SiloParams, name: str) -> None:
+    """Refuse to solve a container with other baseline settings than it
+    was prepared for, or without the baseline the solver's mode needs."""
+    used = (container.params or {}).get("baseline_source", "median")
+    if used != params.baseline_source:
+        raise ValueError(
+            f"{name} was prepared with baseline_source={used!r}, these "
+            f"settings have {params.baseline_source!r}: give every stage "
+            f"the same settings (e.g. --baseline {used})"
+        )
+    if params.baseline_mode != "fit" and not container.baseline_filled:
+        raise ValueError(
+            f"{name} has no network baseline; baseline_mode "
+            f"{params.baseline_mode!r} needs one (prepare it with the "
+            "network's baselines)"
+        )
+    if params.baseline_mode == "fit" and container.baseline_filled:
+        # its settings hash covers the baseline, which 'fit' does not use:
+        # collect would take the results for stale
+        raise ValueError(
+            f"{name} was prepared with the network's baseline for a mode "
+            "that uses it; these settings have baseline_mode 'fit': give "
+            "every stage the same settings (or prepare it again)"
+        )
 
 
 def solve_container(
@@ -236,6 +272,7 @@ def solve_container(
     chash = attr(container_path, "settings_hash")
     t0 = time.perf_counter()
     c = read_container(container_path, data=False)
+    check_container(c, params, container_path.name)
     n_sub = c.n_subproblems
     span = (0, n_sub) if span is None else (int(span[0]), int(span[1]))
     if not 0 <= span[0] <= span[1] <= n_sub:
@@ -244,14 +281,13 @@ def solve_container(
     if not overwrite and attr(out_path, "settings_hash") == h:
         return None
     extracted = c.frame_lines.size >= params.min_frames
+    sp = params.solver_params()
     subs, idx = [], []
     if extracted and span[1] > span[0]:
         c = read_container(container_path, data=True)
         idx = list(range(*span))
-        subs = [c.subproblem(k) for k in idx]
-    results = solve_subproblem_list(
-        subs, params.solver_params(), options, pool
-    )
+        subs = [c.subproblem(k, sp) for k in idx]
+    results = solve_subproblem_list(subs, sp, options, pool)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_results(
         out_path,
@@ -351,6 +387,7 @@ def dispatch(
     entries = []  # (container file, container hash, k, work)
     for _, f in _containers(session):
         c = read_container(f, data=False)
+        check_container(c, params, f.name)
         h = attr(f, "settings_hash")
         n_px = [p.size for p in c.subproblem_pixels]
         n_src = [s.size for s in c.subproblem_sources]

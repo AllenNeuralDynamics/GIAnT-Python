@@ -11,7 +11,8 @@ needs neither the raw data nor the SLAP2 reader nor the trial table:
   sources) with its crop of the consensus map;
 * the trial's global and user-ROI traces;
 * the parameters, the code version and a hash of the settings;
-* reserved, empty datasets for the F0 network's baseline at the pixels.
+* the F0 network's baseline at the pixels, at the registration's frames,
+  when the run extracts with it (otherwise the datasets stay empty).
 
 File layout (HDF5, row-major, zero-based indices; lines are one-based)::
 
@@ -34,12 +35,18 @@ File layout (HDF5, row-major, zero-based indices; lines are one-based)::
     /subproblems/crop      (subproblems, 4) row0, col0, rows, cols
     /traces/global_f       (channels, frames), file channel order
     /traces/roi_f, roi_fsvd  (rois, channels, frames), analysis order
-    /baseline/values       (pixels, 0), resizable: the F0 network's baseline
-                           at the pixels, at the registration's frames
-    /baseline/frame_lines  (0,), resizable: those frames' lines
+    /baseline/values       (pixels, registered frames) float32, resizable:
+                           the F0 network's baseline at the pixels (counts
+                           / photon_scale), at the registration's frames;
+                           NaN where a pixel has no network value
+    /baseline/frame_lines  (registered frames,), resizable: their lines
 
-``/baseline`` has the attribute ``filled = 0`` until a later stage maps the
-network's baseline onto the pixels and writes it.
+``/baseline`` has the attributes ``filled`` (0 while empty) and, when
+filled, ``identity`` (JSON: the baseline file and the network's record,
+:class:`~giant_python.extraction.raster.baseline_map.TrialBaseline`). A
+subproblem's baseline is interpolated from it to the extraction's frames
+(:func:`~giant_python.extraction.raster.baseline_map.subproblem_baseline`)
+when it is read for a solver mode that uses it.
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ import h5py
 import numpy as np
 
 from ... import __version__
+from .baseline_map import TrialBaseline, subproblem_baseline
 from .solver_setup import Subproblem
 from .trial_data import TrialData
 
@@ -151,6 +159,13 @@ class Container:
         Version of the package that wrote the file; hash of ``params``.
     baseline_filled : bool
         Whether the network's baseline has been written.
+    baseline_values : ndarray or None
+        ``(pixels, registered frames)`` float32: the network's baseline
+        (read with the data, when filled).
+    baseline_lines : ndarray or None
+        Lines of the registered frames (when filled).
+    baseline_identity : dict
+        The baseline file and the network's record (when filled).
     """
 
     y: Optional[np.ndarray]
@@ -175,19 +190,31 @@ class Container:
     code_version: str = ""
     settings_hash: str = ""
     baseline_filled: bool = False
+    baseline_values: Optional[np.ndarray] = None
+    baseline_lines: Optional[np.ndarray] = None
+    baseline_identity: dict = field(default_factory=dict)
 
     @property
     def n_subproblems(self) -> int:
         """Number of subproblems."""
         return len(self.subproblem_pixels)
 
-    def subproblem(self, k: int) -> Subproblem:
+    def subproblem(self, k: int, solver_params=None) -> Subproblem:
         """Subproblem ``k`` (zero-based) of a container read with its data.
+
+        Parameters
+        ----------
+        k : int
+        solver_params : SolverParams, optional
+            The solver's parameters. When their ``baseline_mode`` uses an
+            external baseline, the subproblem gets the network's
+            (:func:`~.baseline_map.subproblem_baseline`).
 
         Raises
         ------
         ValueError
-            If the container was read without its data.
+            If the container was read without its data, or has no network
+            baseline for a mode that needs one.
         IndexError
             If ``k`` is not one of the subproblems (negative indices are
             not accepted, as when reading from the file).
@@ -196,6 +223,17 @@ class Container:
             raise ValueError("the container was read without its data")
         _check_index(k, self.n_subproblems)
         pix = self.subproblem_pixels[k]
+        baseline = None
+        if _uses_baseline(solver_params):
+            if self.baseline_values is None:
+                raise ValueError(_NO_BASELINE)
+            baseline = subproblem_baseline(
+                self.baseline_values[pix],
+                self.baseline_lines,
+                self.frame_lines,
+                self.y[0, pix],
+                solver_params,
+            )
         return _subproblem(
             self.y[:, pix],
             self.finv[pix],
@@ -204,7 +242,22 @@ class Container:
             pix,
             self.subproblem_sources[k],
             self.crops[k],
+            baseline,
         )
+
+
+_NO_BASELINE = (
+    "the container has no network baseline; the solver's baseline mode "
+    "needs one (prepare it with the network's baselines)"
+)
+
+
+def _uses_baseline(solver_params) -> bool:
+    """Whether a solver's baseline mode reads ``Subproblem.baseline``."""
+    return (
+        solver_params is not None
+        and getattr(solver_params, "baseline_mode", "fit") != "fit"
+    )
 
 
 def _check_index(k: int, n: int) -> None:
@@ -221,7 +274,9 @@ def crop_of(pixel_rc: np.ndarray) -> np.ndarray:
     return np.array([lo[0], lo[1], hi[0] - lo[0] + 1, hi[1] - lo[1] + 1])
 
 
-def _subproblem(y, finv, pixel_rc, sources_rc, pixels, sources, crop):
+def _subproblem(
+    y, finv, pixel_rc, sources_rc, pixels, sources, crop, baseline=None
+):
     """Assemble a :class:`Subproblem` from its rows and index lists."""
     row0, col0, rows, cols = (int(v) for v in crop)
     sel = np.zeros((rows, cols), dtype=bool)
@@ -235,6 +290,7 @@ def _subproblem(y, finv, pixel_rc, sources_rc, pixels, sources, crop):
         sources=np.asarray(sources, dtype=np.int64),
         row0=row0,
         col0=col0,
+        baseline=baseline,
     )
 
 
@@ -295,6 +351,7 @@ def write_container(
     compression: Optional[str] = COMPRESSION,
     compression_opts=None,
     chunk_pixels: int = CHUNK_PIXELS,
+    baseline: Optional[TrialBaseline] = None,
 ) -> Path:
     """Write one trial-path's container.
 
@@ -332,6 +389,10 @@ def write_container(
         Pixels per chunk; a chunk holds all frames of its pixels, so a
         subproblem is read as the few chunks around its pixels (small
         chunks read single subproblems faster, at the same file size).
+    baseline : TrialBaseline, optional
+        The network's baseline at the trial's pixels
+        (:func:`~.baseline_map.read_trial_baseline`), written to
+        ``/baseline``.
 
     Returns
     -------
@@ -349,6 +410,11 @@ def write_container(
     n_px = trial.y.shape[1]
     if len(subproblem_pixels) != len(subproblem_sources):
         raise ValueError("one source list is needed per subproblem")
+    if baseline is not None and baseline.values.shape[0] != n_px:
+        raise ValueError(
+            f"the baseline has {baseline.values.shape[0]} pixels; the trial "
+            f"has {n_px}"
+        )
     pix_flat, pix_off = _ragged(subproblem_pixels, n_px, "pixels")
     src_flat, src_off = _ragged(
         subproblem_sources, sources_rc.shape[0], "sources"
@@ -400,6 +466,8 @@ def write_container(
             _reserve_baseline(
                 f, n_px, chunk_pixels, compression, compression_opts
             )
+            if baseline is not None:
+                _write_baseline(f["baseline"], baseline)
         os.replace(tmp, path)
     except BaseException:
         if tmp.exists():
@@ -434,6 +502,25 @@ def _reserve_baseline(f, n_px, chunk_pixels, compression, compression_opts):
     )
     g.attrs["filled"] = 0
     g.attrs["units"] = "counts / photon_scale"
+
+
+def _write_baseline(g, baseline: TrialBaseline) -> None:
+    """Fill the reserved datasets with the network's baseline."""
+    values = np.asarray(baseline.values, dtype=np.float32)
+    lines = np.asarray(baseline.lines, dtype=np.float64).ravel()
+    if values.shape[1] != lines.size:
+        raise ValueError(
+            f"the baseline has {values.shape[1]} frames and {lines.size} "
+            "lines"
+        )
+    g["values"].resize(values.shape)
+    g["values"][...] = values
+    g["frame_lines"].resize(lines.shape)
+    g["frame_lines"][...] = lines
+    g.attrs["filled"] = 1
+    g.attrs["identity"] = json.dumps(
+        _jsonable(baseline.identity), sort_keys=True
+    )
 
 
 def _check_format(f) -> None:
@@ -474,6 +561,8 @@ def read_container(path, data: bool = True) -> Container:
     with h5py.File(path, "r") as f:
         _check_format(f)
         sub = f["subproblems"]
+        g = f["baseline"]
+        filled = bool(g.attrs["filled"])
         return Container(
             y=f["data/y"][()] if data else None,
             finv=f["data/finv"][()] if data else None,
@@ -500,7 +589,14 @@ def read_container(path, data: bool = True) -> Container:
             source=json.loads(f.attrs["source"]),
             code_version=str(f.attrs["code_version"]),
             settings_hash=str(f.attrs["settings_hash"]),
-            baseline_filled=bool(f["baseline"].attrs["filled"]),
+            baseline_filled=filled,
+            baseline_values=g["values"][()] if filled and data else None,
+            baseline_lines=g["frame_lines"][()] if filled else None,
+            baseline_identity=(
+                json.loads(g.attrs["identity"])
+                if filled and "identity" in g.attrs
+                else {}
+            ),
         )
 
 
@@ -518,7 +614,9 @@ def _read_rows(ds, rows: np.ndarray) -> np.ndarray:
 
 
 def read_subproblem(
-    container: Union[Container, str, Path, h5py.File], k: int
+    container: Union[Container, str, Path, h5py.File],
+    k: int,
+    solver_params=None,
 ) -> Subproblem:
     """Subproblem ``k`` of a container, in the shared convention.
 
@@ -529,16 +627,18 @@ def read_subproblem(
         subproblem's part of the data is read.
     k : int
         Zero-based index of the subproblem.
+    solver_params : SolverParams, optional
+        See :meth:`Container.subproblem`.
 
     Returns
     -------
     Subproblem
     """
     if isinstance(container, Container):
-        return container.subproblem(k)
+        return container.subproblem(k, solver_params)
     if not isinstance(container, h5py.File):
         with h5py.File(container, "r") as f:
-            return read_subproblem(f, k)
+            return read_subproblem(f, k, solver_params)
     f = container
     _check_format(f)
     sub = f["subproblems"]
@@ -547,12 +647,26 @@ def read_subproblem(
     s0, s1 = (int(v) for v in sub["source_offset"][k : k + 2])
     pix = sub["pixel_index"][p0:p1].astype(np.int64)
     rc = _read_rows(f["pixels/consensus_rc"], pix).astype(np.int64)
+    y = _read_rows(f["data/y"], pix)
+    baseline = None
+    if _uses_baseline(solver_params):
+        g = f["baseline"]
+        if not g.attrs["filled"]:
+            raise ValueError(_NO_BASELINE)
+        baseline = subproblem_baseline(
+            _read_rows(g["values"], pix),
+            g["frame_lines"][()],
+            f["frames/lines"][()],
+            y[0],
+            solver_params,
+        )
     return _subproblem(
-        _read_rows(f["data/y"], pix),
+        y,
         _read_rows(f["data/finv"], pix),
         rc,
         f["sources/rc"][()],
         pix,
         sub["source_index"][s0:s1].astype(np.int64),
         sub["crop"][k],
+        baseline,
     )

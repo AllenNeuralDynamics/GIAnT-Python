@@ -7,10 +7,13 @@ outputs exist and were made with the same settings:
 =========  ==========  ===========================  ========================
 stage      unit        reads                        writes
 =========  ==========  ===========================  ========================
+baseline   trial-path  registered movie             ``*_BASELINE-80Hz.h5``
+                                                    (slap2-f0, optional)
 localize   trial-path  registered movie, alignment  ``localize/*.h5``
 plan       path        localization files,          ``plan/path<d>.h5``
                        annotations, seeds
-prepare    trial-path  raw ``.dat``, plan           ``containers/*.h5``
+prepare    trial-path  raw ``.dat``, plan,          ``containers/*.h5``
+                       network baseline
 dispatch   session     containers                   ``jobs/job_*.json``
 solve      job         container(s), job file       ``results/*.h5``
 collect    session     plans, results, localization ``experiment_summary.h5``,
@@ -23,6 +26,12 @@ trials are loaded one ahead of the solver and their subproblems solved in a
 local process pool; no containers are written unless asked for. Every way of
 running gives the same results files, and :func:`collect` makes the
 summaries from them.
+
+With ``SiloParams.baseline_source='network'`` the F0 network's baselines
+(``--baseline-dir``, or predicted with ``--f0-ckpt``) are used to localize
+and, mapped onto each trial's selected pixels
+(:mod:`~giant_python.extraction.raster.baseline_map`), to extract. Each
+stage checks that the stage before it used the same baseline.
 """
 
 from __future__ import annotations
@@ -36,7 +45,7 @@ import threading
 import time
 import warnings
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Iterable, Optional, Sequence
 
 import h5py
@@ -84,6 +93,66 @@ def _baseline_file(baseline_dir, movie: Path) -> Optional[Path]:
         return None
     stem = movie.name[: movie.name.index("_REGISTERED")]
     return Path(baseline_dir) / f"{stem}_BASELINE-80Hz.h5"
+
+
+def baseline_folder(session: SiloSession, baseline_dir=None) -> Path:
+    """The folder of the network's baselines: ``baseline_dir``, or the
+    session's default (``<work-dir>/baselines``, where ``--f0-ckpt`` puts
+    them)."""
+    return Path(baseline_dir) if baseline_dir else session.baselines_dir
+
+
+def registered_name(session: SiloSession, d: int, t: int) -> Path:
+    """The registered movie's file name that the trial table records
+    (``fn_reg_ds``), whether or not the movie is here."""
+    return Path(PurePath(str(session.fn_reg_ds[d, t]).replace("\\", "/")).name)
+
+
+def _network_baseline(session, params, d, t, baseline_dir) -> Path:
+    """The baseline file of trial-path ``(d, t)``; it must exist and have
+    been predicted from the movie that SILo reads (and, if it has a record,
+    with this run's settings: ``check_baseline_record``)."""
+    from .silo_baseline import check_baseline_record
+
+    base = _baseline_file(
+        baseline_folder(session, baseline_dir), registered_name(session, d, t)
+    )
+    if not base.exists():
+        raise FileNotFoundError(
+            f"no network baseline: {base} (predict it with --f0-ckpt, or "
+            "give the baselines' folder with --baseline-dir)"
+        )
+    source = _attr(base, "source")
+    if isinstance(source, bytes):
+        source = source.decode()
+    movie = session.movie(d, t)
+    if source and movie is not None and str(source) != movie.name:
+        raise ValueError(
+            f"{base.name} was predicted from {source}, SILo reads "
+            f"{movie.name}: predict it again from that movie (or remove "
+            "the other one)"
+        )
+    check_baseline_record(base, movie, session.alignment(d, t), params)
+    return base
+
+
+def _recorded(path, name: str, default: str = "median") -> str:
+    """A stage file's record of the baseline it used (files made before
+    the network baseline was wired in used the moving median)."""
+    value = _attr(path, name)
+    if isinstance(value, bytes):
+        value = value.decode()
+    return default if value is None else str(value)
+
+
+def _check_same(what: str, used: str, given: str, option: str) -> None:
+    """Refuse a stage whose settings differ from the stage before it."""
+    if used != given:
+        raise ValueError(
+            f"{what} was made with {option}={used!r}, these settings have "
+            f"{given!r}: give every stage the same settings (e.g. "
+            f"--baseline {used})"
+        )
 
 
 def _localize_job(job: dict) -> dict:
@@ -187,7 +256,7 @@ def localize_jobs(
         Zero-based ``(path, trial)`` pairs (default: every kept one).
     baseline_dir : str or Path, optional
         Folder of the network baseline files (``localization_baseline =
-        'network'``).
+        'network'``; default: the session's ``baselines`` folder).
     fit_peaks : bool
         Fit the per-trial peaks in the same task (otherwise
         :func:`peaks_jobs` does it later).
@@ -200,22 +269,26 @@ def localize_jobs(
         Tasks for :func:`_localize_job`.
     """
     network = params.localization_baseline == "network"
-    if network and baseline_dir is None:
-        raise ValueError(
-            "localization_baseline 'network' needs the folder of the "
-            "*_BASELINE-80Hz.h5 files"
-        )
     jobs = []
     for d, t in _units(session, units):
         movie = session.movie(d, t)
-        base = _baseline_file(baseline_dir, movie) if network else None
-        if base is not None and not base.exists():
-            raise FileNotFoundError(f"no network baseline: {base}")
+        base = (
+            _network_baseline(session, params, d, t, baseline_dir)
+            if network
+            else None
+        )
         h = _localize_hash(
             session, params, d, t, None if base is None else _file_id(base)
         )
         out = session.localize_file(d, t)
-        if not overwrite and _attr(out, "settings_hash") == h:
+        if (
+            not overwrite
+            and _attr(out, "settings_hash") == h
+            # files made before the baseline was recorded: those made with
+            # the network are redone (the plan stage would refuse them)
+            and _recorded(out, "localization_baseline")
+            == params.localization_baseline
+        ):
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
         jobs.append(
@@ -227,7 +300,7 @@ def localize_jobs(
                 "num_channels": session.num_channels,
                 "align_hz": session.align_hz,
                 "baseline_dir": (
-                    str(baseline_dir) if base is not None else None
+                    str(base.parent) if base is not None else None
                 ),
                 "fit_peaks": fit_peaks,
                 "out": str(out),
@@ -238,6 +311,14 @@ def localize_jobs(
                     "trial": t + 1,
                     "align_hz": session.align_hz,
                     "num_channels": session.num_channels,
+                    "localization_baseline": params.localization_baseline,
+                    # the file localized with (extraction must use it too)
+                    # and its network, for the summary
+                    "network_baseline": (
+                        json.dumps(baseline_provenance(base), sort_keys=True)
+                        if base is not None
+                        else ""
+                    ),
                 },
             }
         )
@@ -319,8 +400,8 @@ def _plan_inputs(session: SiloSession, d: int):
     return recs
 
 
-def _plan_hash(session, params, d, seeds, annotations) -> str:
-    """Settings hash of a path's plan."""
+def _localization_hashes(session, d) -> dict:
+    """The settings hashes of path ``d``'s localization files, by trial."""
     locs = {}
     for t in range(session.n_trials):
         if session.keep[d, t]:
@@ -328,6 +409,32 @@ def _plan_hash(session, params, d, seeds, annotations) -> str:
             locs[t] = _attr(f, "settings_hash")
             if locs[t] is None:
                 raise FileNotFoundError(f"not localized: {f}")
+    return locs
+
+
+def check_plan_localizations(session, d) -> None:
+    """Refuse a plan whose trials were localized again since it was made
+    (their peaks and baselines would not be the plan's): the plan records
+    its localizations' settings hashes (plans made before that are not
+    checked)."""
+    made = _attr(session.plan_file(d), "localization_hashes")
+    if not made:
+        return
+    if isinstance(made, bytes):
+        made = made.decode()
+    made = {int(k): v for k, v in json.loads(made).items()}
+    for t, h in made.items():
+        now = _attr(session.localize_file(d, t), "settings_hash")
+        if now != h:
+            raise ValueError(
+                f"path {d + 1}, trial {t + 1} was localized again since its "
+                "plan was made: plan again and redo the stages after it"
+            )
+
+
+def _plan_hash(session, params, d, seeds, annotations) -> str:
+    """Settings hash of a path's plan."""
+    locs = _localization_hashes(session, d)
     return _hash(
         {
             "stage": "plan",
@@ -408,6 +515,7 @@ def plan_one(
     if params.user_rois and session.annotations is not None:
         ann = session_annotations(session.annotations, session.n_paths)[d]
         ann_id = _file_id(session.annotations)
+    _check_localizations(session, params, d)
     h = _plan_hash(session, params, d, seeds, ann_id)
     out = session.plan_file(d)
     if not overwrite and _attr(out, "settings_hash") == h:
@@ -450,12 +558,30 @@ def plan_one(
             f.attrs["settings_hash"] = h
             f.attrs["path"] = d + 1
             f.attrs["z_depth"] = _z_depth(session, d)
+            f.attrs["baseline_source"] = params.baseline_source
+            f.attrs["localization_hashes"] = json.dumps(
+                _localization_hashes(session, d), sort_keys=True
+            )
         os.replace(tmp, out)
     except BaseException:
         if tmp.exists():
             tmp.unlink()
         raise
     return out
+
+
+def _check_localizations(session: SiloSession, params: SiloParams, d: int):
+    """Refuse to plan path ``d`` from localizations made with another
+    baseline than these settings'."""
+    for t in np.flatnonzero(session.keep[d]):
+        f = session.localize_file(d, int(t))
+        if f.exists():
+            _check_same(
+                f"the localization {f.name}",
+                _recorded(f, "localization_baseline"),
+                params.localization_baseline,
+                "localization_baseline",
+            )
 
 
 def _z_depth(session: SiloSession, d: int) -> float:
@@ -550,24 +676,147 @@ def load_trial_for(
 
 
 def _prepare_hash(
-    session: SiloSession, params: SiloParams, plan_hash: str, d, t
+    session: SiloSession,
+    params: SiloParams,
+    plan_hash: str,
+    d,
+    t,
+    baseline: Optional[Path] = None,
 ) -> str:
     """Settings hash of a container: the prepare settings, the plan, the
-    raw recording's files, the trial's lines and its alignment file."""
-    return _hash(
-        {
-            "stage": "prepare",
-            "settings": params.stage_settings("prepare"),
-            "plan": plan_hash,
-            "unit": [d, t],
-            "raw": recording_ids(session.raw(d, t)),
-            "lines": [
-                float(session.first_line[d, t]),
-                float(session.last_line[d, t]),
-            ],
-            "alignment": _file_id(session.alignment(d, t)),
+    raw recording's files, the trial's lines and its alignment file, and
+    the network baseline file mapped into it (when the solver uses one)."""
+    from ..extraction.raster.baseline_map import MIN_WEIGHT
+
+    record = {
+        "stage": "prepare",
+        "settings": params.stage_settings("prepare"),
+        "plan": plan_hash,
+        "unit": [d, t],
+        "raw": recording_ids(session.raw(d, t)),
+        "lines": [
+            float(session.first_line[d, t]),
+            float(session.last_line[d, t]),
+        ],
+        "alignment": _file_id(session.alignment(d, t)),
+    }
+    if baseline is not None:
+        record["baseline"] = {
+            "file": _file_id(baseline),
+            "min_weight": MIN_WEIGHT,
         }
+    return _hash(record)
+
+
+def _extraction_baseline(session, params, d, t, baseline_dir):
+    """The baseline file the solver's mode needs for ``(d, t)``, or None.
+
+    It must be the file the trial was localized with, when it was localized
+    with the network's baseline (one baseline per run, whichever folders
+    the stages were given).
+    """
+    if params.baseline_mode == "fit":
+        return None
+    base = _network_baseline(session, params, d, t, baseline_dir)
+    loc = localization_baseline(session, d, t)
+    if loc is not None and loc["file"] != _file_id(base):
+        raise ValueError(
+            f"path {d + 1}, trial {t + 1} was localized with another "
+            f"baseline file than {base} ({loc['file']}): give the stages "
+            "the same baselines (--baseline-dir)"
+        )
+    return base
+
+
+def baseline_provenance(base: Path) -> dict:
+    """A baseline file's identity and its network: the checkpoint's path
+    and step that slap2-f0 records, and its identity at prediction time
+    from the file's record (when it was predicted here)."""
+    from .silo_baseline import record_path
+
+    network = {}
+    for name in ("checkpoint", "step"):
+        v = _attr(base, name)
+        if isinstance(v, bytes):
+            v = v.decode()
+        if v is not None:
+            network[name] = v.item() if hasattr(v, "item") else v
+    out = {"file": _file_id(base), "network": network}
+    rec = record_path(base)
+    if rec.exists():
+        out["checkpoint"] = json.loads(rec.read_text()).get("checkpoint")
+    return out
+
+
+def localization_baseline(session: SiloSession, d: int, t: int):
+    """The network baseline trial-path ``(d, t)`` was localized with
+    (:func:`baseline_provenance`), or None."""
+    v = _attr(session.localize_file(d, t), "network_baseline")
+    if isinstance(v, bytes):
+        v = v.decode()
+    return json.loads(v) if v else None
+
+
+def load_trial_baseline(
+    session: SiloSession, params: SiloParams, trial, base: Path, d, t
+):
+    """The network's baseline at a loaded trial's selected pixels.
+
+    :func:`~giant_python.extraction.raster.baseline_map.read_trial_baseline`,
+    with the checkpoint's identity and the prediction's settings added from
+    the file's record (when it was predicted here).
+    """
+    from ..extraction.raster.baseline_map import read_trial_baseline
+    from .silo_baseline import check_baseline_record
+
+    with h5py.File(session.alignment(d, t), "r") as f:
+        # the registered frames' lines (DSframes, as read_alignment)
+        ds_lines = np.asarray(f["DSframes"], np.float64).ravel()
+    tb = read_trial_baseline(
+        base, trial.trial_rc, ds_lines, trial.photon_scale
     )
+    rec = check_baseline_record(base, None, session.alignment(d, t), params)
+    if rec is not None:
+        # identified when it was predicted; a file without a record names
+        # its checkpoint only by path and step (tb.identity["network"])
+        tb.identity["checkpoint"] = rec["checkpoint"]
+        tb.identity["prediction"] = rec["settings"]
+    return tb
+
+
+def trial_subproblems(plan, trial, solver_params, baseline=None) -> list:
+    """The plan's subproblems on a loaded trial.
+
+    With a solver mode that uses an external baseline, each gets the
+    network's (``baseline``, a
+    :class:`~giant_python.extraction.raster.baseline_map.TrialBaseline`):
+    the same arrays as a container of the trial gives
+    (:meth:`~giant_python.extraction.raster.container.Container.subproblem`).
+    """
+    from ..extraction.raster.baseline_map import subproblem_baseline
+
+    if solver_params.baseline_mode == "fit":
+        return [g.subproblem(trial.y, trial.finv) for g in plan.groups]
+    if baseline is None:
+        raise ValueError(
+            f"the solver's baseline mode {solver_params.baseline_mode!r} "
+            "needs the network's baseline"
+        )
+    values = np.asarray(baseline.values, dtype=np.float32)
+    return [
+        g.subproblem(
+            trial.y,
+            trial.finv,
+            subproblem_baseline(
+                values[g.pixels],
+                baseline.lines,
+                trial.frame_lines,
+                trial.y[0, g.pixels],
+                solver_params,
+            ),
+        )
+        for g in plan.groups
+    ]
 
 
 def prepare(
@@ -575,18 +824,23 @@ def prepare(
     params: SiloParams,
     execution: Optional[SiloExecution] = None,
     units=None,
+    baseline_dir=None,
 ) -> list:
     """Stage ``prepare``: a container per extracted trial-path.
 
     The valid trials of each planned path are loaded at the plan's
     selected pixels (200 Hz, from the raw files) and written with the
-    plan's subproblems. A trial in which no selected pixel has data gets a
-    ``*.skip.json`` marker instead.
+    plan's subproblems, and, when the solver's ``baseline_mode`` uses it,
+    the network's baseline at those pixels. A trial in which no selected
+    pixel has data gets a ``*.skip.json`` marker instead.
 
     Parameters
     ----------
     units : iterable of (int, int), optional
         Zero-based ``(path, trial)`` pairs (default: all valid trials).
+    baseline_dir : str or Path, optional
+        Folder of the network baseline files (default: the session's
+        ``baselines`` folder).
 
     Returns
     -------
@@ -602,13 +856,21 @@ def prepare(
     for d, t in _valid_units(session, units):
         if d not in plans:
             f = session.plan_file(d)
+            check_plan_localizations(session, d)
+            _check_same(
+                f"the plan {f.name}",
+                _recorded(f, "baseline_source"),
+                params.baseline_source,
+                "baseline_source",
+            )
             plans[d] = (
                 read_plan(f),
                 read_user_rois(f)[1],
                 _attr(f, "settings_hash"),
             )
         p, rois, ph = plans[d]
-        h = _prepare_hash(session, params, ph, d, t)
+        base = _extraction_baseline(session, params, d, t, baseline_dir)
+        h = _prepare_hash(session, params, ph, d, t, base)
         out = session.container_file(d, t)
         skip = session.skip_file(d, t)
         if not ex.overwrite and (
@@ -628,6 +890,11 @@ def prepare(
             continue
         if skip.exists():
             skip.unlink()
+        tb = (
+            None
+            if base is None
+            else load_trial_baseline(session, params, trial, base, d, t)
+        )
         write_container(
             out,
             trial,
@@ -635,12 +902,13 @@ def prepare(
             [g.pixels for g in p.groups],
             [g.sources for g in p.groups],
             p.shape,
-            params=_container_params(params, ph, d, t),
+            params=_container_params(params, ph, d, t, tb),
             source={
                 "raw": session.raw(d, t).name,
                 "path": d + 1,
                 "trial": t + 1,
             },
+            baseline=tb,
         )
         # the hash of the settings (not of the params JSON, see settings_hash)
         with h5py.File(out, "a") as f:
@@ -669,15 +937,21 @@ def _mark_skipped(session, d, t, reason, prepare_hash, plan_hash) -> None:
 
 
 def _container_params(
-    params: SiloParams, plan_hash: str, d: int, t: int
+    params: SiloParams, plan_hash: str, d: int, t: int, baseline=None
 ) -> dict:
-    """What a container records of its settings."""
-    return {
+    """What a container records of its settings (with the network: the
+    baseline source, and the identity of the baseline mapped into it)."""
+    out = {
         "prepare": params.stage_settings("prepare"),
         "plan": plan_hash,
         "path": d + 1,
         "trial": t + 1,
     }
+    if params.baseline_source != "median":
+        out["baseline_source"] = params.baseline_source
+    if baseline is not None:
+        out["baseline"] = baseline.identity
+    return out
 
 
 def _valid_units(session: SiloSession, units=None) -> list:
@@ -761,6 +1035,7 @@ class _ContainerView:
     d: int
     t: int
     plan_hash: str = ""
+    baseline: Optional[dict] = None
 
     @property
     def pixel_rc(self):
@@ -784,8 +1059,12 @@ class _ContainerView:
 
     @property
     def params(self):
-        """What the container would record: its plan's hash."""
-        return {"plan": self.plan_hash}
+        """What the container would record: its plan's hash and the
+        baseline's identity."""
+        out = {"plan": self.plan_hash}
+        if self.baseline is not None:
+            out["baseline"] = self.baseline
+        return out
 
 
 def _submit(subs, sp, options, pool, done: Optional[_Done] = None):
@@ -821,7 +1100,9 @@ def _submit(subs, sp, options, pool, done: Optional[_Done] = None):
     return [by_index[i] for i in range(len(subs))], []
 
 
-def _save_container(folder, session, params, plan, ph, chash, trial, d, t):
+def _save_container(
+    folder, session, params, plan, ph, chash, trial, d, t, baseline=None
+):
     """Write a loaded trial's container (``--save-subproblems``)."""
     from ..extraction.raster.container import write_container
 
@@ -835,8 +1116,9 @@ def _save_container(folder, session, params, plan, ph, chash, trial, d, t):
         [g.pixels for g in plan.groups],
         [g.sources for g in plan.groups],
         plan.shape,
-        params=_container_params(params, ph, d, t),
+        params=_container_params(params, ph, d, t, baseline),
         source={"raw": session.raw(d, t).name, "path": d + 1, "trial": t + 1},
+        baseline=baseline,
     )
     with h5py.File(path, "a") as f:
         f.attrs["settings_hash"] = chash
@@ -850,6 +1132,7 @@ def stream(  # noqa: C901
     pool=None,
     save_subproblems: Optional[Path] = None,
     clock0: Optional[float] = None,
+    baseline_dir=None,
 ) -> list:
     """Load the paths' valid trials one ahead of the solver.
 
@@ -871,6 +1154,9 @@ def stream(  # noqa: C901
     clock0 : float, optional
         ``time.perf_counter()`` that ``submitted`` and ``solved`` count
         from (default: when this starts).
+    baseline_dir : str or Path, optional
+        Folder of the network baseline files, when the solver's mode uses
+        them (default: the session's ``baselines`` folder).
 
     Returns
     -------
@@ -901,10 +1187,18 @@ def stream(  # noqa: C901
         plan = read_plan(pf)
         rois = read_user_rois(pf)[1]
         ph = _attr(pf, "settings_hash")
+        check_plan_localizations(session, d)
+        _check_same(
+            f"the plan {pf.name}",
+            _recorded(pf, "baseline_source"),
+            params.baseline_source,
+            "baseline_source",
+        )
         placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
         for t in (int(x) for x in plan.valid_trials):
-            chash = _prepare_hash(session, params, ph, d, t)
+            base = _extraction_baseline(session, params, d, t, baseline_dir)
+            chash = _prepare_hash(session, params, ph, d, t, base)
             rhash = solve_hash(params, options, chash, (0, n_sub))
             out = session.results_file(d, t)
             skip = session.skip_file(d, t)
@@ -927,6 +1221,11 @@ def stream(  # noqa: C901
                 continue
             if skip.exists():
                 skip.unlink()
+            tb = (
+                None
+                if base is None
+                else load_trial_baseline(session, params, trial, base, d, t)
+            )
             load_s = time.perf_counter() - t0
             record = TrialRecord.from_trial(trial)
             if save_subproblems is not None:
@@ -940,15 +1239,19 @@ def stream(  # noqa: C901
                     trial,
                     d,
                     t,
+                    tb,
                 )
             extracted = trial.frame_lines.size >= params.min_frames
-            subs = (
-                [g.subproblem(trial.y, trial.finv) for g in plan.groups]
-                if extracted
-                else []
-            )
+            subs = trial_subproblems(plan, trial, sp, tb) if extracted else []
             attrs = results_attrs(
-                _ContainerView(trial, plan, d, t, ph),
+                _ContainerView(
+                    trial,
+                    plan,
+                    d,
+                    t,
+                    ph,
+                    None if tb is None else tb.identity,
+                ),
                 session.container_file(d, t).name,
                 chash,
                 (0, n_sub),
@@ -958,7 +1261,7 @@ def stream(  # noqa: C901
                 params,
                 options,
             )
-            del trial
+            del trial, tb
             submitted = time.perf_counter() - clock0
             done = _Done()
             futures, results = _submit(subs, sp, options, pool, done)
@@ -1121,9 +1424,15 @@ def run_silo(
     save_subproblems=None,
     update_table: bool = True,
     peak_workers: Optional[int] = None,
+    f0_ckpt=None,
+    f0_device: str = "cuda",
+    f0_command: Optional[str] = None,
+    f0_out_frames: Optional[int] = None,
 ) -> dict:
     """SILo on one machine (``giant silo``), streaming as MATLAB's.
 
+    0. With ``f0_ckpt``: predict the network's baselines of the trial-paths
+       that have none (``slap2-f0 predict-registered``, one process).
     1. Localize every kept trial-path (``workers`` processes).
     2. Plan each path (one process per path) as soon as its trials are
        localized; its per-trial peak fits, which only the per-trial
@@ -1144,7 +1453,9 @@ def run_silo(
     table : str or Path
         ``trial_table.h5`` (or its folder).
     params : SiloParams or dict, optional
-        Scientific settings (default: MATLAB's SILo for SLAP2).
+        Scientific settings (default: MATLAB's SILo for SLAP2). Given as a
+        dict or None, ``baseline_source`` defaults to 'network' when
+        ``baseline_dir`` or ``f0_ckpt`` is given (moving median otherwise).
     execution : SiloExecution or dict, optional
         How to run.
     moco_dir, data_dir, out_dir, work_dir, annotations : optional
@@ -1153,7 +1464,8 @@ def run_silo(
         Seeds to use instead of the plan's seeding
         (:func:`~giant_python.extraction.raster.stage_files.read_seeds`).
     baseline_dir : str or Path, optional
-        The network baselines (``localization_baseline='network'``).
+        Folder of the network's baselines (default
+        ``<work_dir>/baselines``).
     save_subproblems : str or Path, optional
         Also write each trial-path's container to this folder.
     update_table : bool
@@ -1161,6 +1473,16 @@ def run_silo(
     peak_workers : int, optional
         Processes fitting per-trial peaks in the background (default: half
         of ``workers``, at least 1).
+    f0_ckpt : str or Path, optional
+        A slap2-f0 checkpoint: predict the missing baselines into the
+        baselines' folder first (needs ``slap2-f0``).
+    f0_device : str
+        Device of the prediction ('cuda' by default, 'cpu', 'auto').
+    f0_command : str, optional
+        The slap2-f0 executable (default: ``slap2-f0`` on the PATH).
+    f0_out_frames : int, optional
+        Frames per tile of the prediction (see
+        :func:`~giant_python.pipeline.silo_baseline.predict_baselines`).
 
     Returns
     -------
@@ -1171,6 +1493,9 @@ def run_silo(
     from .silo_collect import collect
     from .silo_session import now
 
+    params = default_baseline_source(
+        params, baseline_dir is not None or f0_ckpt is not None
+    )
     params, ex = resolve_silo_options(params, execution)
     start = now()
     timer: dict = {"start": start}
@@ -1179,6 +1504,26 @@ def run_silo(
         table, moco_dir, data_dir, out_dir, work_dir, annotations
     )
     seeds = read_seeds(seeds_file, session.n_paths) if seeds_file else None
+    bdir = baseline_folder(session, baseline_dir)
+    if not params.needs_network_baseline and (baseline_dir or f0_ckpt):
+        warnings.warn(
+            "the network's baselines are not used: these settings localize "
+            "and extract with the moving median (baseline_source='median')"
+        )
+    elif f0_ckpt is not None:
+        from .silo_baseline import predict_baselines
+
+        timer["predict_detail"] = predict_baselines(
+            session,
+            params,
+            bdir,
+            f0_ckpt,
+            device=f0_device,
+            command=f0_command,
+            out_frames=f0_out_frames,
+            verbose=ex.verbose,
+        )
+        timer["predict"] = timer["predict_detail"]["seconds"]
 
     peak_futures: list = []
     peak_pool = None
@@ -1192,7 +1537,7 @@ def run_silo(
             params,
             ex,
             seeds,
-            baseline_dir,
+            bdir,
             timer,
             peak_pool,
             peak_futures,
@@ -1204,7 +1549,14 @@ def run_silo(
         pool = _pool(ex, ex.solver_options())
         try:
             timer["trials"] = stream(
-                session, params, ex, paths, pool, save_subproblems, t_all
+                session,
+                params,
+                ex,
+                paths,
+                pool,
+                save_subproblems,
+                t_all,
+                bdir,
             )
         finally:
             if pool is not None:
@@ -1230,7 +1582,20 @@ def run_silo(
         update_table=update_table,
         start_time=start,
         save_subproblems_dir=str(save_subproblems or ""),
+        baseline_dir=bdir,
     )
     timer["collect"] = time.perf_counter() - t0
     timer["total"] = time.perf_counter() - t_all
     return timer
+
+
+def default_baseline_source(params, network: bool):
+    """``params`` with ``baseline_source`` 'network' when the network's
+    baselines are given (``network``) and ``params`` (a dict or None)
+    does not set it. A :class:`SiloParams` is returned as it is: its
+    ``baseline_source`` was chosen when it was made."""
+    if not network or isinstance(params, SiloParams):
+        return params
+    values = dict(params or {})
+    values.setdefault("baseline_source", "network")
+    return values

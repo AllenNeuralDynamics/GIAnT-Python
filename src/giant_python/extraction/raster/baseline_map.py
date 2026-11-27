@@ -39,6 +39,11 @@ Where the network gives no value:
   with a large variance multiplier, so their baseline barely enters the
   fits.
 
+The pipeline (``prepare`` and the streaming run of ``giant silo``) does the
+same in two steps: :func:`read_trial_baseline` (space and units, stored in
+the container at the registration's frames) and :func:`subproblem_baseline`
+(time and the fallback, per subproblem).
+
 What the mapping cannot carry (measured by the WP6 test of the SILo port):
 brightness changes shared across pixels that are faster than the 80 Hz
 frames resolve, the slight blur of interpolating the registered movie once
@@ -338,3 +343,179 @@ def map_baseline(
         params = solver_params or SolverParams()
         values[missing] = initial_baseline(data[missing], params)
     return MappedBaseline(values=values, missing=missing, weight=weight)
+
+
+# ------------------------------------------------- the pipeline's two steps
+#
+# The pipeline maps in two steps, so that a container stores the baseline
+# at the registration's frames (80 Hz, 2.5 times fewer than the
+# extraction's) and a streamed run computes exactly what a staged one reads
+# back: space and units when a trial is loaded (read_trial_baseline, kept
+# as float32, as the container stores it), time and the fallback when a
+# subproblem is made (subproblem_baseline).
+
+MIN_WEIGHT = 0.5
+"""Least share of a pixel's bilinear weight on pixels with a network value
+(:func:`sample_bilinear`) in the pipeline."""
+
+_IDENTITY_ATTRS = ("checkpoint", "step", "gain", "n_frames", "source")
+
+
+@dataclass
+class TrialBaseline:
+    """The network's baseline at a trial's selected pixels, at the
+    registration's frames: what a container stores in ``/baseline``.
+
+    Attributes
+    ----------
+    values : ndarray of float32, shape (pixels, registered frames)
+        Space and units mapped (bilinear at ``TrialData.trial_rc``, divided
+        by ``photon_scale``); NaN where a pixel has no network value.
+    lines : ndarray of float64, shape (registered frames,)
+        One-based line of each registered frame (``DSframes``).
+    weight : ndarray of float64, shape (pixels,)
+        Share of each pixel's bilinear weight on pixels with a value.
+    identity : dict
+        The baseline file (name, size, modification time) and its record of
+        the network (checkpoint, step, gain, ...).
+    """
+
+    values: np.ndarray
+    lines: np.ndarray
+    weight: np.ndarray
+    identity: dict
+
+
+def _attr_value(v):
+    """An HDF5 attribute as a JSON type."""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
+
+
+def read_trial_baseline(
+    path,
+    trial_rc: np.ndarray,
+    ds_lines: np.ndarray,
+    photon_scale: float,
+    *,
+    min_weight: float = MIN_WEIGHT,
+) -> TrialBaseline:
+    """Space and units of :func:`map_baseline`, from a baseline file.
+
+    Only the part of the file around the pixels is read (every pixel's
+    four neighbours), so a trial's baseline is not held whole.
+
+    Parameters
+    ----------
+    path : str or Path
+        The trial's ``*_BASELINE-80Hz.h5``.
+    trial_rc : ndarray of shape (pixels, 2)
+        Zero-based positions of the selected pixels in the trial's
+        registered frame (``TrialData.trial_rc``).
+    ds_lines : ndarray of shape (registered frames,)
+        One-based line of each registered frame (``DSframes``).
+    photon_scale : float
+        Counts per unit of the data.
+    min_weight : float
+        See :func:`sample_bilinear`.
+
+    Returns
+    -------
+    TrialBaseline
+    """
+    path = Path(path)
+    trial_rc = np.asarray(trial_rc, dtype=np.float64).reshape(-1, 2)
+    ds_lines = np.asarray(ds_lines, dtype=np.float64).ravel()
+    if not (photon_scale > 0 and np.isfinite(photon_scale)):
+        raise ValueError("photon_scale must be positive and finite")
+    if ds_lines.size == 0 or np.any(np.diff(ds_lines) <= 0):
+        raise ValueError("the registered frames' lines must increase")
+    st = path.stat()
+    with h5py.File(path, "r") as f:
+        ds = f["baseline"]  # (frame, col, row), see read_network_baseline
+        if ds.ndim != 3 or ds.shape[0] != ds_lines.size:
+            raise ValueError(
+                f"{path}: the baseline is {ds.shape}; the registration has "
+                f"{ds_lines.size} frames"
+            )
+        attrs = {
+            k: _attr_value(f.attrs[k]) for k in _IDENTITY_ATTRS if k in f.attrs
+        }
+        n_t, n_c, n_r = ds.shape
+        if trial_rc.shape[0] == 0:
+            values = np.zeros((0, n_t), dtype=np.float32)
+            weight = np.zeros(0)
+        else:
+            if not np.isfinite(trial_rc).all():
+                raise ValueError("positions must be finite")
+            lo = np.floor(trial_rc.min(0)).astype(np.int64)
+            hi = np.floor(trial_rc.max(0)).astype(np.int64) + 1
+            r0, c0 = (int(v) for v in np.clip(lo, 0, [n_r - 1, n_c - 1]))
+            r1, c1 = (int(v) for v in np.clip(hi, 0, [n_r - 1, n_c - 1]))
+            # every neighbour inside the frame is inside the box; those
+            # outside the frame are outside the box too
+            stack = ds[:, c0 : c1 + 1, r0 : r1 + 1].transpose(0, 2, 1)
+            sampled, weight = sample_bilinear(
+                stack, trial_rc - np.array([r0, c0]), min_weight
+            )
+            del stack
+            values = (sampled / photon_scale).astype(np.float32)
+    identity = {
+        "file": {
+            "name": path.name,
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+        },
+        "network": attrs,
+        "min_weight": float(min_weight),
+        "missing_pixels": int((~np.isfinite(values).any(1)).sum()),
+    }
+    return TrialBaseline(values, ds_lines.copy(), weight, identity)
+
+
+def subproblem_baseline(
+    values: np.ndarray,
+    lines: np.ndarray,
+    frame_lines: np.ndarray,
+    data: np.ndarray,
+    solver_params=None,
+) -> np.ndarray:
+    """Time and the fallback of :func:`map_baseline`, for some pixels.
+
+    Parameters
+    ----------
+    values : ndarray of shape (pixels, registered frames)
+        Rows of :attr:`TrialBaseline.values`.
+    lines : ndarray of shape (registered frames,)
+        :attr:`TrialBaseline.lines`.
+    frame_lines : ndarray of shape (frames,)
+        One-based line of each extraction frame.
+    data : ndarray of shape (pixels, frames)
+        The activity channel's data at the same pixels; a pixel without a
+        network value gets its starting baseline
+        (:func:`~giant_python.extraction.raster.solver_baseline.initial_baseline`).
+    solver_params : SolverParams, optional
+        Parameters of that starting baseline (default: SILo's).
+
+    Returns
+    -------
+    ndarray of float32, shape (pixels, frames)
+        The baseline in the data's units (``Subproblem.baseline``).
+    """
+    out = interp_frames(values, lines, frame_lines)
+    missing = ~np.isfinite(out).any(1)
+    if missing.any():
+        data = np.asarray(data, dtype=np.float64)
+        if data.shape != out.shape:
+            raise ValueError(
+                f"the data are {data.shape}; the baseline is {out.shape}"
+            )
+        out[missing] = initial_baseline(
+            data[missing], solver_params or SolverParams()
+        )
+    return out.astype(np.float32)

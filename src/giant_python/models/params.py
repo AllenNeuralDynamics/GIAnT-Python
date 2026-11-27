@@ -491,8 +491,34 @@ class SiloParams:
     with :meth:`plan_params`, :meth:`load_params`, :meth:`solver_params` and
     :meth:`localization_params`.
 
+    ``baseline_source`` chooses the baseline of the whole run, and with it
+    the defaults of the settings that go with it (each can still be set):
+
+    ============================  ===============  =====================
+    setting                       ``'median'``     ``'network'``
+    ============================  ===============  =====================
+    ``localization_baseline``     ``'median'``     ``'network'``
+    ``localization_surround``     True             False
+    ``localization_null``         ``'none'``       ``'bootstrap'``
+    ``peak_th``                   3                8
+    ``baseline_mode``             ``'fit'`` (R0)   ``'gain'`` (N1)
+    ============================  ===============  =====================
+
+    ``'median'`` is MATLAB's SILo. ``'network'`` uses the F0 network's
+    baselines (``slap2-f0 predict-registered``): localization with the
+    settings recommended in slap2-F0-network#6 (no surround, the bootstrap
+    null, the variance floor kept, ``peak_th`` 8) and extraction with the
+    network's baseline times one gain per pixel (N1), the variant that the
+    baseline test of the SILo port (WP6) found within tolerance of
+    refitting the baseline from the network's.
+
     Attributes
     ----------
+    baseline_source : {'median', 'network'}
+        Baseline of the run: MATLAB's (moving median for localization,
+        the solver's own fit for extraction) or the F0 network's, whose
+        files are given at run time. Sets the defaults above. Not a MATLAB
+        option.
     activity_channel : int
         One-based channel of the activity signal (``activityChannel``).
     analyze_hz : float
@@ -521,21 +547,25 @@ class SiloParams:
     nan_thresh : float
         Largest share of missing samples of an included pixel
         (``nanThresh``).
-    peak_th : float
+    peak_th : float or None
         Seed threshold, robust SDs of the activity image (``peakth``; 3 for
         SLAP2). Used by the plan's seeding and, unless
-        ``localization_peak_th`` is set, by the per-trial peaks.
+        ``localization_peak_th`` is set, by the per-trial peaks. None takes
+        the default of ``baseline_source`` (3, or 8 with the network).
     min_peak_distance : int
         Minimum Chebyshev distance of seeds (``minPeakDistance``).
-    localization_baseline : {'median', 'network'}
+    localization_baseline : {'median', 'network'} or None
         Baseline of localization: MATLAB's moving median, or the F0
         network's ``*_BASELINE-80Hz.h5`` files (``slap2-f0
         predict-registered``), whose folder is given at run time. Not a
-        MATLAB option.
-    localization_surround : bool
-        Subtract the surround in the localization score (MATLAB's).
-    localization_null : {'none', 'bootstrap'}
-        Null calibration of the localization score.
+        MATLAB option. None takes ``baseline_source``.
+    localization_surround : bool or None
+        Subtract the surround in the localization score (MATLAB's). None
+        takes the default of ``baseline_source`` (True, or False with the
+        network).
+    localization_null : {'none', 'bootstrap'} or None
+        Null calibration of the localization score. None takes the default
+        of ``baseline_source`` ('none', or 'bootstrap' with the network).
     localization_null_draws, localization_null_seed : int
         Noise movies per trial of the bootstrap null, and the first seed.
     localization_null_scale : {'tail', 'sd'}
@@ -585,6 +615,12 @@ class SiloParams:
         Outer iterations of the solver (``nmfIter``).
     min_baseline : float
         Lower bound of the baseline, normalized units (``minBaseline``).
+    baseline_mode : {'fit', 'fixed', 'gain', 'gain_shared', 'fit_from'} or None
+        How the solver finds the activity channel's baseline
+        (``SolverParams.baseline_mode``): 'fit' is MATLAB's own fit (R0);
+        the others start from the network's baseline (N0-N3 of the baseline
+        test). None takes the default of ``baseline_source`` ('fit', or
+        'gain' with the network). Not a MATLAB option.
     debias_variance : {'fixed', 'model'}
         Variance term of the debias refit (``debiasVariance``).
     footprint_variance : {'fixed', 'model'} or None
@@ -621,11 +657,12 @@ class SiloParams:
     motion_thresh: float = 2.0
     discard_initial_s: float = 0.0
     nan_thresh: float = 0.33
-    peak_th: float = 3.0
+    peak_th: Optional[float] = None
     min_peak_distance: int = 1
-    localization_baseline: str = "median"
-    localization_surround: bool = True
-    localization_null: str = "none"
+    baseline_source: str = "median"
+    localization_baseline: Optional[str] = None
+    localization_surround: Optional[bool] = None
+    localization_null: Optional[str] = None
     localization_null_draws: int = 1
     localization_null_seed: int = 0
     localization_null_scale: str = "tail"
@@ -647,6 +684,7 @@ class SiloParams:
     phi: float = 0.0
     nmf_iter: int = 2
     min_baseline: float = 0.01
+    baseline_mode: Optional[str] = None
     debias_variance: str = "fixed"
     footprint_variance: Optional[str] = None
     baseline_knot_factor: float = 0.5
@@ -657,6 +695,7 @@ class SiloParams:
 
     def __post_init__(self) -> None:
         """Validate values; reject modes that are not ported."""
+        self._baseline_defaults()
         for name in (
             "analyze_hz",
             "sigma_px",
@@ -727,6 +766,15 @@ class SiloParams:
         # the stages' own types check the rest
         self.localization_params(80.0)
         self.solver_params()
+
+    def _baseline_defaults(self) -> None:
+        """Fill the settings left at None from ``baseline_source``."""
+        _choice("baseline_source", self.baseline_source, ("median", "network"))
+        for name, value in BASELINE_SOURCE_DEFAULTS[
+            self.baseline_source
+        ].items():
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, value)
 
     def _seed_defaults(self) -> None:
         """Take the seed fit's defaults from the plan stage (one default)."""
@@ -835,6 +883,16 @@ class SiloParams:
             footprint_variance=self.footprint_variance,
             baseline_knot_factor=self.baseline_knot_factor,
             baseline_penalty=self.baseline_penalty,
+            baseline_mode=self.baseline_mode,
+        )
+
+    @property
+    def needs_network_baseline(self) -> bool:
+        """Whether a stage of the run reads the network's baselines
+        (localization, or the solver's baseline mode)."""
+        return (
+            self.localization_baseline == "network"
+            or self.baseline_mode != "fit"
         )
 
     def localization_params(self, align_hz: float):
@@ -1078,7 +1136,34 @@ _STAGE_FIELDS = {
 # that reproduces what the stage did before (see SiloParams.stage_settings)
 _STAGE_FIELDS_ADDED = {
     "localize": {"seed_fit": "matlab", "seed_merge_px": 0.0},
-    "plan": {"seed_fit": "matlab", "seed_merge_px": 0.0},
+    "plan": {
+        "seed_fit": "matlab",
+        "seed_merge_px": 0.0,
+        # each stage after localization checks the source of the stage
+        # before it, so changing only the source redoes them
+        "baseline_source": "median",
+    },
+    "prepare": {"baseline_source": "median"},
+    "solve": {"baseline_mode": "fit"},
+}
+
+# the settings that SiloParams.baseline_source sets, per source (see the
+# class docstring)
+BASELINE_SOURCE_DEFAULTS = {
+    "median": {
+        "localization_baseline": "median",
+        "localization_surround": True,
+        "localization_null": "none",
+        "peak_th": 3.0,
+        "baseline_mode": "fit",
+    },
+    "network": {
+        "localization_baseline": "network",
+        "localization_surround": False,
+        "localization_null": "bootstrap",
+        "peak_th": 8.0,
+        "baseline_mode": "gain",
+    },
 }
 
 
@@ -1100,6 +1185,8 @@ _PYTHON_ONLY = {
     "min_frames": ("minFrames", 100),
     "seed_fit": ("seedFit", "matlab"),
     "seed_merge_px": ("seedMergePx", 0.0),
+    "baseline_source": ("baselineSource", "median"),
+    "baseline_mode": ("baselineMode", "fit"),
 }
 
 
