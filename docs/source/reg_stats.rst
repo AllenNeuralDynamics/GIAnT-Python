@@ -340,9 +340,13 @@ can leave the statistics out (``--no-stats``) and ``giant reg-stats
 --device cuda`` add them later (27 s for this trial, reading the raw
 recording and the movie again).
 
-Memory grows with the trial in one place: the shared modes keep every
-pixel's 8-frame bin means until the trial ends (frames / 8 x pixels x
-channels x 4 bytes: 0.1 GB for this 28 s trial, about 2.3 GB for a
-10-minute one), and their decomposition uses the smaller of the time-bin
-and spatial-bin Gram matrices. Everything else is held for a few blocks of
-frames at a time.
+Memory grows with the trial in two places the statistics add: the shared
+modes keep every pixel's 8-frame bin means until the trial ends (frames /
+8 x pixels x channels x 4 bytes: 0.1 GB for this 28 s trial, about 2.3 GB
+for a 10-minute one; their decomposition uses the smaller of the time-bin
+and spatial-bin Gram matrices), and the frame geometry keeps its kernel
+tables for every frame ((4 + 3 x lags) x frames x lines per cycle x 4
+bytes per displacement group: 25 MB here, about 0.5 GB for 10 minutes).
+The trial's raw samples, which the gain curves read, are registration's
+own (its frame former holds them in any case). The rest is held for a few
+blocks of frames at a time.
