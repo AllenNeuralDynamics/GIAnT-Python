@@ -47,8 +47,7 @@ class UserRoi:
         Pixels of the ROI (MATLAB's orientation).
     center, position : ndarray or None
         Geometry in MATLAB's ``images.roi`` convention: ``[x, y]`` (column,
-        row), one-based. Moved with the mask by a shift; kept as drawn by
-        other maps.
+        row), one-based. Moved with the mask into the consensus frame.
     radius, rotation_angle : float or None
     semi_axes : ndarray or None
     """
@@ -224,6 +223,16 @@ def annotation_trial(fn: str, fn_reg_ds: Sequence[str]) -> Optional[int]:
     return None
 
 
+def _geometry_to_consensus(xy: np.ndarray, warp: TrialWarp, trial: int):
+    """``images.roi`` points (``[x, y]``, one-based) of a trial's image in
+    the consensus frame, through the inverse of the trial's map (MATLAB's
+    ``trialWarpInverse`` in ``roisToConsensusFrame``)."""
+    pts = xy.reshape(-1, 2)
+    rows, cols = warp.inverse(trial, pts[:, 1] - 1, pts[:, 0] - 1)
+    moved = np.column_stack([cols + 1, rows + 1])
+    return moved.reshape(xy.shape)
+
+
 def rois_to_consensus(
     annotations: PathAnnotations,
     fn_reg_ds: Sequence[str],
@@ -234,9 +243,12 @@ def rois_to_consensus(
 
     Each mask is moved by minus its trial's shift, rounded, and cropped or
     padded to ``shape``; geometry (``center``, ``position``) is moved by
-    the exact shift. If the annotation trial is not in the table or was
-    not aligned, the ROIs are only cropped or padded, with a warning, as in
-    MATLAB.
+    the exact shift. Through an affine map or a patchwise field, each
+    consensus pixel takes the mask's value at the nearest pixel of its
+    position in the trial, and geometry goes through the map's inverse
+    (MATLAB's ``warpRoiData``). If the annotation trial is not in the table
+    or was not aligned, the ROIs are only cropped or padded, with a
+    warning, as in MATLAB.
 
     Parameters
     ----------
@@ -268,19 +280,20 @@ def rois_to_consensus(
             "trials; using its ROIs without cross-trial alignment"
         )
         trial = None
-    elif not warp.is_shift(trial):
-        raise NotImplementedError(
-            "moving ROI geometry through an affine or patchwise map is not "
-            "ported yet"
-        )
-    shift = np.zeros(2) if trial is None else warp.shift(trial)
+    full_map = trial is not None and not warp.is_shift(trial)
+    shift = np.zeros(2) if trial is None or full_map else warp.shift(trial)
     out = []
     for roi in annotations.rois:
         moved = {}
         for name in ("center", "position"):
             xy = getattr(roi, name)
-            if xy is not None:
-                moved[name] = np.asarray(xy, dtype=np.float64) - shift[::-1]
+            if xy is None:
+                continue
+            xy = np.asarray(xy, dtype=np.float64)
+            if full_map:
+                moved[name] = _geometry_to_consensus(xy, warp, trial)
+            else:
+                moved[name] = xy - shift[::-1]
         mask = (
             mask_to_consensus(roi.mask, warp, trial, tuple(shape))
             if roi.mask.size

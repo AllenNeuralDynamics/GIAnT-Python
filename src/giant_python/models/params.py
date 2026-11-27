@@ -601,11 +601,15 @@ class SiloParams:
         maxima). They feed only the per-trial summary's
         ``per_trial_act_im_peaks`` and ``per_trial_num_peaks``; False
         leaves those out of the file.
-    inter_trial_alignment : {'rigid'}
-        Across-trial alignment (``interTrialAlignment``); affine and
-        patchwise are not ported yet.
+    inter_trial_alignment : {'rigid', 'affine', 'patchwise'}
+        Across-trial alignment (``interTrialAlignment``): a shift per
+        trial, refined for the valid trials to an affine map or to a
+        patchwise displacement field (see
+        :mod:`~giant_python.extraction.raster.alignment`). With
+        ``'patchwise'`` the localize stage also stores each trial's half
+        images.
     align_patch_px : int
-        ``alignPatchPx`` (patchwise alignment only; recorded).
+        Imaged pixels per patch of the patchwise field (``alignPatchPx``).
     peak_method : {'getactimpeaks'}
         Seeding (``peakMethod``); WMF is not ported yet.
     seed_fit : {'local', 'matlab'}, optional
@@ -770,11 +774,11 @@ class SiloParams:
         _choice("debias_variance", self.debias_variance, ("fixed", "model"))
         self._seed_defaults()
         self._solver_defaults()
-        if self.inter_trial_alignment != "rigid":
-            raise NotImplementedError(
-                f"interTrialAlignment {self.inter_trial_alignment!r} is not "
-                "ported yet; only 'rigid'"
-            )
+        _choice(
+            "inter_trial_alignment",
+            self.inter_trial_alignment,
+            ("rigid", "affine", "patchwise"),
+        )
         if self.peak_method != "getactimpeaks":
             raise NotImplementedError(
                 f"peakMethod {self.peak_method!r} is not ported yet; only "
@@ -859,6 +863,7 @@ class SiloParams:
         return PlanParams(
             nan_thresh=self.nan_thresh,
             inter_trial_alignment=self.inter_trial_alignment,
+            align_patch_px=float(self.align_patch_px),
             peak_method=self.peak_method,
             seed_fit=self.seed_fit,
             seed_merge_px=self.seed_merge_px,
@@ -1166,6 +1171,7 @@ _STAGE_FIELDS_ADDED = {
     "plan": {
         "seed_fit": "matlab",
         "seed_merge_px": 0.0,
+        "align_patch_px": 1500,
         # each stage after localization checks the source of the stage
         # before it, so changing only the source redoes them
         "baseline_source": "median",

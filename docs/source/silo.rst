@@ -226,11 +226,35 @@ trial's mean image, activity image, the image its peaks are fitted in, the
 discarded frames, and the trial's own peaks. The peaks
 (``getActImPeaks`` per trial) feed only the per-trial summary's
 ``per_trial_act_im_peaks``; ``giant silo`` fits them in the background while
-the other stages run.
+the other stages run. With ``--alignment patchwise`` the file also holds
+the mean images of two halves of the trial's frames (alternating 0.5 s
+blocks, ``trialHalves``), which the patchwise alignment weights its
+patches with; files without them are localized again for such a run.
 
-**plan**: per path, the trials are aligned (rigid), the combined activity
-image is seeded, pixels are selected and sources grouped into subproblems
-(:func:`~giant_python.extraction.raster.plan.plan_path`). Soma ROIs of
+**plan**: per path, the trials are aligned, the combined activity image is
+seeded, pixels are selected and sources grouped into subproblems
+(:func:`~giant_python.extraction.raster.plan.plan_path`). The alignment
+(``--alignment``, ``SiloParams.inter_trial_alignment``, MATLAB's
+``interTrialAlignment``) is a rigid shift per trial, refined for the valid
+trials as GIAnT-MATLAB main does:
+
+* ``rigid`` (the default): the shift;
+* ``affine``: an affine map per trial, fitted groupwise to the mean of the
+  warped trials (``alignTrialsAffine``);
+* ``patchwise``: a smooth displacement field per trial, set by its values
+  at the centres of patches of about ``--align-patch-px`` (1500) imaged
+  pixels on top of the field's plane, fitted groupwise with robust weights;
+  a patch's bend is kept only as far as it exceeds its noise, measured
+  between the two halves of each trial (``alignTrialsPatchwise``).
+
+Trials that are aligned but not valid keep their shift. Every per-trial
+image, the extraction's sampling of each trial (each selected pixel at its
+own mapped position), the network baseline's mapping, the user ROIs (masks
+and geometry, through the annotation trial's full map) and the per-trial
+peaks (through the map's inverse) use the maps; the summaries hold
+``frame_info/trial_alignment_affine`` and, for ``patchwise``,
+``frame_info/trial_alignment_displacement``. The motion records add each
+trial's displacement at the canvas centre. Soma ROIs of
 ``annotations.h5`` mask the seeding; the user ROIs, moved into the
 consensus frame, are stored with the plan. ``--seeds FILE`` uses given
 seeds instead of the seeding (``/Path<n>/seeds`` ``(n, 4)`` ``[amplitude,
@@ -275,8 +299,10 @@ row and column orientation) or JSON; each has ``format`` and
 * Localization file
   (:mod:`giant_python.extraction.raster.stage_files`): ``mean_im``
   ``(rows, cols, channels)``, ``act_im``, ``summary``, ``discard``, ``peaks``
-  ``(n, 4)`` when fitted; attributes ``settings_hash``, ``movie``,
-  ``path``, ``trial``, ``align_hz``, ``num_channels``, ``peaks_fitted``.
+  ``(n, 4)`` when fitted, ``half_ims`` ``(2, rows, cols, channels)`` for a
+  patchwise alignment; attributes ``settings_hash``, ``movie``, ``path``,
+  ``trial``, ``align_hz``, ``num_channels``, ``peaks_fitted``,
+  ``half_ims``.
 * Plan file (:func:`~giant_python.extraction.raster.plan.write_plan`), plus
   ``/user_rois`` (``labels`` JSON attribute, ``masks`` (rois, rows, cols))
   and the attributes ``settings_hash``, ``path``, ``z_depth``.
@@ -306,6 +332,9 @@ Differences from MATLAB
   leaves ``per_trial_act_im_peaks`` and ``per_trial_num_peaks`` out.
 * A trial without any sample at the selected pixels is skipped (MATLAB
   would fail on it).
-* Not ported: affine and patchwise alignment, WMF seeding, recordings other
+* The patchwise alignment's patches are k-means clusters drawn with numpy's
+  generator, not MATLAB's, so they differ from MATLAB's; given MATLAB's
+  patches the fit agrees with MATLAB's to rounding (1e-12 px on 780125).
+* Not ported: WMF seeding, recordings other
   than SLAP2, the ROI-drawing GUI and the import of post-acquisition
   annotations (an existing ``annotations.h5`` is read).

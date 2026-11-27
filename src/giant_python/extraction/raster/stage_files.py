@@ -11,13 +11,16 @@ orientation, zero-based coordinates)::
 
     /             attributes: format, format_version, code_version,
                   settings_hash, movie, path, trial (one-based), align_hz,
-                  num_channels, z_depth, peaks_fitted (0/1)
+                  num_channels, z_depth, peaks_fitted (0/1), half_ims (0/1)
     /mean_im      (rows, cols, channels) mean image, file channel order
     /act_im       (rows, cols) activity image
     /summary      (rows, cols) the image the trial's peaks are fitted in
     /discard      (frames,) uint8: registered frames discarded for motion
     /peaks        (n, 4) [amplitude, row, col, sigma], when fitted with the
                   localization
+    /half_ims     (2, rows, cols, channels) float32: mean images of two
+                  halves of the frames (MATLAB's halfIMs), when the run's
+                  across-trial alignment is patchwise
 
 Peaks fitted later (``giant silo`` fits them in the background) go to a
 sidecar ``<name>.peaks.h5`` (``/peaks``), so that the localization file is
@@ -59,6 +62,8 @@ class LocalizationRecord:
         fitted.
     attrs : dict
         The file's attributes.
+    half_ims : ndarray of shape (2, rows, cols, channels) or None
+        Mean images of two halves of the frames, when stored.
     """
 
     mean_im: np.ndarray
@@ -67,13 +72,16 @@ class LocalizationRecord:
     discard: np.ndarray
     peaks: Optional[np.ndarray]
     attrs: dict
+    half_ims: Optional[np.ndarray] = None
 
     def trial_images(self):
         """The plan stage's input
         (:class:`~giant_python.extraction.raster.plan.TrialImages`)."""
         from .plan import TrialImages
 
-        return TrialImages(self.mean_im, self.act_im, self.peaks, self.discard)
+        return TrialImages(
+            self.mean_im, self.act_im, self.peaks, self.discard, self.half_ims
+        )
 
 
 def _value(v):
@@ -93,6 +101,7 @@ def write_localization(
     discard: np.ndarray,
     peaks: Optional[np.ndarray],
     attrs: dict,
+    half_ims: Optional[np.ndarray] = None,
 ) -> Path:
     """Write a localization file (written whole, then moved into place).
 
@@ -100,8 +109,9 @@ def write_localization(
     ----------
     path : str or Path
         Destination (replaced).
-    mean_im, act_im, summary, discard, peaks :
-        See :class:`LocalizationRecord`; ``peaks`` None if not fitted.
+    mean_im, act_im, summary, discard, peaks, half_ims :
+        See :class:`LocalizationRecord`; ``peaks`` None if not fitted,
+        ``half_ims`` None if not computed.
     attrs : dict
         Attributes (``settings_hash``, ``movie``, ``path``, ``trial``,
         ``align_hz``, ``num_channels``, ``z_depth``).
@@ -120,6 +130,7 @@ def write_localization(
             for key, value in attrs.items():
                 f.attrs[key] = value
             f.attrs["peaks_fitted"] = int(peaks is not None)
+            f.attrs["half_ims"] = int(half_ims is not None)
             opts = dict(compression="gzip", compression_opts=4, shuffle=True)
             f.create_dataset("mean_im", data=np.asarray(mean_im), **opts)
             f.create_dataset("act_im", data=np.asarray(act_im), **opts)
@@ -127,6 +138,10 @@ def write_localization(
             f["discard"] = np.asarray(discard, dtype=np.uint8)
             if peaks is not None:
                 f["peaks"] = np.asarray(peaks, dtype=np.float64).reshape(-1, 4)
+            if half_ims is not None:
+                f.create_dataset(
+                    "half_ims", data=np.asarray(half_ims, np.float32), **opts
+                )
         side = peaks_file(path)
         if side.exists():  # peaks of an earlier localization
             side.unlink()
@@ -170,7 +185,9 @@ def localization_attrs(path) -> Optional[dict]:
     return attrs
 
 
-def read_localization(path, peaks: bool = True) -> LocalizationRecord:
+def read_localization(
+    path, peaks: bool = True, half_ims: bool = True
+) -> LocalizationRecord:
     """Read a localization file (and its peaks' sidecar, if there is one).
 
     Parameters
@@ -180,6 +197,9 @@ def read_localization(path, peaks: bool = True) -> LocalizationRecord:
     peaks : bool
         Read the sidecar's peaks too (the plan stage does not: a sidecar may
         be being written then).
+    half_ims : bool
+        Read the half images, when the file has them (only the patchwise
+        alignment uses them).
 
     Raises
     ------
@@ -203,6 +223,9 @@ def read_localization(path, peaks: bool = True) -> LocalizationRecord:
             discard=f["discard"][()].astype(bool),
             peaks=f["peaks"][()] if "peaks" in f else None,
             attrs={k: _value(v) for k, v in f.attrs.items()},
+            half_ims=(
+                f["half_ims"][()] if half_ims and "half_ims" in f else None
+            ),
         )
     if rec.peaks is None and peaks:
         rec.peaks = _sidecar_peaks(path)

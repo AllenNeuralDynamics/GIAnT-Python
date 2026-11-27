@@ -157,6 +157,38 @@ def _check_same(
         )
 
 
+def _needs_halves(params: SiloParams) -> bool:
+    """Whether the plan needs each trial's half images (the patchwise
+    alignment weights its patches with them)."""
+    return params.inter_trial_alignment == "patchwise"
+
+
+def _has_halves(path) -> bool:
+    """Whether a localization file holds the trial's half images."""
+    return bool(_attr(path, "half_ims"))
+
+
+def check_plan_alignment(what: str, plan, params: SiloParams) -> None:
+    """Refuse to extract or collect with another across-trial alignment
+    than the plan's: the trials are read through the plan's maps, and the
+    summaries record these settings."""
+    _check_same(
+        what,
+        plan.params.inter_trial_alignment,
+        params.inter_trial_alignment,
+        "inter_trial_alignment",
+        "--alignment",
+    )
+    if params.inter_trial_alignment == "patchwise":
+        _check_same(
+            what,
+            float(plan.params.align_patch_px),
+            float(params.align_patch_px),
+            "align_patch_px",
+            "--align-patch-px",
+        )
+
+
 def check_plan_support(what: str, plan, params: SiloParams) -> None:
     """Refuse to extract with a footprint support other than the one the
     plan's zones were made for (``valid_kernel``: one per run)."""
@@ -186,6 +218,7 @@ def _localize_job(job: dict) -> dict:
         activity_channel=p.activity_channel,
         motion_thresh=p.motion_thresh,
         discard_initial_s=p.discard_initial_s,
+        half_ims=_needs_halves(p),
         find_peaks=False,
     )
     t1 = time.perf_counter()
@@ -208,6 +241,7 @@ def _localize_job(job: dict) -> dict:
         trial.discard,
         peaks,
         job["attrs"],
+        trial.half_ims,
     )
     return {
         "unit": job["unit"],
@@ -222,7 +256,7 @@ def _peaks_job(job: dict) -> dict:
     from ..extraction.raster.stage_files import add_peaks, read_localization
 
     t0 = time.perf_counter()
-    rec = read_localization(job["file"])
+    rec = read_localization(job["file"], half_ims=False)
     peaks = get_act_im_peaks(
         rec.summary,
         job["peak_th"],
@@ -302,6 +336,9 @@ def localize_jobs(
             # the network are redone (the plan stage would refuse them)
             and _recorded(out, "localization_baseline")
             == params.localization_baseline
+            # the patchwise alignment needs the half images, which files
+            # localized for another alignment lack
+            and (not _needs_halves(params) or _has_halves(out))
         ):
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -401,15 +438,18 @@ def localize(
 # ---------------------------------------------------------------- plan
 
 
-def _plan_inputs(session: SiloSession, d: int):
-    """The localization records of path ``d`` (None for trials without)."""
+def _plan_inputs(session: SiloSession, d: int, half_ims: bool = False):
+    """The localization records of path ``d`` (None for trials without);
+    the half images only with ``half_ims``."""
     from ..extraction.raster.stage_files import read_localization
 
     recs = []
     for t in range(session.n_trials):
         f = session.localize_file(d, t)
         recs.append(
-            read_localization(f, peaks=False) if session.keep[d, t] else None
+            read_localization(f, peaks=False, half_ims=half_ims)
+            if session.keep[d, t]
+            else None
         )
     return recs
 
@@ -534,7 +574,7 @@ def plan_one(
     out = session.plan_file(d)
     if not overwrite and _attr(out, "settings_hash") == h:
         return out
-    recs = _plan_inputs(session, d)
+    recs = _plan_inputs(session, d, _needs_halves(params))
     trials = [None if r is None else r.trial_images() for r in recs]
     soma, soma_trial = None, None
     if ann is not None and ann.rois:
@@ -586,7 +626,8 @@ def plan_one(
 
 def _check_localizations(session: SiloSession, params: SiloParams, d: int):
     """Refuse to plan path ``d`` from localizations made with another
-    baseline than these settings'."""
+    baseline than these settings', or without the half images that a
+    patchwise alignment needs."""
     for t in np.flatnonzero(session.keep[d]):
         f = session.localize_file(d, int(t))
         if f.exists():
@@ -596,6 +637,12 @@ def _check_localizations(session: SiloSession, params: SiloParams, d: int):
                 params.localization_baseline,
                 "localization_baseline",
             )
+            if _needs_halves(params) and not _has_halves(f):
+                raise ValueError(
+                    f"the localization {f.name} has no half images, which "
+                    "the patchwise alignment needs: run the localize stage "
+                    "with these settings (it redoes such files)"
+                )
 
 
 def _z_depth(session: SiloSession, d: int) -> float:
@@ -883,6 +930,7 @@ def prepare(
                 _attr(f, "settings_hash"),
             )
             check_plan_support(f"the plan {f.name}", plans[d][0], params)
+            check_plan_alignment(f"the plan {f.name}", plans[d][0], params)
         p, rois, ph = plans[d]
         base = _extraction_baseline(session, params, d, t, baseline_dir)
         h = _prepare_hash(session, params, ph, d, t, base)
@@ -1213,6 +1261,7 @@ def stream(  # noqa: C901
             "baseline_source",
         )
         check_plan_support(f"the plan {pf.name}", plan, params)
+        check_plan_alignment(f"the plan {pf.name}", plan, params)
         placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
         for t in (int(x) for x in plan.valid_trials):

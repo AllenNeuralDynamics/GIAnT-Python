@@ -275,14 +275,33 @@ def test_invalid_values_are_rejected(kwargs):
         SiloParams(**kwargs)
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [{"inter_trial_alignment": "affine"}, {"peak_method": "wmf"}],
-)
-def test_modes_not_ported_raise(kwargs):
-    """Affine alignment and WMF seeding are not ported yet."""
+def test_modes_not_ported_raise():
+    """WMF seeding is not ported yet."""
     with pytest.raises(NotImplementedError):
-        SiloParams(**kwargs)
+        SiloParams(peak_method="wmf")
+
+
+def test_alignment_modes():
+    """The three across-trial alignments are accepted and reach the plan
+    stage; others are rejected. The patch size counts in the plan's
+    settings only when it is not the default (plans made before it was a
+    field stay current)."""
+    for mode in ("rigid", "affine", "patchwise"):
+        p = SiloParams(inter_trial_alignment=mode, align_patch_px=1200)
+        assert p.plan_params().inter_trial_alignment == mode
+        assert p.plan_params().align_patch_px == 1200
+    with pytest.raises(ValueError, match="inter_trial_alignment"):
+        SiloParams(inter_trial_alignment="elastic")
+    assert "align_patch_px" not in SiloParams().stage_settings("plan")
+    assert (
+        SiloParams(align_patch_px=1000).stage_settings("plan")[
+            "align_patch_px"
+        ]
+        == 1000
+    )
+    assert SiloParams().stage_settings("localize") == SiloParams(
+        inter_trial_alignment="patchwise"
+    ).stage_settings("localize")
 
 
 def test_stage_settings_change_only_with_their_fields():
