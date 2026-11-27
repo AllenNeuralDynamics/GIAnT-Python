@@ -139,25 +139,44 @@ class GainCurve:
         }  # fmt: skip
 
 
+INT64_SAFE = 2**62
+"""Largest worst-case magnitude of a sum kept in int64."""
+
+
+def _sums(columns: list, bound: float, n: int) -> np.ndarray:
+    """Per-slot sums of ``columns`` ``(slots, n)`` each: exact int64 when
+    ``n`` terms of magnitude at most ``bound`` cannot overflow it, float64
+    otherwise (long trials of extreme samples; second differences reach
+    ``4 * 32767``, so cubes over more than about 2000 cycles could)."""
+    if bound * max(n, 1) < INT64_SAFE:
+        return torch.stack([c.sum(1) for c in columns], 1).cpu().numpy()
+    return torch.stack([c.double().sum(1) for c in columns], 1).cpu().numpy()
+
+
+def _cube_bound(*xs: torch.Tensor) -> float:
+    """Worst-case magnitude of a product of three second differences."""
+    big = max((int(x.abs().max()) if x.numel() else 0) for x in xs)
+    return float(4 * big) ** 3
+
+
 def _slot_sums(x: torch.Tensor) -> np.ndarray:
     """Exact per-slot sums of one channel's samples ``(slots, cycles)``.
 
     Returns
     -------
-    ndarray of int64
+    ndarray of int64 (float64 where int64 could overflow, see :func:`_sums`)
         ``(slots, 7)``: valid samples, their sum, zeros, triples, and the
         sums of ``x1``, ``d^2`` and ``d^3`` over triples.
     """
     x = x.to(torch.int64)
     valid = x != INVALID_SAMPLE
     x0 = torch.where(valid, x, 0)
-    out = [valid.sum(1), x0.sum(1), (valid & (x == 0)).sum(1)]
     ok = valid[:, :-2] & valid[:, 1:-1] & valid[:, 2:]
     d = 2 * x0[:, 1:-1] - x0[:, :-2] - x0[:, 2:]
     d = torch.where(ok, d, 0)
     mid = torch.where(ok, x0[:, 1:-1], 0)
-    out += [ok.sum(1), mid.sum(1), (d * d).sum(1), (d * d * d).sum(1)]
-    return torch.stack(out, 1).cpu().numpy()
+    cols = [valid, x0, valid & (x == 0), ok, mid, d * d, d * d * d]
+    return _sums(cols, _cube_bound(x0), x.shape[1])
 
 
 def slot_sums(samples: torch.Tensor, channel: int) -> np.ndarray:
@@ -227,7 +246,7 @@ def _pair_sums(xa: torch.Tensor, xb: torch.Tensor) -> np.ndarray:
 
     Returns
     -------
-    ndarray of int64
+    ndarray of int64 (float64 where int64 could overflow)
         ``(pairs, 9)``: triples valid in both, ``sum(x1_a + x1_b)``,
         ``sum(d_a d_b)``, ``sum(d_a^2 d_b)``, ``sum(d_a d_b^2)``; cycles
         valid in both, and of them the zeros of ``a``, of ``b`` and of
@@ -249,10 +268,9 @@ def _pair_sums(xa: torch.Tensor, xb: torch.Tensor) -> np.ndarray:
     mid = torch.where(ok, a0[:, 1:-1] + b0[:, 1:-1], 0)
     both = va & vb
     za, zb = both & (xa == 0), both & (xb == 0)
-    out = [ok.sum(1), mid.sum(1), (da * db).sum(1), (da * da * db).sum(1)]
-    out += [(da * db * db).sum(1), both.sum(1), za.sum(1), zb.sum(1)]
-    out.append((za & zb).sum(1))
-    return torch.stack(out, 1).cpu().numpy()
+    cols = [ok, mid, da * db, da * da * db, da * db * db, both, za, zb]
+    cols.append(za & zb)
+    return _sums(cols, _cube_bound(a0, b0), xa.shape[1])
 
 
 def pair_sums(samples: torch.Tensor, channel: int, nxt: np.ndarray):

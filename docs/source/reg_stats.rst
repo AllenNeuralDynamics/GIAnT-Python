@@ -47,7 +47,8 @@ Registration's other outputs do not change: the movie and the alignment file
 are bit-identical with and without statistics, and nothing that reads them
 (GIAnT-Python's loaders, ``slap2_f0``'s reader, MATLAB) sees the new file. A
 registration that skips a trial because its outputs exist leaves the trial's
-statistics as they are; one with ``--no-stats`` removes an existing file of
+statistics as they are (``giant reg-stats`` replaces those of another
+``stats_version`` or registration); one with ``--no-stats`` removes an existing file of
 the trial, which would describe the earlier registration. If the statistics
 fail, registration logs the error and publishes the movie without them.
 

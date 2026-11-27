@@ -258,6 +258,21 @@ def test_gain_groups_without_zeros_keep_their_gains():
     assert np.isnan(curve.at(np.nan)["g2"])
 
 
+def test_gain_sums_do_not_overflow():
+    """Cubes of extreme second differences over a long trial would
+    overflow int64; those sums are float64 then (and exact int64 for
+    ordinary trials)."""
+    x = np.zeros((2, 150_000), dtype=np.int16)
+    x[:, ::3] = 32767  # d = 65534, -32767, -32767: cubes sum to > 2^63
+    got = slot_sums(torch.from_numpy(x[None]), 0)
+    d = 2 * x[:, 1:-1].astype(object) - x[:, :-2] - x[:, 2:]
+    want = [sum(int(v) ** 3 for v in row) for row in d]
+    np.testing.assert_allclose(got[:, 6], np.array(want, float), rtol=1e-12)
+    assert abs(want[0]) > 2**63  # int64 would have overflowed
+    short = slot_sums(torch.from_numpy(x[None, :, :100]), 0)
+    assert short.dtype == np.int64
+
+
 def test_regression_weights_of_undetermined_pixels():
     """A pixel whose valid bins leave a time course flat gets NaN weights
     (not an error); the others are fitted."""
