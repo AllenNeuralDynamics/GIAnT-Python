@@ -141,7 +141,17 @@ def read_channel(path: Path, num_channels: int, channel: int) -> np.ndarray:
         with h5py.File(path, "r") as f:
             ds = f[next(iter(f.keys()))]  # (pages, MATLAB cols, rows)
             n = ds.shape[0] // num_channels
-            raw = ds[channel : n * num_channels : num_channels]
+            # whole frames at a time: twice as fast as a strided selection
+            # of the (one page per chunk, compressed) dataset
+            step = 128 * num_channels
+            raw = np.concatenate(
+                [
+                    ds[a : min(a + step, n * num_channels)][
+                        channel::num_channels
+                    ]
+                    for a in range(0, n * num_channels, step)
+                ]
+            )
     else:
         import tifffile
 
