@@ -1136,7 +1136,14 @@ _STAGE_FIELDS = {
 # that reproduces what the stage did before (see SiloParams.stage_settings)
 _STAGE_FIELDS_ADDED = {
     "localize": {"seed_fit": "matlab", "seed_merge_px": 0.0},
-    "plan": {"seed_fit": "matlab", "seed_merge_px": 0.0},
+    "plan": {
+        "seed_fit": "matlab",
+        "seed_merge_px": 0.0,
+        # each stage after localization checks the source of the stage
+        # before it, so changing only the source redoes them
+        "baseline_source": "median",
+    },
+    "prepare": {"baseline_source": "median"},
     "solve": {"baseline_mode": "fit"},
 }
 

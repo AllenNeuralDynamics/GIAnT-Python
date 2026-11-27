@@ -258,7 +258,14 @@ def localize_jobs(
             session, params, d, t, None if base is None else _file_id(base)
         )
         out = session.localize_file(d, t)
-        if not overwrite and _attr(out, "settings_hash") == h:
+        if (
+            not overwrite
+            and _attr(out, "settings_hash") == h
+            # files made before the baseline was recorded: those made with
+            # the network are redone (the plan stage would refuse them)
+            and _recorded(out, "localization_baseline")
+            == params.localization_baseline
+        ):
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
         jobs.append(

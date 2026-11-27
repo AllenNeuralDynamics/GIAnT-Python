@@ -496,3 +496,82 @@ def test_predict_baselines(tmp_path, monkeypatch):
         silo_baseline.predict_baselines(s, params, bdir, ckpt)
     with pytest.raises(FileNotFoundError, match="no checkpoint"):
         silo_baseline.predict_baselines(s, params, bdir, tmp_path / "x.pt")
+
+
+def test_source_alone_redoes_plan_and_containers(tmp_path, fake):
+    """baseline_source enters the plan and prepare hashes (when it is not
+    MATLAB's): changing it alone redoes those stages rather than reusing
+    files that the next stage would refuse."""
+    alt = SiloParams(
+        baseline_source="median",
+        localization_baseline="network",
+        localization_surround=False,
+        localization_null="bootstrap",
+        peak_th=8.0,
+        baseline_mode="gain",
+        min_kinetic_score=0.0,
+    )
+    for stage in ("localize", "solve", "collect"):
+        assert alt.stage_settings(stage) == NET.stage_settings(stage)
+    for stage in ("plan", "prepare"):
+        assert alt.stage_settings(stage) != NET.stage_settings(stage)
+        assert "baseline_source" not in MEDIAN.stage_settings(stage)
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    silo.localize(s, NET, EX, baseline_dir=bdir)
+    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, NET, EX, baseline_dir=bdir)
+    silo.plan(s, alt, EX, seeds=_seeds(s, tmp_path))  # redone, not reused
+    with h5py.File(s.plan_file(0), "r") as f:
+        assert f.attrs["baseline_source"] == "median"
+    assert len(silo.prepare(s, alt, EX, baseline_dir=bdir)) == 6
+    with pytest.raises(ValueError, match="baseline_source='median'"):
+        silo.prepare(s, NET, EX, baseline_dir=bdir)
+
+
+def test_unrecorded_network_localization_is_redone(tmp_path, fake):
+    """A localization file without the record of its baseline (made before
+    it was recorded) counts as the moving median's: with the network's
+    settings it is localized again, with MATLAB's it is kept."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    silo.localize(s, NET, EX, baseline_dir=bdir)
+    assert silo.localize_jobs(s, NET, baseline_dir=bdir) == []
+    with h5py.File(s.localize_file(1, 2), "a") as f:
+        del f.attrs["localization_baseline"]
+    jobs = silo.localize_jobs(s, NET, baseline_dir=bdir)
+    assert [j["unit"] for j in jobs] == [(1, 2)]
+    m = SiloSession.open(make_session(tmp_path / "m"))
+    silo.localize(m, MEDIAN, EX)
+    with h5py.File(m.localize_file(0, 1), "a") as f:
+        del f.attrs["localization_baseline"]
+    assert silo.localize_jobs(m, MEDIAN) == []
+
+
+def test_summary_records_the_baseline_of_the_results_used(tmp_path, fake):
+    """The summary's network_baseline comes from the results files that
+    are assembled, not from earlier runs' files left in the folder."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    silo.localize(s, NET, EX, baseline_dir=bdir)
+    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, NET, EX, baseline_dir=bdir)
+    for job in silo_solve.dispatch(s, NET, 3, EX):
+        silo_solve.solve_job(job, execution=EX)
+    shard = sorted(s.results_dir.glob("*_s*.h5"))[0]
+    stem = shard.name.split("_s")[0]
+    stale = s.results_dir / f"{stem}.h5"  # sorts before the shards
+    assert not stale.exists()
+    stale.write_bytes(shard.read_bytes())
+    with h5py.File(stale, "a") as f:
+        f.attrs["plan_hash"] = "an earlier plan"
+        f.attrs["network_baseline"] = json.dumps({"file": {"name": "old"}})
+    with pytest.warns(UserWarning, match="left out"):
+        record = silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+    used = record["network_baseline"][stem]
+    assert used["file"]["name"].endswith("_BASELINE-80Hz.h5")
+    with h5py.File(s.out_dir / "experiment_summary.h5", "r") as f:
+        assert json.loads(f.attrs["network_baseline"])[stem] == used

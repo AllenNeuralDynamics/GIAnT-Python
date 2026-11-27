@@ -109,9 +109,18 @@ def _outcome_loader(files: list, solver_params):
 
 
 def path_result(
-    session: SiloSession, params: SiloParams, d: int, baseline_dir=None
+    session: SiloSession,
+    params: SiloParams,
+    d: int,
+    baseline_dir=None,
+    provenance: Optional[dict] = None,
 ) -> Optional[object]:
     """Everything the summaries need of path ``d``, read from its files.
+
+    ``provenance``, if given, gets the network baseline (its identity, as
+    the results files record it) of each trial-path assembled here, keyed
+    ``path<d>_trial<tttt>``: from the files that are used, not from earlier
+    runs' files left in the folder.
 
     Returns
     -------
@@ -169,6 +178,10 @@ def path_result(
                 f"{session.results_dir}"
             )
         trials[t] = _outcome_loader(files, sp)
+        if provenance is not None:
+            used = _baseline_identity(files)
+            if used is not None:
+                provenance[f"path{d + 1}_trial{t + 1:04d}"] = used
         alignment[t] = read_alignment_record(session.alignment(d, t))
     z = attr(pf, "z_depth")
     return PathResult(
@@ -238,8 +251,9 @@ def collect(
     ex = execution or SiloExecution()
     start_time = start_time or now()
     t0 = time.perf_counter()
+    used: dict = {}
     results = [
-        path_result(session, params, d, baseline_dir)
+        path_result(session, params, d, baseline_dir, used)
         for d in range(session.n_paths)
     ]
     kept = {}
@@ -270,7 +284,6 @@ def collect(
         session.num_channels,
         params.activity_channel,
     )
-    used = network_baselines(session)
     if params.needs_network_baseline or params.baseline_source != "median":
         # MATLAB's algorithm leaves the file as MATLAB writes it
         with h5py.File(session.out_dir / "experiment_summary.h5", "a") as f:
@@ -299,21 +312,16 @@ def collect(
     return record
 
 
-def network_baselines(session: SiloSession) -> dict:
-    """The network baselines the results were extracted with: per
-    trial-path (``path<d>_trial<tttt>``), the identity recorded in its
-    results files (empty without the network)."""
-    out = {}
-    for d in range(session.n_paths):
-        for t in range(session.n_trials):
-            for f in _results_files(session, d, t):
-                value = attr(f, "network_baseline")
-                if value:
-                    if isinstance(value, bytes):
-                        value = value.decode()
-                    out[f"path{d + 1}_trial{t + 1:04d}"] = json.loads(value)
-                    break
-    return out
+def _baseline_identity(files: list) -> Optional[dict]:
+    """The network baseline recorded in a trial's results files (they are
+    of one container, so they record the same), or None."""
+    for f in files:
+        value = attr(f, "network_baseline")
+        if value:
+            if isinstance(value, bytes):
+                value = value.decode()
+            return json.loads(value)
+    return None
 
 
 def read_kept(path) -> dict:
