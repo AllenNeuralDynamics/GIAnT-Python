@@ -211,7 +211,7 @@ class TrialMovie:
     baseline: Optional[np.ndarray]
     runs: list
     info: dict = field(default_factory=dict)
-    kernel: str = "exporter"
+    kernel: str = "matched"
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -421,7 +421,7 @@ def load_trial(
     d: int,
     t: int,
     blur: float = 0.0,
-    kernel: str = "exporter",
+    kernel: str = "matched",
 ) -> TrialMovie:
     """Load trial ``t`` (zero-based) of path ``d`` (one-based) with every
     run's activity.

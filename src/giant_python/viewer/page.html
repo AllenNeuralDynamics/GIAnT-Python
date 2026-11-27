@@ -162,8 +162,8 @@ details.defs li { margin: 3px 0; }
     <button id="zin" title="Zoom in (Ctrl + scroll)">＋</button><button id="zout" title="Zoom out">－</button><button id="zreset" title="Fit (double-click)">Fit</button>
     <label><input id="bmarks" type="checkbox"> sources</label>
     <label title="How SILo's 200 Hz traces become the movie's 80 Hz frames">Time kernel <select id="bkernel">
-      <option value="exporter">exporter's (dt of the movie)</option>
-      <option value="matched">matched (√(dt80² − dt200²))</option></select></label>
+      <option value="matched">matched (√(dt80² − dt200²))</option>
+      <option value="exporter">exporter's (dt of the movie)</option></select></label>
   </div>
   <div class="row bonly hidden">
     <span id="evinfo" class="hint">No source picked: pick one in the Sources view to step through its largest events.</span>
@@ -215,7 +215,7 @@ details.defs li { margin: 3px 0; }
     <ul>
       <li><b>Activity image</b> (Sources view): SILo's combined activity image of the path on its consensus canvas (all trials), or one trial's, as in <code>experiment_summary.h5</code> and <code>per_trial_summary.h5</code>. Markers sit at the kept sources' footprint centroids, the kinetics-rejected sources' pixels and, when the run kept its plan, the seeds whose pixel got no source.</li>
       <li><b>Aligned movie</b> (Movie view): the trial's registered 80 Hz movie (<code>*_REGISTERED_DOWNSAMPLED-80Hz</code>, activity channel) in the trial's own registered frame, not resampled. Blank (NaN) at SILo's motion discards and at frames whose kernel weight lies mostly on SILo's discarded 200 Hz frames; only pixels missing in less than <code>nanThresh</code> of the frames are shown.</li>
-      <li><b>Fitted activity</b>: every kept source's footprint times its denoised trace (<code>dF_denoised</code>), rendered in the movie's pixels and frames as the F0 network's training-data exporter does. Time: each 80 Hz frame averages SILo's 200 Hz traces at its frame lines with weights <code>exp(−|Δline| / dt)</code> within <code>max(3 dt, P)</code> lines (P: lines per cycle), leaving out SILo's discarded frames. With the <b>exporter's</b> kernel dt is the movie's own (<code>ceil(mean(diff(DSframes)))</code>, 134 lines on these rigs), as the training-data exporter does; but the 200 Hz frames are themselves averages (dt200 = 54 lines), so this smooths fast events twice and keeps 93–95% of an event's 80 Hz peak on noiseless injected events. The <b>matched</b> kernel uses <code>√(dt² − dt200²)</code> (≈ 123 lines) and keeps 97–99%. The Time kernel menu switches between them. Space: the trial's footprints are moved from the consensus canvas into the trial's frame through the trial's across-trial map (rigid, affine or patchwise), bilinearly; the exporter instead searched a rigid offset per trial by correlation and blurred the footprints to match the movie's shape (here a fixed blur, 0 unless the server was started with <code>--blur</code>). Kinetics-rejected sources are not included (their traces are not in the summary).</li>
+      <li><b>Fitted activity</b>: every kept source's footprint times its denoised trace (<code>dF_denoised</code>), rendered in the movie's pixels and frames following the F0 network's training-data exporter. Time: each 80 Hz frame averages SILo's 200 Hz traces at its frame lines with weights <code>exp(−|Δline| / dt)</code> within <code>max(3 dt, P)</code> lines (P: lines per cycle), leaving out SILo's discarded frames. With the <b>exporter's</b> kernel dt is the movie's own (<code>ceil(mean(diff(DSframes)))</code>, 134 lines on these rigs), as the training-data exporter does; but the 200 Hz frames are themselves averages (dt200 = 54 lines), so this smooths fast events twice and keeps 93–95% of an event's 80 Hz peak on noiseless injected events. The <b>matched</b> kernel (the default) uses <code>√(dt² − dt200²)</code> (≈ 123 lines) and keeps 97–99%. The Time kernel menu switches between them. Space: the trial's footprints are moved from the consensus canvas into the trial's frame through the trial's across-trial map (rigid, affine or patchwise), bilinearly; the exporter instead searched a rigid offset per trial by correlation and blurred the footprints to match the movie's shape (here a fixed blur, 0 unless the server was started with <code>--blur</code>). Kinetics-rejected sources are not included (their traces are not in the summary).</li>
       <li><b>Residual</b> = aligned movie − fitted activity: what a training target made from this run would be. <b>Residual − baseline</b> = movie − activity − the F0 network's baseline (only with <code>--baseline-dir</code>).</li>
       <li><b>Units</b>: raw counts of the registered movie (each pixel's weighted mean of its raw SLAP2 samples); SILo's traces and F0 are in the same units (footprints sum to 1, so a trace is the source's total over its footprint).</li>
     </ul>
@@ -232,7 +232,7 @@ const A = { src: null, images: {}, view: { z: 1, cx: 0, cy: 0 }, sel: null, mark
 const B = { st: null, layers: [], N: 0, R: 0, C: 0, T: 0, fr: 80, t: 0, avg: 4, playing: false, frame: null,
   inflight: false, pending: false, view: { z: 1, cx: 0, cy: 0 }, sel: null, rad: 1, lo: 0, hi: 1, ahi: 1, rr: 1,
   gamma: 0.5, shown: new Set(), ncols: 3, trace: null, tsmooth: 1, xr: [0, 1], hoverT: null, pix: null, tiles: [],
-  seq: 0, trial: null, events: [], ev: -1, evSrc: null, autoNext: true, pendingJump: null };
+  seq: 0, trial: null, events: [], ev: -1, evSrc: null, autoNext: true, pendingJump: null, kernel: "matched" };
 
 function setStatus(msg, err) { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; }
 async function getJSON(url) {
@@ -276,7 +276,7 @@ async function init() {
   try { S.meta = await getJSON("/api/meta"); }
   catch (e) { setStatus("could not load the runs: " + e.message, true); return; }
   $("label").textContent = S.meta.label;
-  B.kernel = S.meta.kernel || "exporter"; $("bkernel").value = B.kernel;
+  B.kernel = S.meta.kernel || "matched"; $("bkernel").value = B.kernel;
   document.title = `${S.meta.label} · SILo run viewer`;
   $("runinfo").innerHTML = S.meta.runs.map((r) => {
     const s = r.settings;

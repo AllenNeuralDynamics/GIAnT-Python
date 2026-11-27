@@ -99,7 +99,7 @@ class Store:
         label="",
         cache_trials=2,
         blur=0.0,
-        kernel="exporter",
+        kernel="matched",
     ):
         """Check that the runs fit together."""
         if not runs:
@@ -516,12 +516,12 @@ def add_arguments(p) -> None:
     )
     p.add_argument(
         "--kernel",
-        choices=("exporter", "matched"),
-        default="exporter",
+        choices=("matched", "exporter"),
+        default="matched",
         help="how SILo's 200 Hz traces become the movie's 80 Hz "
-        "frames: the exporter's weights (the movie's dt), or "
-        "matched (sqrt(dt80^2 - dt200^2), for the 200 Hz frames' "
-        "own smoothing)",
+        "frames: matched (default; sqrt(dt80^2 - dt200^2), for the "
+        "200 Hz frames' own smoothing), or the exporter's weights (the "
+        "movie's dt); the page switches between them",
     )
     p.add_argument(
         "--cache-trials",

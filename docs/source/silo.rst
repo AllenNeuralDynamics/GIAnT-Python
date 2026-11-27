@@ -422,15 +422,15 @@ or small region below:
   through. Time: each 80 Hz frame averages the 200 Hz traces at SILo's
   frame lines with weights ``exp(-|dline| / dt)`` within ``max(3 dt, P)``
   lines (``P`` lines per cycle from the raw header, else ``3 dt``), leaving
-  out SILo's discarded frames. With ``--kernel exporter`` (the default)
-  ``dt`` is the movie's own, ``ceil(mean(diff(DSframes)))``, as the F0
-  network's training-data exporter (slap2-F0-network
-  ``exportF0TrainingData.m``) renders training targets. The 200 Hz frames
-  are themselves averages (``dt200 = ceil(mean(diff(lines)))``), so this
-  smooths fast events twice: on noiseless injected GFP events it keeps
-  0.93-0.95 of an event's 80 Hz peak. ``--kernel matched`` uses
-  ``sqrt(dt**2 - dt200**2)`` (123 lines on these rigs) and keeps
-  0.97-0.99. The page switches between the two (Time kernel).
+  out SILo's discarded frames. The F0 network's training-data exporter
+  (slap2-F0-network ``exportF0TrainingData.m``) uses the movie's own
+  ``dt``, ``ceil(mean(diff(DSframes)))`` (``--kernel exporter``). The
+  200 Hz frames are themselves averages (``dt200 =
+  ceil(mean(diff(lines)))``), so this smooths fast events twice: on
+  noiseless injected GFP events it keeps 0.93-0.95 of an event's 80 Hz
+  peak. The default, ``--kernel matched``, uses ``sqrt(dt**2 - dt200**2)``
+  (123 lines on these rigs) and keeps 0.97-0.99. The page switches between
+  the two (Time kernel).
   Kinetics-rejected sources are not rendered (the summaries do not hold
   their traces).
 * *Movie - activity*: the residual, what a training target made from the
@@ -446,4 +446,5 @@ moved through SILo's own across-trial map instead of an offset searched
 per trial by correlating movie and activity (an integer offset of the mean
 images plus a sub-pixel search), and they are not blurred to match the
 movie's shape unless ``--blur SIGMA`` is given (the exporter picks a blur
-per trial); the ``matched`` kernel is not the exporter's.
+per trial); and the default time kernel is the matched one, not the
+exporter's.

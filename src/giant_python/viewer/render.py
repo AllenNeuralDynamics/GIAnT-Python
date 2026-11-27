@@ -1,17 +1,20 @@
 """SILo's fitted activity rendered in a trial's registered 80 Hz movie.
 
-The rendering is the one of the F0 network's training-data exporter
+The rendering follows the F0 network's training-data exporter
 (``exportF0TrainingData.m`` in slap2-F0-network), so that the movie minus
 the rendered activity is what a training target made from the run would
-be, with one change in space:
+be, with these changes:
 
 * **Time.** An 80 Hz frame is the registration's weighted mean of the
   samples within ``max(3 dt, P)`` lines of its line, with weights
   ``exp(-|dline| / dt)``, ``dt = ceil(mean(diff(DSframes)))`` lines and
   ``P`` the recording's lines per cycle. The 200 Hz traces are averaged
-  with the same weights, at SILo's frame lines, leaving out SILo's
-  discarded frames; an 80 Hz frame whose weight falls more than half on
-  discarded 200 Hz frames is discarded (:func:`frame_weights`).
+  at SILo's frame lines with such weights, leaving out SILo's discarded
+  frames (:func:`frame_weights`); an 80 Hz frame whose weight falls more
+  than half on discarded 200 Hz frames is discarded. The exporter uses
+  the movie's ``dt``; since the 200 Hz frames are already averages, the
+  viewer's default narrows it to ``sqrt(dt**2 - dt200**2)``
+  (:func:`~giant_python.viewer.trial.render_dt`).
 * **Space.** Footprints live on SILo's consensus canvas; each trial's
   footprints are moved into the trial's registered frame through the
   trial's across-trial map (rigid, affine or patchwise), the one SILo read
