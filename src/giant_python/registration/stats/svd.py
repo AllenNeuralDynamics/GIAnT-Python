@@ -32,6 +32,10 @@ N_COMPONENTS = 3
 MIN_BINS = 64
 """Valid time bins a pixel needs for its weights."""
 
+RANK_TOL = 1e-6
+"""Singular values below this share of the largest count as 0 (Gram
+eigenvalues carry rounding of about 1e-8 of it in singular values)."""
+
 MAX_CONDITION = 1e8
 """Largest condition number of a pixel's regression (normal equations)."""
 
@@ -90,8 +94,10 @@ def _components(y: np.ndarray, k: int):
 
     Returns
     -------
-    u : ndarray ``(n_bins, k)``
-    s : ndarray ``(k,)``
+    u : ndarray ``(n_bins, n)``
+    s : ndarray ``(n,)``
+        The ``n <= k`` components whose singular value is above
+        :data:`RANK_TOL` of the largest.
     total : float
         ``sum(y^2)`` (the sum of all squared singular values).
     """
@@ -100,11 +106,12 @@ def _components(y: np.ndarray, k: int):
     evals, evecs = np.linalg.eigh(gram)
     order = np.argsort(evals)[::-1][: min(k, evals.size)]
     s = np.sqrt(np.maximum(evals[order], 0.0))
-    u = evecs[:, order]
+    # a rank below k: no further components (relative to rounding)
+    keep = s > (s[0] if s.size else 0.0) * RANK_TOL
+    s, u = s[keep], evecs[:, order[keep]]
     if tall:
-        with np.errstate(invalid="ignore", divide="ignore"):
-            u = (y @ u) / np.where(s > 0, s, np.nan)
-    sign = np.sign(np.nan_to_num((y.T @ u).sum(0)))
+        u = (y @ u) / s
+    sign = np.sign((y.T @ u).sum(0))
     sign[sign == 0] = 1
     return u * sign, s, float(np.trace(gram))
 
@@ -138,6 +145,9 @@ def regression_weights(y: np.ndarray, u: np.ndarray) -> np.ndarray:
         the normal equations above :data:`MAX_CONDITION`).
     """
     nb, k = u.shape
+    out = np.full((y.shape[1], k), np.nan)
+    if k == 0 or not np.isfinite(u).all():
+        return out
     d = np.concatenate([np.ones((nb, 1)), u], 1)
     m = np.isfinite(y).astype(np.float64)
     prod = (d[:, :, None] * d[:, None, :]).reshape(nb, -1)
@@ -147,7 +157,6 @@ def regression_weights(y: np.ndarray, u: np.ndarray) -> np.ndarray:
     if ok.any():
         sv = np.linalg.svd(gram[ok], compute_uv=False)
         ok[ok] = sv[:, -1] > sv[:, 0] / MAX_CONDITION
-    out = np.full((y.shape[1], k), np.nan)
     if ok.any():
         sol = np.linalg.solve(gram[ok], rhs[ok][:, :, None])[:, :, 0]
         out[ok] = sol[:, 1:]

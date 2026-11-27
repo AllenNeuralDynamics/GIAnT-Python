@@ -295,6 +295,13 @@ def test_components_of_tall_and_wide_inputs():
         )
         assert (np.sum(y.T @ u, 0) >= 0).all()
         assert total == pytest.approx(np.sum(y**2))
+    # rank 1 (tall and wide): one component, finite, and weights for it
+    for shape in ((300, 40), (40, 300)):
+        a, b = rng.normal(size=shape[0]), rng.normal(size=shape[1])
+        y = np.outer(a, b)
+        u, s, _ = _components(y, 3)
+        assert u.shape == (shape[0], 1) and np.isfinite(u).all()
+        np.testing.assert_allclose(s, [np.linalg.norm(a) * np.linalg.norm(b)])
 
 
 def test_regression_weights_of_undetermined_pixels():
