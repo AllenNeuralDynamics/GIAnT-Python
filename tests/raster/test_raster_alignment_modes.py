@@ -20,6 +20,7 @@ from giant_python.extraction.raster.alignment import (
     warp_image_affine,
     warp_trial_image,
 )
+from giant_python.extraction.raster.plan import PlanParams
 
 from .alignment_synthetic import field_error, neuron, trials
 
@@ -176,6 +177,19 @@ def test_kmeans_finds_separated_clusters():
     )
     assert np.isfinite(cen).all()
     assert sorted(np.bincount(labels, minlength=3)) == [1, 1, 1]
+
+
+def test_patch_size_is_bounded():
+    """A patch needs at least one pixel; one pixel per patch at most."""
+    valid = np.zeros((6, 8), bool)
+    valid[1:4, 2:6] = True
+    with pytest.raises(ValueError, match="patch_px"):
+        make_patches(valid, 0.5)
+    patch, nodes = make_patches(valid, 1)
+    assert nodes.shape[0] == valid.sum()
+    assert sorted(patch[valid]) == list(range(1, valid.sum() + 1))
+    with pytest.raises(ValueError, match="align_patch_px"):
+        PlanParams(align_patch_px=0.5)
 
 
 def test_patches_have_their_size():

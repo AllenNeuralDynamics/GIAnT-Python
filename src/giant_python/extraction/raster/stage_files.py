@@ -185,7 +185,9 @@ def localization_attrs(path) -> Optional[dict]:
     return attrs
 
 
-def read_localization(path, peaks: bool = True) -> LocalizationRecord:
+def read_localization(
+    path, peaks: bool = True, half_ims: bool = True
+) -> LocalizationRecord:
     """Read a localization file (and its peaks' sidecar, if there is one).
 
     Parameters
@@ -195,6 +197,9 @@ def read_localization(path, peaks: bool = True) -> LocalizationRecord:
     peaks : bool
         Read the sidecar's peaks too (the plan stage does not: a sidecar may
         be being written then).
+    half_ims : bool
+        Read the half images, when the file has them (only the patchwise
+        alignment uses them).
 
     Raises
     ------
@@ -218,7 +223,9 @@ def read_localization(path, peaks: bool = True) -> LocalizationRecord:
             discard=f["discard"][()].astype(bool),
             peaks=f["peaks"][()] if "peaks" in f else None,
             attrs={k: _value(v) for k, v in f.attrs.items()},
-            half_ims=f["half_ims"][()] if "half_ims" in f else None,
+            half_ims=(
+                f["half_ims"][()] if half_ims and "half_ims" in f else None
+            ),
         )
     if rec.peaks is None and peaks:
         rec.peaks = _sidecar_peaks(path)

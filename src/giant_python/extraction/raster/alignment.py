@@ -1265,7 +1265,10 @@ def make_patches(
     """
     rows, cols = _colmajor_nonzero(valid)
     x = np.column_stack([rows, cols]).astype(np.float64)
-    k = max(1, int(matlab_round(x.shape[0] / patch_px)))
+    if not patch_px >= 1:
+        raise ValueError(f"patch_px must be at least 1, not {patch_px!r}")
+    # at most one patch per pixel
+    k = min(x.shape[0], max(1, int(matlab_round(x.shape[0] / patch_px))))
     rng = np.random.default_rng(seed)
     labels, nodes = kmeans(x, k, rng, replicates=3)
     n = np.bincount(labels, minlength=k)

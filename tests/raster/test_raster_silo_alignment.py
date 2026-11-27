@@ -124,6 +124,9 @@ def test_localize_redoes_files_without_halves(tmp_path, halves):
         assert silo.localize_jobs(s, p) == []
         assert silo.plan_one(s, p, 0, overwrite=True).exists()
     assert silo.plan_one(s, PATCHWISE, 0).exists()
+    # only a patchwise plan reads the half images
+    assert all(r.half_ims is None for r in silo._plan_inputs(s, 0))
+    assert all(r.half_ims is not None for r in silo._plan_inputs(s, 0, True))
 
 
 def test_later_stages_refuse_another_alignment(tmp_path, halves):
@@ -205,6 +208,7 @@ def test_localization_file_keeps_half_images(tmp_path):
     rec = read_localization(f)
     np.testing.assert_array_equal(rec.half_ims, halves.astype(np.float32))
     assert rec.trial_images().half_ims is rec.half_ims
+    assert read_localization(f, half_ims=False).half_ims is None
     g = write_localization(
         tmp_path / "b.h5", mean, mean[..., 0], mean[..., 0], [0, 1], None, {}
     )

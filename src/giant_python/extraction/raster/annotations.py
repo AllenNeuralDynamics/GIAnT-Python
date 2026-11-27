@@ -281,11 +281,7 @@ def rois_to_consensus(
         )
         trial = None
     full_map = trial is not None and not warp.is_shift(trial)
-    shift = (
-        np.zeros(2)
-        if trial is None or full_map
-        else warp.shift(trial)
-    )
+    shift = np.zeros(2) if trial is None or full_map else warp.shift(trial)
     out = []
     for roi in annotations.rois:
         moved = {}

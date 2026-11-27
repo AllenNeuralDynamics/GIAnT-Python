@@ -256,7 +256,7 @@ def _peaks_job(job: dict) -> dict:
     from ..extraction.raster.stage_files import add_peaks, read_localization
 
     t0 = time.perf_counter()
-    rec = read_localization(job["file"])
+    rec = read_localization(job["file"], half_ims=False)
     peaks = get_act_im_peaks(
         rec.summary,
         job["peak_th"],
@@ -438,15 +438,18 @@ def localize(
 # ---------------------------------------------------------------- plan
 
 
-def _plan_inputs(session: SiloSession, d: int):
-    """The localization records of path ``d`` (None for trials without)."""
+def _plan_inputs(session: SiloSession, d: int, half_ims: bool = False):
+    """The localization records of path ``d`` (None for trials without);
+    the half images only with ``half_ims``."""
     from ..extraction.raster.stage_files import read_localization
 
     recs = []
     for t in range(session.n_trials):
         f = session.localize_file(d, t)
         recs.append(
-            read_localization(f, peaks=False) if session.keep[d, t] else None
+            read_localization(f, peaks=False, half_ims=half_ims)
+            if session.keep[d, t]
+            else None
         )
     return recs
 
@@ -571,7 +574,7 @@ def plan_one(
     out = session.plan_file(d)
     if not overwrite and _attr(out, "settings_hash") == h:
         return out
-    recs = _plan_inputs(session, d)
+    recs = _plan_inputs(session, d, _needs_halves(params))
     trials = [None if r is None else r.trial_images() for r in recs]
     soma, soma_trial = None, None
     if ann is not None and ann.rois:

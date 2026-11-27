@@ -178,7 +178,7 @@ def path_result(
     for t in range(n):
         f = session.localize_file(d, t)
         if session.keep[d, t] and f.exists():
-            peaks[t] = read_localization(f).peaks
+            peaks[t] = read_localization(f, half_ims=False).peaks
     plan_hash = attr(pf, "settings_hash")
     science = solve_science(params)
     for t in plan.valid_trials:

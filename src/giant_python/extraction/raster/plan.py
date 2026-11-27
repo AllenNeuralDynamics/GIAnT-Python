@@ -161,6 +161,8 @@ class PlanParams:
                 raise ValueError(f"{name} must be positive")
         if self.max_shift < 0:
             raise ValueError("max_shift must not be negative")
+        if not self.align_patch_px >= 1:
+            raise ValueError("align_patch_px must be at least 1 pixel")
 
     @property
     def sel_radius(self) -> int:
