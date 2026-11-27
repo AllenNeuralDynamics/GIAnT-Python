@@ -721,6 +721,11 @@ def test_combine_trials_of_different_sizes():
     }
     with pytest.raises(ValueError, match="channels"):
         combine_trials([trials[0], two], shifts=np.zeros((2, 2)))
+    # fractional shifts: interior pixels count every trial despite rounding
+    out = combine_trials(
+        [trials[0], trials[0]], shifts=np.array([[0.3, 0.7], [0.1, 0.9]])
+    )
+    assert (out["n_trials"][0, 2:-2, 2:-2] == 2).all()
 
 
 def test_pair_sums_match_definition(tmp_path):

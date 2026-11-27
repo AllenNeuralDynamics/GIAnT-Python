@@ -136,7 +136,9 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
                 wsum[name] = wsum.get(name, 0) + np.where(ok, w, 0)
         valid = np.isfinite(maps["mean"]).astype(float)
         has = _resample(valid, warp, t, shape)
-        out["n_trials"] = out.get("n_trials", 0) + np.nan_to_num(has == 1)
+        # every bilinear neighbour valid (up to the warp's rounding)
+        full = np.nan_to_num(has) > 1 - 1e-6
+        out["n_trials"] = out.get("n_trials", 0) + full
     with np.errstate(invalid="ignore", divide="ignore"):
         for name in sums:
             out[name] = np.where(
