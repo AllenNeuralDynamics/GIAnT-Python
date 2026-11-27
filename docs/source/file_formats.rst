@@ -205,6 +205,11 @@ not consumed by BandSILo::
        ├── trimRows         (MultiRoiRegistration only)
        └── trimCols         (MultiRoiRegistration only)
 
+GIAnT-Python's registration also writes ``<trial_stem>_REGSTATS-80Hz.h5``
+next to the movie: per-trial summary statistics (:doc:`reg_stats`), in a
+separate file so that readers of the movie and the alignment file are
+unaffected.
+
 Manual annotations
 ~~~~~~~~~~~~~~~~~~
 

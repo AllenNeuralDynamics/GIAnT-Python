@@ -17,6 +17,7 @@ mistaken for registered.
 """
 
 import json
+import logging
 import math
 import os
 import warnings
@@ -30,6 +31,8 @@ import h5py
 import numpy as np
 
 from ..io.hdf5 import write_matlab_value
+
+log = logging.getLogger(__name__)
 
 PIXELS_PER_CM = 4e4
 """Resolution tag of the registered TIFF (250 nm pixels), as in MATLAB."""
@@ -327,7 +330,12 @@ class AlignmentFile:
                 self.tmp.unlink()
 
 
-def publish(movie: MovieWriter, adata: AlignmentFile) -> None:
+def publish(
+    movie: MovieWriter,
+    adata: AlignmentFile,
+    stats_tmp: Optional[Path] = None,
+    stats_path: Optional[Path] = None,
+) -> None:
     """Move a finished movie and alignment file into place, as a pair.
 
     The previous alignment file is removed first and the new one is moved
@@ -341,10 +349,44 @@ def publish(movie: MovieWriter, adata: AlignmentFile) -> None:
         A closed movie.
     adata : AlignmentFile
         A finished alignment file.
+    stats_tmp : Path, optional
+        A finished statistics file (``registration.stats``), moved to
+        ``stats_path`` with the movie.
+    stats_path : Path, optional
+        The trial's statistics file; without ``stats_tmp`` an existing one
+        (made from an earlier registration) is removed. Failures here are
+        logged and do not stop the movie and alignment file
+        (:func:`_publish_stats`).
     """
     adata.path.unlink(missing_ok=True)
     os.replace(movie.tmp, movie.path)
+    if stats_path is not None:
+        _publish_stats(stats_tmp, Path(stats_path))
     os.replace(adata.tmp, adata.path)
+
+
+def _publish_stats(stats_tmp: Optional[Path], stats_path: Path) -> None:
+    """Move the statistics file into place, or remove an earlier one.
+
+    The statistics are optional: if the file cannot be moved, the trial is
+    published without statistics (an earlier file is removed, and one that
+    cannot be removed either names the earlier registration in its
+    ``alignment_digest``); the error is logged.
+    """
+    try:
+        if stats_tmp is not None:
+            os.replace(stats_tmp, stats_path)
+            return
+        stats_path.unlink(missing_ok=True)
+        return
+    except OSError:
+        log.exception("statistics file %s not published", stats_path)
+    for path in (stats_tmp, stats_path):
+        try:
+            if path is not None:
+                Path(path).unlink(missing_ok=True)
+        except OSError:
+            log.exception("could not remove %s", path)
 
 
 def downsample2(image: np.ndarray) -> np.ndarray:

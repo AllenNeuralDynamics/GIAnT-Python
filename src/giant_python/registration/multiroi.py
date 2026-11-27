@@ -40,11 +40,14 @@ from .outputs import (
     MovieWriter,
     downsample2,
     matlab_round,
+    partial_path,
     publish,
     rec_neg_err,
     settings_record,
 )
 from .sources import has_samples, make_source
+from .stats.io import stats_path
+from .stats.worker import FAILED, StatsWorker
 from .template import TemplateState, consensus, initial_template
 
 log = logging.getLogger(__name__)
@@ -233,6 +236,13 @@ class OutputSink:
         Where the mean images accumulate.
     movie_deflate, var_deflate : int
         Deflate levels of an HDF5 movie and of ``varFacDS`` (0: none).
+    stats : StatsWorker, optional
+        Accumulates the trial's summary statistics (:mod:`.stats`) from
+        the frames as they are written (on a GPU, on a thread of its own).
+    stats_path : Path, optional
+        The trial's statistics file. Written with the movie when ``stats``
+        is given; otherwise an existing one is removed on publishing (it
+        would describe an earlier registration).
     """
 
     def __init__(
@@ -246,9 +256,14 @@ class OutputSink:
         device,
         movie_deflate: int = 1,
         var_deflate: int = 1,
+        stats=None,
+        stats_path=None,
     ):
         """Open the movie and the alignment file."""
         ho, wo = out_shape
+        self.stats = stats
+        self.stats_path = None if stats_path is None else Path(stats_path)
+        self.n_frames = int(n_frames)
         self.sum = torch.zeros(n_channels, ho, wo, device=device)
         self.count = torch.zeros(n_channels, ho, wo, device=device)
         self.movie_ds = np.full(
@@ -274,10 +289,17 @@ class OutputSink:
         blank = torch.full(
             self.sum.shape[1:], float("nan"), device=self.sum.device
         )
-        self.add(k, [blank] * self.sum.shape[0], blank)
+        nan = float("nan")
+        self.add(k, [blank] * self.sum.shape[0], blank, (nan, nan))
 
-    def add(self, k: int, regs, var_factor: torch.Tensor) -> torch.Tensor:
-        """Record frame ``k``'s registered channels; return their sum."""
+    def add(
+        self, k: int, regs, var_factor: torch.Tensor, motion=None
+    ) -> torch.Tensor:
+        """Record frame ``k``'s registered channels; return their sum.
+
+        ``motion`` (row, column) is the frame's motion, which the summary
+        statistics need.
+        """
         self.adata.write_var_factor(k, var_factor.cpu().numpy())
         total = None
         for ch, reg in enumerate(regs):
@@ -287,25 +309,83 @@ class OutputSink:
             self.count[ch] += good
             total = reg if total is None else total + reg
         self.movie_ds[k] = downsample2(downsample2(total)).cpu().numpy()
+        if self.stats is not None:
+            self.stats.add(k, regs, var_factor, motion)
+            if k == self.n_frames - 1:  # maps while the files are completed
+                self.stats.finish()
         return total
+
+    @property
+    def stats_seconds(self) -> float:
+        """Time the statistics' worker spent on them."""
+        return 0.0 if self.stats is None else self.stats.seconds
 
     def mean_image(self) -> np.ndarray:
         """Per-channel mean of the registered frames (meanIM)."""
         mean = self.sum / torch.clamp(self.count, min=1)
         return mean.masked_fill(self.count < 1, float("nan")).cpu().numpy()
 
+    def _write_stats(self, fields: dict):
+        """Finish the statistics and write them under a temporary name.
+
+        Returns
+        -------
+        Path or None
+            The temporary file (None without statistics).
+        """
+        if self.stats_path is None or self.stats is None:
+            return None
+        from .stats.io import alignment_digest, write_stats
+
+        result = self.stats.finish().result()
+        if result is FAILED:
+            return None
+        tmp = partial_path(self.stats_path)
+        attrs = {
+            "source": "registration",
+            "movie": self.movie.path.name,
+            "movie_size": int(self.movie.tmp.stat().st_size),
+            "alignment": self.adata.path.name,
+            "alignment_digest": alignment_digest(
+                fields["DSframes"], fields["motionDSr"], fields["motionDSc"]
+            ),
+            "align_hz": float(fields["alignHz"]),
+            "device": str(self.sum.device),
+        }
+        try:
+            write_stats(tmp, result, attrs)
+        except Exception:
+            log.exception("summary statistics failed; continuing without")
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                log.exception("could not remove %s", tmp)
+            return None
+        return tmp
+
     def finish(self, fields: dict, settings: Optional[dict] = None) -> None:
-        """Complete the alignment file and publish it with the movie."""
+        """Complete the alignment file and publish it with the movie (and
+        the statistics file; a failure there is logged and the trial is
+        published without statistics)."""
         self.movie.close()
-        self.adata.finish(fields, settings)
-        publish(self.movie, self.adata)
+        self.adata.finish(fields, settings)  # while the maps are formed
+        try:
+            stats_tmp = self._write_stats(fields)
+        except Exception:
+            log.exception("summary statistics failed; continuing without")
+            stats_tmp = None
+        publish(self.movie, self.adata, stats_tmp, self.stats_path)
 
     def abort(self) -> None:
         """Discard the partial movie and alignment file."""
+        if self.stats is not None:
+            self.stats.cancel()
         try:
             self.movie.abort()
         finally:
             self.adata.abort()
+            if self.stats_path is not None:
+                partial_path(self.stats_path).unlink(missing_ok=True)
 
 
 def register_sequential(
@@ -372,7 +452,9 @@ def register_sequential(
             for ch in range(vals.shape[0]):
                 img = window.image(vals[ch, i], float("nan"))
                 regs.append(interp_frame(img, fimg, mr, mc, m))
-            state.add(sink.add(a + i, [r for r, _ in regs], regs[0][1]))
+            state.add(
+                sink.add(a + i, [r for r, _ in regs], regs[0][1], (mr, mc))
+            )
             init_r = int(np.clip(matlab_round(mr), -m, m))
             init_c = int(np.clip(matlab_round(mc), -m, m))
         log.info("%d of %d frames", b, n)
@@ -429,7 +511,7 @@ def register_grow(
             sink.add_missing(k)
             continue
         regs = cache.registered(int(j[k]), motion[k], m)
-        sink.add(k, [r for r, _ in regs], regs[0][1])
+        sink.add(k, [r for r, _ in regs], regs[0][1], motion[k])
     timer.mark("render")
     return motion[:, 0].copy(), motion[:, 1].copy(), qc.peak.copy(), qc
 
@@ -528,6 +610,56 @@ def open_trial(dat_path, first_line, last_line, params, device):
     return layout, FrameFormer(layout, samples, c0, 1, device), init, ds, dtk
 
 
+def trial_stats(
+    source, ds, margin: int, n_channels: int
+) -> Optional[StatsWorker]:
+    """Start the trial's statistics (:class:`.stats.worker.StatsWorker`):
+    on a GPU their accumulator is set up on a thread of its own while the
+    template is built, and then takes the registered frames there. A
+    failure is logged and registration goes on without statistics."""
+    from .stats import new_accumulator
+
+    try:
+        return StatsWorker(
+            lambda: new_accumulator(source, ds, margin, n_channels),
+            source.former.device,
+        )
+    except Exception:  # e.g. no CUDA stream: registration goes on
+        log.exception("summary statistics cannot start; continuing without")
+        return None
+
+
+def _template_and_sink(source, init, ds, params, dtype, paths, stats, timer):
+    """Start the statistics (if ``stats``), build the template and open the
+    outputs ``paths`` (movie, alignment file); the statistics are given up
+    if either fails."""
+    layout = source.former.layout
+    m = int(params.maxshift)
+    h, w = source.window.shape
+    acc = trial_stats(source, ds, m, layout.num_channels) if stats else None
+    try:
+        state, cons = build_template(source, init, params, dtype)
+        timer.mark("template")
+        sink = OutputSink(
+            paths[0],
+            paths[1],
+            (h + 2 * m, w + 2 * m),
+            ds.size,
+            layout.num_channels,
+            params.save_tif,
+            source.former.device,
+            params.movie_deflate,
+            params.var_factor_deflate,
+            stats=acc,
+            stats_path=stats_path(paths[0]),
+        )
+    except BaseException:
+        if acc is not None:
+            acc.cancel()
+        raise
+    return state, cons, sink
+
+
 def register_trial(
     dat_path: Union[str, Path],
     first_line: float,
@@ -537,6 +669,7 @@ def register_trial(
     params: Optional[MultiRoiRegistrationParams] = None,
     device="cpu",
     dtype=torch.float32,
+    stats: bool = True,
 ) -> TrialRegistration:
     """Register the lines ``first_line .. last_line`` of a recording.
 
@@ -556,6 +689,11 @@ def register_trial(
         Where frames are formed and matched.
     dtype : torch.dtype
         Precision of the correlation sums.
+    stats : bool
+        Also compute the trial's summary statistics (:mod:`.stats`) while
+        the movie is written, into ``<stem>_REGSTATS-<hz>Hz.h5`` next to
+        it (:func:`.stats.stats_path`). Without, an existing statistics
+        file of the trial is removed.
 
     Returns
     -------
@@ -592,20 +730,8 @@ def register_trial(
             "undoing the online motion correction (%d x/y switches)",
             source.compensation.switch_lines.size,
         )
-    state, cons = build_template(source, init, params, dtype)
-    timer.mark("template")
-    m = int(params.maxshift)
-    h, w = source.window.shape
-    sink = OutputSink(
-        movie_path,
-        adata_path,
-        (h + 2 * m, w + 2 * m),
-        ds.size,
-        layout.num_channels,
-        params.save_tif,
-        device,
-        params.movie_deflate,
-        params.var_factor_deflate,
+    state, cons, sink = _template_and_sink(
+        source, init, ds, params, dtype, (movie_path, adata_path), stats, timer
     )
     qc = None
     try:
@@ -641,6 +767,7 @@ def register_trial(
         sink.abort()
         raise
     timer.mark("alignment file")
+    timer.times["stats (within)"] = sink.stats_seconds
     log.info(
         "timings (s): %s", {k: round(v, 2) for k, v in timer.times.items()}
     )

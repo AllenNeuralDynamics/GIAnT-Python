@@ -139,14 +139,15 @@ def test_failed_rerun_keeps_the_previous_outputs(
     adata = tmp_path / "a.h5"
     args = (layout.files[0], 1, 3000, movie, adata, params)
     multiroi.register_trial(*args)
-    before = digests(movie, adata)
+    stats = movie.with_name(movie.stem + "_REGSTATS.h5")
+    before = digests(movie, adata, stats)
     add = multiroi.OutputSink.add
 
-    def fail_midway(self, k, regs, var_factor):
+    def fail_midway(self, k, regs, var_factor, *rest):
         """Write 50 frames, then fail."""
         if k == 50:
             raise OSError("disk full")
-        return add(self, k, regs, var_factor)
+        return add(self, k, regs, var_factor, *rest)
 
     def fail_at_the_end(*args, **kwargs):
         """Fail after the movie is complete."""
@@ -160,8 +161,8 @@ def test_failed_rerun_keeps_the_previous_outputs(
             m.setattr(target, name, fail)
             with pytest.raises(OSError):
                 multiroi.register_trial(*args)
-        assert digests(movie, adata) == before
-        assert sorted(tmp_path.iterdir()) == sorted([movie, adata])
+        assert digests(movie, adata, stats) == before
+        assert sorted(tmp_path.iterdir()) == sorted([movie, adata, stats])
 
 
 def test_interrupted_publish_leaves_no_alignment_file(
@@ -189,7 +190,9 @@ def test_interrupted_publish_leaves_no_alignment_file(
     monkeypatch.setattr(os, "replace", refuse_alignment_file)
     with pytest.raises(PermissionError):
         multiroi.register_trial(*args)
-    assert sorted(tmp_path.iterdir()) == [movie]
+    # the new movie and its statistics are in place, the alignment file not
+    stats = movie.with_name(movie.stem + "_REGSTATS.h5")
+    assert sorted(tmp_path.iterdir()) == sorted([movie, stats])
 
 
 def blank_frames(monkeypatch, blank, half=None):
@@ -593,7 +596,12 @@ def test_ragged_table_skips_empty_cells(recording, tmp_path, monkeypatch):
     ]
     assert all(names)
     moco = tmp_path / "motion_correction"
-    assert sorted(p.name for p in moco.iterdir()) == sorted(names)
+    stats = [
+        n.replace("_REGISTERED_DOWNSAMPLED-", "_REGSTATS-")
+        for n in names
+        if "_REGISTERED_" in n
+    ]
+    assert sorted(p.name for p in moco.iterdir()) == sorted(names + stats)
     mc = read_trial_table(table).motion_correction
     assert mc["fn_reg_ds"][1, 1] == mc["fn_adata"][1, 1] == ""
     assert mc["registration_failed"][1, 1] == 1
