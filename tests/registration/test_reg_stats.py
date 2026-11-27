@@ -689,6 +689,10 @@ def test_reg_stats_command(patched, tmp_path):
         f.attrs["movie_size"] = int(f.attrs["movie_size"]) + 1
     assert len(reg_stats(table, out, device="cpu")) == 1
     assert read_stats(written)["attrs"]["validity_differs"] == [0, 0]
+    movie = tmp_path / "motion_correction" / MOVIE
+    movie.rename(movie.with_suffix(".moved"))  # a requested trial is missing
+    assert main(["reg-stats", str(table), "--out", str(out),
+                 "--device", "cpu"]) == 1  # fmt: skip
 
 
 def test_validity_mismatch_counts_channels():

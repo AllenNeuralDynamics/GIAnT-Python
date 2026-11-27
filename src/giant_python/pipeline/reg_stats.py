@@ -379,8 +379,9 @@ def _selected(shape, paths, trials) -> np.ndarray:
     return keep
 
 
-def _jobs(tt, files, opts: dict) -> list:
-    """One job per registered trial-path that needs statistics."""
+def _jobs(tt, files, opts: dict):
+    """One job per registered trial-path that needs statistics, and the
+    results of those whose movie or alignment file is missing (failed)."""
     from ..registration.stats import stats_path
 
     shape = files.shape
@@ -392,15 +393,17 @@ def _jobs(tt, files, opts: dict) -> list:
     present = recorded_cells(files) & recorded_cells(fn_reg)
     present &= _selected(shape, opts["paths"], opts["trials"])
     moco = opts["moco"]
-    jobs = []
+    jobs, missing = [], []
     for d, t in zip(*np.nonzero(present)):
         movie, adata = moco / str(fn_reg[d, t]), moco / str(fn_ad[d, t])
-        if not (movie.exists() and adata.exists()):
-            log.warning("%s or its alignment file is missing", movie.name)
-            continue
         out = stats_path(movie)
         if opts["out_dir"] is not None:
             out = Path(opts["out_dir"]) / out.name
+        if not (movie.exists() and adata.exists()):
+            log.warning("%s or its alignment file is missing", movie.name)
+            error = f"{movie.name} or its alignment file is missing"
+            missing.append({"out": out, "error": error})
+            continue
         if not opts["overwrite"] and _up_to_date(out, adata, movie):
             log.info("%s is up to date; skipping", out.name)
             continue
@@ -417,7 +420,7 @@ def _jobs(tt, files, opts: dict) -> list:
                 threads=None,
             )
         )
-    return jobs
+    return jobs, missing
 
 
 def reg_stats(
@@ -458,7 +461,8 @@ def reg_stats(
     Returns
     -------
     list of dict
-        Per trial: ``out`` and ``error`` (None if it succeeded).
+        Per trial: ``out`` and ``error`` (None if it succeeded; a requested
+        trial whose movie or alignment file is missing has failed).
     """
     from ..registration.multiroi import resolve_device
 
@@ -478,11 +482,11 @@ def reg_stats(
         paths=paths,
         trials=trials,
     )
-    jobs = _jobs(tt, files, opts)
+    jobs, missing = _jobs(tt, files, opts)
     workers = 1
     if dev.type == "cpu":
         workers = max(1, min(max_workers, len(jobs), os.cpu_count() or 1))
     if workers > 1:
         for job in jobs:
             job["threads"] = max(1, (os.cpu_count() or 1) // workers)
-    return map_trials(_stats_job, jobs, n_workers=workers)
+    return missing + map_trials(_stats_job, jobs, n_workers=workers)

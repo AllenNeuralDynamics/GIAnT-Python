@@ -32,7 +32,8 @@ motion the alignment file gives it, as in registration. Options: ``--out DIR`` (
 instead of next to the movies), ``--datadr`` and ``--moco`` (folders that
 moved since the trial table was written), ``--device``, ``--max-workers``,
 ``--overwrite`` (statistics that record the same version, frame times,
-motion and movie size are otherwise kept).
+motion and movie size are otherwise kept). The command exits with status 1
+if a requested trial failed, a missing movie or alignment file included.
 
 From Python:
 
