@@ -144,7 +144,13 @@ time); a baseline whose record does not fit the run, or that another
 checkpoint (by its SHA-256) made, is refused, and the
 summary takes the checkpoint's identity from the record. Files made
 elsewhere (without a record) are used as they are; slap2-f0 records only
-the checkpoint's path and step in them.
+the checkpoint's path and step in them. The record identifies files by
+name, size and modification time, so a copied file does not match it.
+A prediction step that runs elsewhere (slap2-F0-network's Code Ocean
+``predict_registered`` mode) writes the same record with each file's
+SHA-256 as well (``predict_baselines(..., digests=True)``); a copy whose
+content has the recorded SHA-256 is then accepted, for example baselines
+and registration attached as data assets.
 
 ``baseline_source`` sets the defaults of the settings that go with the
 baseline; any of them can still be set:
