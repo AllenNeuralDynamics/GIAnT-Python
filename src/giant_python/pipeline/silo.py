@@ -145,14 +145,28 @@ def _recorded(path, name: str, default: str = "median") -> str:
     return default if value is None else str(value)
 
 
-def _check_same(what: str, used: str, given: str, option: str) -> None:
+def _check_same(
+    what: str, used, given, option: str, flag: str = "--baseline"
+) -> None:
     """Refuse a stage whose settings differ from the stage before it."""
     if used != given:
         raise ValueError(
             f"{what} was made with {option}={used!r}, these settings have "
             f"{given!r}: give every stage the same settings (e.g. "
-            f"--baseline {used})"
+            f"{flag} {used})"
         )
+
+
+def check_plan_support(what: str, plan, params: SiloParams) -> None:
+    """Refuse to extract with a footprint support other than the one the
+    plan's zones were made for (``valid_kernel``: one per run)."""
+    _check_same(
+        what,
+        int(plan.params.valid_kernel),
+        params.valid_kernel,
+        "valid_kernel",
+        "--valid-kernel",
+    )
 
 
 def _localize_job(job: dict) -> dict:
@@ -868,6 +882,7 @@ def prepare(
                 read_user_rois(f)[1],
                 _attr(f, "settings_hash"),
             )
+            check_plan_support(f"the plan {f.name}", plans[d][0], params)
         p, rois, ph = plans[d]
         base = _extraction_baseline(session, params, d, t, baseline_dir)
         h = _prepare_hash(session, params, ph, d, t, base)
@@ -949,6 +964,9 @@ def _container_params(
     }
     if params.baseline_source != "median":
         out["baseline_source"] = params.baseline_source
+    if params.valid_kernel != 3:
+        # the plan's zones were made for it; the solve stage checks it
+        out["valid_kernel"] = params.valid_kernel
     if baseline is not None:
         out["baseline"] = baseline.identity
     return out
@@ -1194,6 +1212,7 @@ def stream(  # noqa: C901
             params.baseline_source,
             "baseline_source",
         )
+        check_plan_support(f"the plan {pf.name}", plan, params)
         placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
         for t in (int(x) for x in plan.valid_trials):

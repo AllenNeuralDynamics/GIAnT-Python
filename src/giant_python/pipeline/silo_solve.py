@@ -203,14 +203,23 @@ def results_attrs(
 
 
 def check_container(container, params: SiloParams, name: str) -> None:
-    """Refuse to solve a container with other baseline settings than it
-    was prepared for, or without the baseline the solver's mode needs."""
+    """Refuse to solve a container with other baseline settings or another
+    footprint support than it was prepared for, or without the baseline
+    the solver's mode needs."""
     used = (container.params or {}).get("baseline_source", "median")
     if used != params.baseline_source:
         raise ValueError(
             f"{name} was prepared with baseline_source={used!r}, these "
             f"settings have {params.baseline_source!r}: give every stage "
             f"the same settings (e.g. --baseline {used})"
+        )
+    support = int((container.params or {}).get("valid_kernel", 3))
+    if support != params.valid_kernel:
+        # its subproblems are the plan's groups, made for that support
+        raise ValueError(
+            f"{name} was prepared with valid_kernel={support}, these "
+            f"settings have {params.valid_kernel}: give every stage the "
+            f"same settings (e.g. --valid-kernel {support})"
         )
     if params.baseline_mode != "fit" and not container.baseline_filled:
         raise ValueError(
