@@ -769,3 +769,24 @@ def test_predict_units_may_be_a_generator(tmp_path, monkeypatch):
     args = rec_args[-1]
     assert args[args.index("--out_frames") + 1] == "512"
     assert _args("silo", "t.h5", "--f0-out-frames", "256").f0_out_frames == 256
+
+
+def test_summary_records_the_localization_baseline(tmp_path, fake):
+    """Localized with the network's baseline and extracted with MATLAB's
+    fit: the summary records the baseline that decided the seeds."""
+    root = tmp_path / "s"
+    table = make_session(root)
+    bdir = write_baselines(root, tmp_path / "b")
+    loc_only = replace(NET, baseline_mode="fit")
+    silo.run_silo(
+        table, loc_only, EX, seeds_file=seeds_file(tmp_path), baseline_dir=bdir
+    )
+    s = SiloSession.open(table)
+    with h5py.File(s.out_dir / "experiment_summary.h5", "r") as f:
+        assert f.attrs["baseline_mode"] == "fit"
+        assert "network_baseline" not in f.attrs  # not extracted with it
+        loc = json.loads(f.attrs["localization_network_baseline"])
+    assert len(loc) == N_PATHS * N_TRIALS
+    first = loc["path1_trial0001"]
+    assert first["file"]["name"] == "E1T1DMD1_BASELINE-80Hz.h5"
+    assert first["network"] == {"checkpoint": "ckpt/s6_test.pt", "step": 1700}

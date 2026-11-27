@@ -312,9 +312,10 @@ def localize_jobs(
                     "align_hz": session.align_hz,
                     "num_channels": session.num_channels,
                     "localization_baseline": params.localization_baseline,
-                    # the file localized with, so that extraction uses it too
-                    "network_baseline_file": (
-                        json.dumps(_file_id(base), sort_keys=True)
+                    # the file localized with (extraction must use it too)
+                    # and its network, for the summary
+                    "network_baseline": (
+                        json.dumps(baseline_provenance(base), sort_keys=True)
                         if base is not None
                         else ""
                     ),
@@ -688,16 +689,43 @@ def _extraction_baseline(session, params, d, t, baseline_dir):
     if params.baseline_mode == "fit":
         return None
     base = _network_baseline(session, params, d, t, baseline_dir)
-    loc = _attr(session.localize_file(d, t), "network_baseline_file")
-    if isinstance(loc, bytes):
-        loc = loc.decode()
-    if loc and json.loads(loc) != _file_id(base):
+    loc = localization_baseline(session, d, t)
+    if loc is not None and loc["file"] != _file_id(base):
         raise ValueError(
             f"path {d + 1}, trial {t + 1} was localized with another "
-            f"baseline file than {base} ({json.loads(loc)}): give the "
-            "stages the same baselines (--baseline-dir)"
+            f"baseline file than {base} ({loc['file']}): give the stages "
+            "the same baselines (--baseline-dir)"
         )
     return base
+
+
+def baseline_provenance(base: Path) -> dict:
+    """A baseline file's identity and its network: the checkpoint's path
+    and step that slap2-f0 records, and its identity at prediction time
+    from the file's record (when it was predicted here)."""
+    from .silo_baseline import record_path
+
+    network = {}
+    for name in ("checkpoint", "step"):
+        v = _attr(base, name)
+        if isinstance(v, bytes):
+            v = v.decode()
+        if v is not None:
+            network[name] = v.item() if hasattr(v, "item") else v
+    out = {"file": _file_id(base), "network": network}
+    rec = record_path(base)
+    if rec.exists():
+        out["checkpoint"] = json.loads(rec.read_text()).get("checkpoint")
+    return out
+
+
+def localization_baseline(session: SiloSession, d: int, t: int):
+    """The network baseline trial-path ``(d, t)`` was localized with
+    (:func:`baseline_provenance`), or None."""
+    v = _attr(session.localize_file(d, t), "network_baseline")
+    if isinstance(v, bytes):
+        v = v.decode()
+    return json.loads(v) if v else None
 
 
 def load_trial_baseline(

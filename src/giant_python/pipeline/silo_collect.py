@@ -8,9 +8,11 @@ kinetics test, and writes ``experiment_summary.h5`` and
 ``SILo.m`` does at its end.
 
 With the network's baseline, ``experiment_summary.h5`` also gets the
-attributes ``baseline_source``, ``baseline_mode``, ``localization_baseline``
-and ``network_baseline`` (JSON: per trial-path, the baseline file and the
-network's checkpoint that extraction used); the ``params`` struct records
+attributes ``baseline_source``, ``baseline_mode``, ``localization_baseline``,
+``network_baseline`` (JSON: per trial-path, the baseline file and the
+network's checkpoint that extraction used) and
+``localization_network_baseline`` (the same for localization, which
+decided the seeds); the ``params`` struct records
 the settings that differ from MATLAB's (``baselineSource``,
 ``baselineMode``, ``peakth``, ``localizationSurround``, ...).
 """
@@ -290,6 +292,7 @@ def collect(
         session.num_channels,
         params.activity_channel,
     )
+    localized = localization_baselines(session)
     if params.needs_network_baseline or params.baseline_source != "median":
         # MATLAB's algorithm leaves the file as MATLAB writes it
         with h5py.File(session.out_dir / "experiment_summary.h5", "a") as f:
@@ -298,6 +301,10 @@ def collect(
             f.attrs["localization_baseline"] = params.localization_baseline
             if used:
                 f.attrs["network_baseline"] = json.dumps(used, sort_keys=True)
+            if localized:
+                f.attrs["localization_network_baseline"] = json.dumps(
+                    localized, sort_keys=True
+                )
     t2 = time.perf_counter()
     if update_table:
         update_trial_table(session, pm)
@@ -306,6 +313,7 @@ def collect(
         "baseline_source": params.baseline_source,
         "baseline_mode": params.baseline_mode,
         "network_baseline": used,
+        "localization_network_baseline": localized,
         "kept_sources": kept,
         "kinetics_seconds": t1 - t0,
         "write_seconds": t2 - t1,
@@ -316,6 +324,24 @@ def collect(
     tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
     os.replace(tmp, path)
     return record
+
+
+def localization_baselines(session: SiloSession) -> dict:
+    """The network baselines the planned paths' trials were localized with
+    (which decided the seeds), keyed ``path<d>_trial<tttt>``; empty with
+    the moving median."""
+    from .silo import localization_baseline
+
+    out = {}
+    for d in range(session.n_paths):
+        if not session.plan_file(d).exists():
+            continue
+        for t in range(session.n_trials):
+            if session.keep[d, t] and session.localize_file(d, t).exists():
+                used = localization_baseline(session, d, t)
+                if used is not None:
+                    out[f"path{d + 1}_trial{t + 1:04d}"] = used
+    return out
 
 
 def _baseline_identity(files: list) -> Optional[dict]:

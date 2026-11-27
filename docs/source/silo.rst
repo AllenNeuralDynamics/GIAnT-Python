@@ -159,7 +159,8 @@ Pixels without a network value start from MATLAB's ``splitFreq`` baseline.
 A container's settings hash covers its baseline file, so new baselines
 redo the containers made from them. ``experiment_summary.h5`` records
 ``baseline_source``, ``baseline_mode`` and, per trial-path, the baseline
-file and the checkpoint (``network_baseline``, JSON); the ``params``
+file and the checkpoint that extraction used (``network_baseline``, JSON)
+and that localization used (``localization_network_baseline``); the ``params``
 struct records the settings that differ from MATLAB's.
 
 The staged commands take the same settings as ``giant silo``. Those that
