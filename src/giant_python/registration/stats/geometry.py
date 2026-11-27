@@ -70,7 +70,7 @@ frames that share samples never spans a whole bin (SLAP2 rasters reach it
 at about 530 lines per cycle; 80 Hz frames share samples over 6 frames
 up to 402 lines)."""
 
-PAIR_ELEMENTS = 10_000_000
+PAIR_ELEMENTS = 20_000_000
 """Largest pair-sum array formed at once (lag quantities x frames x
 pixels; bounds memory)."""
 
@@ -550,14 +550,17 @@ class FrameGeometry:
         c = torch.from_numpy(coef.astype(np.float32)).to(self.device)
         acc = [0.0, 0.0, 0.0, 0.0]
         adj = [0.0, 0.0, 0.0, 0.0]
-        nq = single.shape[0]
         for k in range(4):
-            g = torch.gather(single, 2, cidx[:, k][None].expand(nq, -1, -1))
+            pairs, rows = self._corner_rows(k)
+            sub = single.index_select(0, rows)
+            g = torch.gather(
+                sub, 2, cidx[:, k][None].expand(len(rows), -1, -1)
+            )
             ck = c[:, k : k + 1]
             pw = ((ck > 0).float(), ck, ck * ck, ck * ck * ck)
             for j in range(4):
                 acc[j] = acc[j] + pw[j] * g[j]
-            self._adjacent_terms(adj, g, c, k)
+            self._adjacent_terms(adj, g, c, k, pairs)
         n0, d_g, q2, q3 = acc
         d_a = 1.0 / varfac.float()
         ok = torch.isfinite(d_a) & (d_a > 0) & (d_g > 0)
@@ -570,21 +573,46 @@ class FrameGeometry:
             qa2=qa2, qa3a=qa3a, qa3b=qa3b, m0=m0,
         )  # fmt: skip
 
-    def _adjacent_terms(self, adj: list, g, c, k: int) -> None:
+    def _corner_rows(self, k: int):
+        """Corner ``k``'s partners and the rows of the single sums it needs.
+
+        Returns
+        -------
+        pairs : list of int
+            Partner corner ``k2 = k + delta`` for each direction (of
+            :attr:`directions`, in order) in which ``k`` is the first
+            sample's corner.
+        rows : torch.Tensor of int64
+            The four own sums, then the three pair sums of each of those
+            directions.
+        """
+        if not hasattr(self, "_rows"):
+            self._rows = {}
+        if k not in self._rows:
+            pairs, rows = [], [0, 1, 2, 3]
+            for i, delta in enumerate(self.directions):
+                for k1, k2 in corner_pairs(delta):
+                    if k1 == k:
+                        pairs.append(k2)
+                        rows += [4 + 3 * i, 5 + 3 * i, 6 + 3 * i]
+            rows = torch.tensor(rows, dtype=torch.long, device=self.device)
+            self._rows[k] = (pairs, rows)
+        return self._rows[k]
+
+    def _adjacent_terms(self, adj: list, g, c, k: int, pairs) -> None:
         """Add corner ``k``'s pairs of consecutive samples to ``adj``
         (``sum c c' w^2``, ``sum c^2 c' w^3``, ``sum c c'^2 w^3``, pair
-        counts), from its gathered sums ``g``."""
-        for i, delta in enumerate(self.directions):
-            for k1, k2 in corner_pairs(delta):
-                if k1 != k:
-                    continue
-                c1, c2 = c[:, k1 : k1 + 1], c[:, k2 : k2 + 1]
-                w2, w3, cnt = g[4 + 3 * i], g[5 + 3 * i], g[6 + 3 * i]
-                adj[0] = adj[0] + c1 * c2 * w2
-                adj[1] = adj[1] + c1 * c1 * c2 * w3
-                adj[2] = adj[2] + c1 * c2 * c2 * w3
-                both = ((c1 > 0) & (c2 > 0)).float()
-                adj[3] = adj[3] + both * cnt
+        counts), from its gathered sums ``g`` (rows of
+        :meth:`_corner_rows`)."""
+        c1 = c[:, k : k + 1]
+        for j, k2 in enumerate(pairs):
+            c2 = c[:, k2 : k2 + 1]
+            w2, w3, cnt = g[4 + 3 * j], g[5 + 3 * j], g[6 + 3 * j]
+            adj[0] = adj[0] + c1 * c2 * w2
+            adj[1] = adj[1] + c1 * c1 * c2 * w3
+            adj[2] = adj[2] + c1 * c2 * c2 * w3
+            both = ((c1 > 0) & (c2 > 0)).float()
+            adj[3] = adj[3] + both * cnt
 
     def registered(self, f0, f1, f_ext, out_idx, motion, present, varfac):
         """Photon-noise sums of frames ``[f0, f1)`` at output pixels.

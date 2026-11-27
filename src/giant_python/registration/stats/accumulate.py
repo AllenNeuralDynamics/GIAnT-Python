@@ -53,7 +53,7 @@ BIN_T_MIN = 6
 """Valid frames a time bin needs at a pixel."""
 GROW_PX = 1
 """Dilation (pixels) of new pixels added to the index."""
-GEO_CHUNK = 32
+GEO_CHUNK = 64
 """Frames whose photon-noise sums are formed at a time."""
 PER_CHANNEL = ("F", "B", "C", "K")
 """Per-frame photon-noise sums kept per channel (see the module text)."""
