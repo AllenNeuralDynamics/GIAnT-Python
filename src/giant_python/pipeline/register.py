@@ -117,6 +117,7 @@ def _register_job(job: dict) -> dict:
             job["adata"],
             job["params"],
             device=job["device"],
+            stats=job.get("stats", True),
         )
         return {"failed": res.registration_failed, "error": None}
     except Exception as exc:  # reported per trial, as MATLAB continues
@@ -259,6 +260,7 @@ def register_multiroi(
     params: RegistrationParamsInput = None,
     *,
     execution: ExecutionInput = None,
+    stats: bool = True,
 ) -> dict:
     """Register all trials of a trial table (``MultiRoiRegistration``).
 
@@ -272,6 +274,11 @@ def register_multiroi(
         ``device`` selects CPU or CUDA. On the CPU, up to ``max_workers``
         trials run in parallel processes; on CUDA, trials run one at a time.
         ``max_trials`` is ignored.
+    stats : bool
+        Also write each registered trial's summary statistics
+        (``<stem>_REGSTATS-<hz>Hz.h5`` next to its movie, see
+        :mod:`giant_python.registration.stats`). Trials whose outputs are
+        kept are not changed; ``giant reg-stats`` adds their statistics.
 
     Returns
     -------
@@ -340,6 +347,7 @@ def register_multiroi(
                     "params": params,
                     "device": str(device),
                     "threads": None,
+                    "stats": bool(stats),
                 }
             )
             where.append((d, t))

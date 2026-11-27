@@ -327,7 +327,12 @@ class AlignmentFile:
                 self.tmp.unlink()
 
 
-def publish(movie: MovieWriter, adata: AlignmentFile) -> None:
+def publish(
+    movie: MovieWriter,
+    adata: AlignmentFile,
+    stats_tmp: Optional[Path] = None,
+    stats_path: Optional[Path] = None,
+) -> None:
     """Move a finished movie and alignment file into place, as a pair.
 
     The previous alignment file is removed first and the new one is moved
@@ -341,9 +346,20 @@ def publish(movie: MovieWriter, adata: AlignmentFile) -> None:
         A closed movie.
     adata : AlignmentFile
         A finished alignment file.
+    stats_tmp : Path, optional
+        A finished statistics file (``registration.stats``), moved to
+        ``stats_path`` with the movie.
+    stats_path : Path, optional
+        The trial's statistics file; without ``stats_tmp`` an existing one
+        (made from an earlier registration) is removed.
     """
     adata.path.unlink(missing_ok=True)
     os.replace(movie.tmp, movie.path)
+    if stats_path is not None:
+        if stats_tmp is not None:
+            os.replace(stats_tmp, stats_path)
+        else:
+            Path(stats_path).unlink(missing_ok=True)
     os.replace(adata.tmp, adata.path)
 
 

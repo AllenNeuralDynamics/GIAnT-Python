@@ -40,14 +40,19 @@ from .outputs import (
     MovieWriter,
     downsample2,
     matlab_round,
+    partial_path,
     publish,
     rec_neg_err,
     settings_record,
 )
 from .sources import has_samples, make_source
+from .stats.io import stats_path
 from .template import TemplateState, consensus, initial_template
 
 log = logging.getLogger(__name__)
+
+_FAILED = object()
+"""What a failed statistics step returns."""
 
 
 def matlab_colon(a: float, d: float, b: float) -> np.ndarray:
@@ -233,6 +238,13 @@ class OutputSink:
         Where the mean images accumulate.
     movie_deflate, var_deflate : int
         Deflate levels of an HDF5 movie and of ``varFacDS`` (0: none).
+    stats : TrialStatsAccumulator, optional
+        Accumulates the trial's summary statistics
+        (:mod:`.stats`) from the frames as they are written.
+    stats_path : Path, optional
+        The trial's statistics file. Written with the movie when ``stats``
+        is given; otherwise an existing one is removed on publishing (it
+        would describe an earlier registration).
     """
 
     def __init__(
@@ -246,9 +258,14 @@ class OutputSink:
         device,
         movie_deflate: int = 1,
         var_deflate: int = 1,
+        stats=None,
+        stats_path=None,
     ):
         """Open the movie and the alignment file."""
         ho, wo = out_shape
+        self.stats = stats
+        self.stats_path = None if stats_path is None else Path(stats_path)
+        self.stats_seconds = 0.0
         self.sum = torch.zeros(n_channels, ho, wo, device=device)
         self.count = torch.zeros(n_channels, ho, wo, device=device)
         self.movie_ds = np.full(
@@ -274,10 +291,17 @@ class OutputSink:
         blank = torch.full(
             self.sum.shape[1:], float("nan"), device=self.sum.device
         )
-        self.add(k, [blank] * self.sum.shape[0], blank)
+        nan = float("nan")
+        self.add(k, [blank] * self.sum.shape[0], blank, (nan, nan))
 
-    def add(self, k: int, regs, var_factor: torch.Tensor) -> torch.Tensor:
-        """Record frame ``k``'s registered channels; return their sum."""
+    def add(
+        self, k: int, regs, var_factor: torch.Tensor, motion=None
+    ) -> torch.Tensor:
+        """Record frame ``k``'s registered channels; return their sum.
+
+        ``motion`` (row, column) is the frame's motion, which the summary
+        statistics need.
+        """
         self.adata.write_var_factor(k, var_factor.cpu().numpy())
         total = None
         for ch, reg in enumerate(regs):
@@ -287,18 +311,67 @@ class OutputSink:
             self.count[ch] += good
             total = reg if total is None else total + reg
         self.movie_ds[k] = downsample2(downsample2(total)).cpu().numpy()
+        if self.stats is not None:
+            self._stats_call(self.stats.add, k, regs, var_factor, motion)
         return total
+
+    def _stats_call(self, fn, *args):
+        """Run a statistics step; on failure, log it and stop the
+        statistics (registration goes on without them)."""
+        t0 = time.perf_counter()
+        try:
+            return fn(*args)
+        except Exception:
+            log.exception("summary statistics failed; continuing without")
+            self.stats = None
+            return _FAILED
+        finally:
+            self.stats_seconds += time.perf_counter() - t0
 
     def mean_image(self) -> np.ndarray:
         """Per-channel mean of the registered frames (meanIM)."""
         mean = self.sum / torch.clamp(self.count, min=1)
         return mean.masked_fill(self.count < 1, float("nan")).cpu().numpy()
 
+    def _write_stats(self, fields: dict):
+        """Finish the statistics and write them under a temporary name.
+
+        Returns
+        -------
+        Path or None
+            The temporary file (None without statistics).
+        """
+        if self.stats is None or self.stats_path is None:
+            return None
+        from .stats.io import alignment_digest, write_stats
+
+        result = self._stats_call(self.stats.finish)
+        if result is _FAILED:
+            return None
+        tmp = partial_path(self.stats_path)
+        attrs = {
+            "source": "registration",
+            "movie": self.movie.path.name,
+            "movie_size": int(self.movie.tmp.stat().st_size),
+            "alignment": self.adata.path.name,
+            "alignment_digest": alignment_digest(
+                fields["DSframes"], fields["motionDSr"], fields["motionDSc"]
+            ),
+            "align_hz": float(fields["alignHz"]),
+            "device": str(self.sum.device),
+        }
+        if self._stats_call(write_stats, tmp, result, attrs) is _FAILED:
+            tmp.unlink(missing_ok=True)
+            return None
+        return tmp
+
     def finish(self, fields: dict, settings: Optional[dict] = None) -> None:
-        """Complete the alignment file and publish it with the movie."""
+        """Complete the alignment file and publish it with the movie (and
+        the statistics file)."""
         self.movie.close()
+        stats_tmp = self._write_stats(fields)
         self.adata.finish(fields, settings)
-        publish(self.movie, self.adata)
+        publish(self.movie, self.adata, stats_tmp, self.stats_path)
 
     def abort(self) -> None:
         """Discard the partial movie and alignment file."""
@@ -306,6 +379,8 @@ class OutputSink:
             self.movie.abort()
         finally:
             self.adata.abort()
+            if self.stats_path is not None:
+                partial_path(self.stats_path).unlink(missing_ok=True)
 
 
 def register_sequential(
@@ -372,7 +447,9 @@ def register_sequential(
             for ch in range(vals.shape[0]):
                 img = window.image(vals[ch, i], float("nan"))
                 regs.append(interp_frame(img, fimg, mr, mc, m))
-            state.add(sink.add(a + i, [r for r, _ in regs], regs[0][1]))
+            state.add(
+                sink.add(a + i, [r for r, _ in regs], regs[0][1], (mr, mc))
+            )
             init_r = int(np.clip(matlab_round(mr), -m, m))
             init_c = int(np.clip(matlab_round(mc), -m, m))
         log.info("%d of %d frames", b, n)
@@ -429,7 +506,7 @@ def register_grow(
             sink.add_missing(k)
             continue
         regs = cache.registered(int(j[k]), motion[k], m)
-        sink.add(k, [r for r, _ in regs], regs[0][1])
+        sink.add(k, [r for r, _ in regs], regs[0][1], motion[k])
     timer.mark("render")
     return motion[:, 0].copy(), motion[:, 1].copy(), qc.peak.copy(), qc
 
@@ -528,6 +605,18 @@ def open_trial(dat_path, first_line, last_line, params, device):
     return layout, FrameFormer(layout, samples, c0, 1, device), init, ds, dtk
 
 
+def trial_stats(source, ds, margin: int, n_channels: int):
+    """The trial's statistics accumulator, or None if it cannot be made
+    (logged; registration goes on without statistics)."""
+    from .stats import new_accumulator
+
+    try:
+        return new_accumulator(source, ds, margin, n_channels)
+    except Exception:
+        log.exception("summary statistics cannot be set up; skipping them")
+        return None
+
+
 def register_trial(
     dat_path: Union[str, Path],
     first_line: float,
@@ -537,6 +626,7 @@ def register_trial(
     params: Optional[MultiRoiRegistrationParams] = None,
     device="cpu",
     dtype=torch.float32,
+    stats: bool = True,
 ) -> TrialRegistration:
     """Register the lines ``first_line .. last_line`` of a recording.
 
@@ -556,6 +646,11 @@ def register_trial(
         Where frames are formed and matched.
     dtype : torch.dtype
         Precision of the correlation sums.
+    stats : bool
+        Also compute the trial's summary statistics (:mod:`.stats`) while
+        the movie is written, into ``<stem>_REGSTATS-<hz>Hz.h5`` next to
+        it (:func:`.stats.stats_path`). Without, an existing statistics
+        file of the trial is removed.
 
     Returns
     -------
@@ -596,6 +691,8 @@ def register_trial(
     timer.mark("template")
     m = int(params.maxshift)
     h, w = source.window.shape
+    acc = trial_stats(source, ds, m, layout.num_channels) if stats else None
+    timer.mark("stats setup")
     sink = OutputSink(
         movie_path,
         adata_path,
@@ -606,6 +703,8 @@ def register_trial(
         device,
         params.movie_deflate,
         params.var_factor_deflate,
+        stats=acc,
+        stats_path=stats_path(movie_path),
     )
     qc = None
     try:
@@ -641,6 +740,7 @@ def register_trial(
         sink.abort()
         raise
     timer.mark("alignment file")
+    timer.times["stats (within)"] = sink.stats_seconds
     log.info(
         "timings (s): %s", {k: round(v, 2) for k, v in timer.times.items()}
     )
