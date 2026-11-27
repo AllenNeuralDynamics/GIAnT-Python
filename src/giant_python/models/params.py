@@ -470,6 +470,12 @@ def resolve_registration_options(
 _SILO_STAGES = ("localize", "plan", "prepare", "solve", "collect")
 
 
+def _odd(name: str, value: int) -> None:
+    """Reject an even integer."""
+    if value % 2 == 0:
+        raise ValueError(f"{name} must be odd, not {value}")
+
+
 def _choice(name: str, value: object, allowed: tuple) -> None:
     """Reject a value that is not one of ``allowed``."""
     if value not in allowed:
@@ -528,6 +534,18 @@ class SiloParams:
     d_xy : float
         How large sources can be, pixels (``dXY``); the selected disk around
         a source has radius ``ceil(2 d_xy)`` (``selRadius``).
+    valid_kernel : int
+        Side of the square around each source where the footprint fit may
+        put intensity (odd; MATLAB's ``validKernel``, which MATLAB
+        hard-codes as 3 x 3). One setting for the whole run: it sets the
+        plan's grouping zones (radius ``ceil(1.5 sigma_px +
+        (valid_kernel - 1) / 2)``, :class:`PlanParams`) and the solver's
+        footprints (``SolverParams.valid_kernel``) together. The footprint
+        is ``hfilter`` blurring that support, so its width lies between
+        0.9 ``sigma_px`` and ``sqrt((0.9 sigma_px)**2 + r**2)``,
+        r = (valid_kernel - 1) / 2: 1.20 to 1.56 px with 3 at ``sigma_px``
+        1.33, up to 2.33 px with 5. 3 is the setting to compare with
+        MATLAB.
     tau_s, tau2_s : float
         Decay time constants of the activity channel and of channel 2
         (``tau_s``, ``tau2_s``).
@@ -648,6 +666,7 @@ class SiloParams:
     analyze_hz: float = 200.0
     sigma_px: float = 1.33
     d_xy: float = 3.0
+    valid_kernel: int = 3
     tau_s: float = 0.024
     tau2_s: float = 0.15
     baseline_window_s: float = 4.0
@@ -721,8 +740,11 @@ class SiloParams:
             "align_patch_px",
             "localization_null_draws",
             "min_frames",
+            "valid_kernel",
         ):
             _positive(name, getattr(self, name), integer=True)
+        # the footprint's support is centred on the source's pixel
+        _odd("valid_kernel", self.valid_kernel)
         for name in (
             "discard_initial_s",
             "lam",
@@ -844,6 +866,7 @@ class SiloParams:
             min_peak_distance=self.min_peak_distance,
             d_xy=self.d_xy,
             sigma_px=self.sigma_px,
+            valid_kernel=self.valid_kernel,
         )
 
     def load_params(self):
@@ -884,6 +907,7 @@ class SiloParams:
             baseline_knot_factor=self.baseline_knot_factor,
             baseline_penalty=self.baseline_penalty,
             baseline_mode=self.baseline_mode,
+            valid_kernel=self.valid_kernel,
         )
 
     @property
@@ -1045,7 +1069,10 @@ class SiloParams:
             "Hfilter": np.asarray(sp.hfilter, dtype=np.float64),
             # MATLAB's Bfilter is size x size x 3
             "Bfilter": np.ascontiguousarray(sp.bfilter.transpose(1, 2, 0)),
-            "validKernel": np.ones((3, 3), dtype=np.bool_),
+            # MATLAB's name; MATLAB itself always has 3 x 3
+            "validKernel": np.ones(
+                (self.valid_kernel, self.valid_kernel), dtype=np.bool_
+            ),
         }
         for name, (key, matlab) in _PYTHON_ONLY.items():
             value = getattr(self, name)
@@ -1142,9 +1169,11 @@ _STAGE_FIELDS_ADDED = {
         # each stage after localization checks the source of the stage
         # before it, so changing only the source redoes them
         "baseline_source": "median",
+        # the zones that group sources
+        "valid_kernel": 3,
     },
     "prepare": {"baseline_source": "median"},
-    "solve": {"baseline_mode": "fit"},
+    "solve": {"baseline_mode": "fit", "valid_kernel": 3},
 }
 
 # the settings that SiloParams.baseline_source sets, per source (see the

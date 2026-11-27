@@ -51,7 +51,7 @@ default, and
 ``to_matlab()`` gives the ``params`` struct that the summary and the trial
 table record. On the command line a few fields
 have their own options (``--peak-th``, ``--min-kinetic-score``,
-``--footprint-variance``, ``--localization-baseline``,
+``--footprint-variance``, ``--valid-kernel``, ``--localization-baseline``,
 ``--no-trial-peaks``, ``--activity-channel``); any field can be set with
 ``--set name=value`` or a JSON file (``--params``).
 :class:`~giant_python.models.params.SiloExecution` says how to run (worker
@@ -92,6 +92,24 @@ these options existed (with MATLAB's fit); ``seed_fit='matlab'`` with
 ``seed_merge_px=0`` keeps those current. The ported function
 :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`, and the
 standalone per-trial localization, keep MATLAB's fit as their own default.
+
+Footprint support
+~~~~~~~~~~~~~~~~~
+
+A footprint is the solver's ``hfilter`` (a Gaussian of 0.9 ``sigma_px``)
+blurring a nonnegative image that may be nonzero only on the
+``valid_kernel`` x ``valid_kernel`` pixels around the source (MATLAB's
+``validKernel``, which MATLAB hard-codes as 3 x 3). Its width therefore
+lies between 1.20 and 1.56 px with 3 at ``sigma_px`` 1.33, and up to
+2.33 px with 5. ``valid_kernel`` (``--valid-kernel``, odd) is one setting
+for the whole run: it sets the plan's grouping zones (sources whose disks
+of radius ``ceil(1.5 sigma_px + (valid_kernel - 1) / 2)``, 3 px with 3
+and 4 px with 5, touch are solved together) and the solver's support
+together. It is a Python
+setting only: 3, the default, is the setting to compare with MATLAB, and
+the saved ``params`` struct records ``validKernel`` at the run's size.
+A changed value redoes the plan and the stages after it; the stages after
+the plan refuse a plan or container made with another value.
 
 The F0 network's baseline
 -------------------------
