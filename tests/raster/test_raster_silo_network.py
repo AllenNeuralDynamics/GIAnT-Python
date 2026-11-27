@@ -816,3 +816,21 @@ def test_localized_again_after_the_plan(tmp_path, fake):
         silo.prepare(s, NET, EX, baseline_dir=b)
     silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))  # made again: fine
     assert len(silo.prepare(s, NET, EX, baseline_dir=b)) == 6
+
+
+def test_fit_mode_records_no_extraction_baseline(tmp_path, fake):
+    """Containers with the network's baseline solved with MATLAB's fit:
+    the results do not name the baseline as extraction's (it was not
+    used)."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    silo.localize(s, NET, EX, baseline_dir=bdir)
+    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, NET, EX, baseline_dir=bdir)
+    fit = replace(NET, baseline_mode="fit")
+    for job in silo_solve.dispatch(s, fit, 1, EX):
+        silo_solve.solve_job(job, execution=EX)
+    for f in s.results_dir.glob("*.h5"):
+        with h5py.File(f, "r") as h:
+            assert "network_baseline" not in h.attrs

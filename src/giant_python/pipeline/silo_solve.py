@@ -170,15 +170,16 @@ def results_attrs(
     Besides the settings hash and the container's identity it records
     ``solve_settings`` (:func:`solve_settings`), ``solve_science``
     (:func:`solve_science`) and ``plan_hash`` (the plan the container was
-    made from), which the collect stage checks, and, when the container
-    holds the network's baseline, ``network_baseline`` (JSON: its
-    identity).
+    made from), which the collect stage checks, and, when the solver used
+    the container's network baseline (a ``baseline_mode`` other than
+    'fit'), ``network_baseline`` (JSON: its identity).
     """
     src = getattr(container, "source", {}) or {}
     cparams = getattr(container, "params", {}) or {}
     plan_hash = cparams.get("plan", "")
     extra = {}
-    if cparams.get("baseline"):
+    if cparams.get("baseline") and params.baseline_mode != "fit":
+        # only a baseline the solver used ('fit' ignores the container's)
         extra["network_baseline"] = json.dumps(
             cparams["baseline"], sort_keys=True
         )
