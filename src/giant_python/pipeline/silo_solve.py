@@ -218,6 +218,14 @@ def check_container(container, params: SiloParams, name: str) -> None:
             f"{params.baseline_mode!r} needs one (prepare it with the "
             "network's baselines)"
         )
+    if params.baseline_mode == "fit" and container.baseline_filled:
+        # its settings hash covers the baseline, which 'fit' does not use:
+        # collect would take the results for stale
+        raise ValueError(
+            f"{name} was prepared with the network's baseline for a mode "
+            "that uses it; these settings have baseline_mode 'fit': give "
+            "every stage the same settings (or prepare it again)"
+        )
 
 
 def solve_container(

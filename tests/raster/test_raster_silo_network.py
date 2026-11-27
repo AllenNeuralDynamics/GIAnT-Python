@@ -818,10 +818,11 @@ def test_localized_again_after_the_plan(tmp_path, fake):
     assert len(silo.prepare(s, NET, EX, baseline_dir=b)) == 6
 
 
-def test_fit_mode_records_no_extraction_baseline(tmp_path, fake):
-    """Containers with the network's baseline solved with MATLAB's fit:
-    the results do not name the baseline as extraction's (it was not
-    used)."""
+def test_one_baseline_mode_per_run(tmp_path, fake):
+    """Containers prepared with the network's baseline are not solved with
+    MATLAB's fit (their hash covers a baseline the fit does not use, so
+    collect would take the results for stale); results name the baseline
+    only when the solver used it."""
     root = tmp_path / "s"
     s = SiloSession.open(make_session(root))
     bdir = write_baselines(root, tmp_path / "b")
@@ -829,8 +830,21 @@ def test_fit_mode_records_no_extraction_baseline(tmp_path, fake):
     silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
     silo.prepare(s, NET, EX, baseline_dir=bdir)
     fit = replace(NET, baseline_mode="fit")
-    for job in silo_solve.dispatch(s, fit, 1, EX):
-        silo_solve.solve_job(job, execution=EX)
-    for f in s.results_dir.glob("*.h5"):
-        with h5py.File(f, "r") as h:
-            assert "network_baseline" not in h.attrs
+    with pytest.raises(ValueError, match="baseline_mode 'fit'"):
+        silo_solve.dispatch(s, fit, 1, EX)
+    job = silo_solve.dispatch(s, NET, 1, EX)[0]
+    with pytest.raises(ValueError, match="baseline_mode 'fit'"):
+        silo_solve.solve_container(
+            s.container_file(0, 0),
+            s.results_file(0, 0),
+            fit,
+            EX.solver_options(),
+        )
+    silo_solve.solve_job(job, execution=EX)
+    with h5py.File(s.results_file(0, 0), "r") as h:
+        assert "network_baseline" in h.attrs
+    c = read_container(s.container_file(0, 0), data=False)
+    attrs = silo_solve.results_attrs(
+        c, "c.h5", "h", (0, 1), 1, True, "r", fit, EX.solver_options()
+    )
+    assert "network_baseline" not in attrs
