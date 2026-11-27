@@ -68,9 +68,10 @@ settings it sets, below), and ``trial_peaks``. They are added to the saved
 ``params`` (in camelCase) when they differ from MATLAB's algorithm: a
 default run records
 ``footprintVariance = 'fixed'``, ``seedFit = 'local'`` and
-``seedMergePx = 1.5`` (and ``validKernel``, MATLAB's own field, at 5 x 5),
-and a run with ``--set footprint_variance=model --set seed_fit=matlab
---set seed_merge_px=0 --valid-kernel 3`` has MATLAB's fields exactly.
+``seedMergePx = 1.5`` (and MATLAB's own fields ``validKernel`` at 5 x 5
+and ``interTrialAlignment = 'patchwise'``), and a run with ``--set
+footprint_variance=model --set seed_fit=matlab --set seed_merge_px=0
+--valid-kernel 3 --alignment rigid`` has MATLAB's fields exactly.
 
 Two seeding options are not MATLAB's (both on by default since the user's
 decision of 2026-11-26):
