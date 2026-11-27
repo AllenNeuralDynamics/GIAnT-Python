@@ -229,6 +229,7 @@ class TrialStatsAccumulator:
         self.present = np.zeros(self.n_frames, dtype=bool)
         self.bins = []
         self.kappa = [0.0, 0]
+        self.pair_bin = 0.0
         self.n_added = 0
         self.geo_done = 0
         self.block_done = 0
@@ -405,12 +406,14 @@ class TrialStatsAccumulator:
         return res
 
     def _spatial_factor(self, g0: int, g1: int) -> None:
-        """Add frames' bilinear factors (2 x 2 sums) to the trial mean."""
-        from .geometry import spatial_factor
+        """Add frames' bilinear and pair factors (2 x 2 sums) to the trial
+        mean."""
+        from .geometry import pair_bin_factor, spatial_factor
 
         _, _, frac = self.geo.corners(self.motion[g0:g1], self.present[g0:g1])
         for i in np.flatnonzero(self.present[g0:g1]):
             self.kappa[0] += spatial_factor(frac[i])
+            self.pair_bin += pair_bin_factor(frac[i], self.geo.pair_share)
             self.kappa[1] += 1
 
     # -------------------------------------------------------------- blocks

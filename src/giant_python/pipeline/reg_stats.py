@@ -72,8 +72,7 @@ def read_alignment(path: Union[str, Path]) -> dict:
             "align_hz": float(_scalar(f, "alignHz")),
             "trim_rows": _vector(f, "slap2/trimRows").astype(np.int64),
             "trim_cols": _vector(f, "slap2/trimCols").astype(np.int64),
-            # meanIM is (channels, cols, rows) in h5py (MATLAB layout)
-            "out_shape": tuple(f["meanIM"].shape[1::-1]),
+            "out_shape": _out_shape(f["slap2"], row_major),
             "compensated": bool(
                 _scalar(f, "slap2/onlineCompensation/enabled", 0)
             ),
@@ -92,15 +91,28 @@ def read_alignment(path: Union[str, Path]) -> dict:
     return out
 
 
+def _matlab_2d(ds: h5py.Dataset, row_major: bool) -> np.ndarray:
+    """A 2-D dataset in MATLAB's orientation."""
+    a = np.asarray(ds[()], dtype=np.float64)
+    return a if row_major else a.T
+
+
+def _out_shape(grp: h5py.Group, row_major: bool) -> tuple:
+    """``(rows, cols)`` of the registered frame, from ``viewR`` and
+    ``viewC`` (as the SILo loader reads them)."""
+    rows = _matlab_2d(grp["viewR"], row_major)[:, 0]
+    cols = _matlab_2d(grp["viewC"], row_major)[0, :]
+    return rows.size, cols.size
+
+
 def _compensation_record(grp: h5py.Group, row_major: bool) -> dict:
     """The fields of a saved ``onlineCompensation`` record that decide
     where samples are placed."""
-    mapping = np.asarray(grp["mapping"][()], dtype=np.float64)
     return {
         "refOffset": _vector(grp, "refOffset"),
         "frameRefX": _vector(grp, "frameRefX"),
         "frameRefY": _vector(grp, "frameRefY"),
-        "mapping": mapping if row_major else mapping.T,
+        "mapping": _matlab_2d(grp["mapping"], row_major),
         "yLead": _vector(grp, "yLead"),
     }
 

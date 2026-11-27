@@ -188,13 +188,22 @@ estimator:
    ``QA3a / R0`` and ``QA3b / R0``; ``fast_m3_ph = mu (g3 fast_q3 + 3 c3a
    fast_q3a + 3 c3b fast_q3b)``.
 ``sigma8_ph``
-   ``sqrt(g2 mu v8)`` with ``v8`` the mean over valid 8-frame bins of the
-   photon variance of the bin's mean; a 2 x 2 bin's photon variance is
-   ``spatial_factor * sum sigma8^2 / 16``, where ``spatial_factor`` (an
+   ``sqrt(mu (g2 v8 + 2 c2 v8a))`` with ``v8`` and ``v8a`` the means over
+   valid 8-frame bins of the photon variance of the bin's mean per unit of
+   the gains (its own samples, and its consecutive-sample pairs).
+``2 x 2 bins (shared modes)``
+   A 2 x 2 bin's photon variance is ``sum over its pixels of mu v8 (g2
+   spatial_factor + 2 c2 pair_bin_factor) / 16``. ``spatial_factor`` (an
    attribute) is the trial's mean of ``(1 + rho_r)(1 + rho_c)``, ``rho =
    f (1 - f) / ((1 - f)^2 + f^2)`` for the frame's fractional shifts ``f``,
-   by which bilinear interpolation's shared raw pixels raise the variance of
-   a 2 x 2 sum (equal raw pixels assumed).
+   by which bilinear interpolation's shared raw pixels raise the variance
+   of a 2 x 2 sum; ``pair_bin_factor`` (an attribute) is the trial's mean
+   of ``sum_d pi_d S_d / (4 Q_r Q_c)``, the consecutive-sample pairs inside
+   the sum (between its pixels as well as within each): ``pi_d`` is the
+   share of samples whose next sample is in the neighbouring direction
+   ``d``, ``Q = (1 - f)^2 + f^2`` per axis, and ``S_d`` the product over
+   the axes of ``(1 - f)^2 + 1 + f^2`` where ``d`` does not step and 1
+   where it does (equal raw pixels assumed for both).
 ``zero_ph``
    a frame is exactly 0 when all of its ``N`` contributing samples are;
    with ``M`` of them in consecutive pairs that has probability ``exp(-nu
@@ -263,7 +272,7 @@ centres, 8 valid blocks)::
    ├── (attributes) stats_version, layout, created, source (registration |
    │   reg-stats), movie, movie_size, alignment, alignment_digest (SHA-256
    │   of DSframes, motionDSr, motionDSc), align_hz, n_frames, n_lags,
-   │   n_index, spatial_factor, zero_shared, device
+   │   n_index, spatial_factor, pair_bin_factor, zero_shared, device
    ├── maps/
    │   ├── n_valid, mean, var, var_q, var_qa, var_ph, var_rel
    │   ├── zero_share, zero_ph, zero_excess
@@ -287,8 +296,8 @@ The statistics are formed while registration writes the movie, on the
 registration's device: on a GPU on a thread and a CUDA stream of their own
 (their setup, the gain curves and the frame geometry, while the template
 is built), on the CPU in line (a second thread there competes for the same
-cores and was slower). On a 780125 trial (2 channels, 2,254 frames of 845 x
-320 pixels) on a quiet machine (RTX 4060 Ti; 8 CPU threads of a
+cores and was slower). On a 780125 trial (2 channels, 2,254 frames of 320 x
+845 pixels) on a quiet machine (RTX 4060 Ti; 8 CPU threads of a
 Threadripper PRO 5955WX), registration took:
 
 .. list-table::

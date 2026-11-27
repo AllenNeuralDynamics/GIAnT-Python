@@ -356,16 +356,24 @@ class OutputSink:
             write_stats(tmp, result, attrs)
         except Exception:
             log.exception("summary statistics failed; continuing without")
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                log.exception("could not remove %s", tmp)
             return None
         return tmp
 
     def finish(self, fields: dict, settings: Optional[dict] = None) -> None:
         """Complete the alignment file and publish it with the movie (and
-        the statistics file)."""
+        the statistics file; a failure there is logged and the trial is
+        published without statistics)."""
         self.movie.close()
         self.adata.finish(fields, settings)  # while the maps are formed
-        stats_tmp = self._write_stats(fields)
+        try:
+            stats_tmp = self._write_stats(fields)
+        except Exception:
+            log.exception("summary statistics failed; continuing without")
+            stats_tmp = None
         publish(self.movie, self.adata, stats_tmp, self.stats_path)
 
     def abort(self) -> None:

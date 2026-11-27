@@ -71,9 +71,10 @@ def _binned(full: np.ndarray, members: np.ndarray) -> np.ndarray:
     return full[:, members].mean(-1)
 
 
-def _bin_sigma(sigma8: np.ndarray, members: np.ndarray, kappa: float):
-    """Photon-noise SD of each 2 x 2 bin's mean ``(n_space,)``."""
-    return np.sqrt(kappa * (sigma8[members] ** 2).sum(-1) / 16)
+def _bin_sigma(bin_var: np.ndarray, members: np.ndarray):
+    """Photon-noise SD of each 2 x 2 bin's mean ``(n_space,)`` from its
+    pixels' shares (:func:`.maps.bin_var8`)."""
+    return np.sqrt(bin_var[members].sum(-1) / 16)
 
 
 def _components(y: np.ndarray, k: int):
@@ -155,11 +156,11 @@ def _empty(c: int, nb: int, n_idx: int, k: int) -> dict:
     }
 
 
-def _channel(out, ch, full, idx, shape, sigma8, kappa, k) -> None:
+def _channel(out, ch, full, idx, shape, sigma8, bin_var, k) -> None:
     """Fill channel ``ch`` of ``out``."""
     members = bin_members(idx, shape)
     b = _binned(full, members)
-    sd = _bin_sigma(sigma8, members, kappa)
+    sd = _bin_sigma(bin_var, members)
     use = np.isfinite(b).all(0) & np.isfinite(sd) & (sd > 0)
     if use.sum() < k or b.shape[0] <= k:
         return
@@ -180,7 +181,7 @@ def _channel(out, ch, full, idx, shape, sigma8, kappa, k) -> None:
         out["weight_ph"][ch, :, :n] = wts / sigma8[:, None]
 
 
-def shared_modes(bins, idx, shape, sigma8, kappa, k=N_COMPONENTS) -> dict:
+def shared_modes(bins, idx, shape, sigma8, bin_var, k=N_COMPONENTS) -> dict:
     """The trial's top shared modes per channel.
 
     Parameters
@@ -192,9 +193,10 @@ def shared_modes(bins, idx, shape, sigma8, kappa, k=N_COMPONENTS) -> dict:
     shape : (int, int)
         Registered grid.
     sigma8 : ndarray ``(channels, n_idx)``
-        Photon SD of each pixel's 8-frame mean.
-    kappa : float
-        Spatial factor of 2 x 2 sums.
+        Photon SD of each pixel's 8-frame mean (for ``weight_ph``).
+    bin_var : ndarray ``(channels, n_idx)``
+        Each pixel's share of the photon variance of a 2 x 2 sum of
+        8-frame means (:func:`.maps.bin_var8`).
     k : int
         Components.
 
@@ -210,8 +212,8 @@ def shared_modes(bins, idx, shape, sigma8, kappa, k=N_COMPONENTS) -> dict:
     c = sigma8.shape[0]
     out = _empty(c, full.shape[1], idx.size, k)
     out["n_bins"] = np.int64(full.shape[1])
-    if full.shape[0] == 0 or not np.isfinite(kappa):
+    if full.shape[0] == 0:
         return out
     for ch in range(c):
-        _channel(out, ch, full[ch], idx, shape, sigma8[ch], kappa, k)
+        _channel(out, ch, full[ch], idx, shape, sigma8[ch], bin_var[ch], k)
     return out

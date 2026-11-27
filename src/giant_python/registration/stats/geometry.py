@@ -137,6 +137,34 @@ def spatial_factor(frac) -> float:
     return out
 
 
+def pair_bin_factor(frac, shares: dict) -> float:
+    """Consecutive-sample pairs inside a 2 x 2 sum of registered pixels,
+    relative to four times one pixel's own single-sample variance (equal
+    raw pixels assumed, as :func:`spatial_factor`).
+
+    Per axis with fractional shift ``f`` the sum's raw-pixel weights are
+    ``(1 - f, 1, f)``: ``A = (1 - f)^2 + 1 + f^2`` along an axis the pair
+    does not step on, ``1`` along one it steps on, against ``Q = (1 - f)^2
+    + f^2`` for one pixel. With ``pi_d`` the share of samples whose next
+    sample is in direction ``d``: ``sum_d pi_d S_d / (4 Q_r Q_c)``.
+
+    Parameters
+    ----------
+    frac : (float, float)
+        The frame's fractional row and column shifts.
+    shares : dict
+        ``{(dr, dc): pi_d}`` (:attr:`FrameGeometry.pair_share`).
+    """
+    q = [(1 - f) ** 2 + f**2 for f in frac]
+    a = [(1 - f) ** 2 + 1 + f**2 for f in frac]
+    total = 0.0
+    for (dr, dc), share in shares.items():
+        total += (
+            share * (a[0] if dr == 0 else 1.0) * (a[1] if dc == 0 else 1.0)
+        )
+    return total / (4 * q[0] * q[1])
+
+
 def _pair_products(w_first, w_partner, cmin, lag, n_first):
     """Kernel products of frames ``f`` and ``f + lag`` per line.
 
@@ -237,6 +265,7 @@ class FrameGeometry:
         self._incidence = {}
         self._adjacent = {}
         self.slot_dirs = self._slot_directions()
+        self.pair_share = self._pair_shares()
         self.directions = sorted(
             {tuple(int(v) for v in d) for d in self.slot_dirs[1].tolist()}
         )
@@ -274,6 +303,19 @@ class FrameGeometry:
         d = np.stack([pr[n] - pr[s], pc[n] - pc[s]], 1)
         near = (np.abs(d) <= 1).all(1) & (d != 0).any(1)
         return s[near], d[near]
+
+    def _pair_shares(self) -> dict:
+        """``{(dr, dc): share}``: the plane's samples whose next sample is
+        in the neighbouring pixel ``(dr, dc)``, as a share of all of them."""
+        lay = self.former.layout
+        n = int((lay.line_fast_z[lay.slot_line - 1] == 1).sum())
+        dirs = self.slot_dirs[1]
+        if n == 0 or dirs.size == 0:
+            return {}
+        keys, counts = np.unique(dirs, axis=0, return_counts=True)
+        return {
+            (int(r), int(c)): float(k) / n for (r, c), k in zip(keys, counts)
+        }
 
     def adjacency(self, dr: int, dc: int, delta) -> torch.Tensor:
         """``(P, n_win + 1)`` float32: slots on line ``l`` of the window

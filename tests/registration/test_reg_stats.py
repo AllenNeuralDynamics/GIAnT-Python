@@ -416,14 +416,17 @@ def test_rerun_without_stats_removes_old_file(patched, tmp_path):
     assert not stats_path(tmp_path / MOVIE).exists()
 
 
-@pytest.mark.parametrize("step", ["setup", "add", "finish"])
+@pytest.mark.parametrize("step", ["setup", "add", "finish", "write"])
 def test_failed_statistics_leave_registration(
     patched, tmp_path, step, monkeypatch, caplog
 ):
-    """A statistics step that fails (on the worker thread) is logged;
-    registration publishes the same movie and alignment file, without
-    statistics (and removes an earlier statistics file)."""
-    from giant_python.registration.stats import accumulate
+    """A statistics step that fails (on the worker thread, or writing the
+    file, with its cleanup failing too) is logged; registration publishes
+    the same movie and alignment file, without statistics (and removes an
+    earlier statistics file)."""
+    import pathlib
+
+    from giant_python.registration.stats import accumulate, io
 
     layout = patched
     params = multiroi.MultiRoiRegistrationParams(maxshift=6)
@@ -441,8 +444,20 @@ def test_failed_statistics_leave_registration(
         monkeypatch.setattr(accumulate.TrialStatsAccumulator, "__init__", fail)
     elif step == "add":
         monkeypatch.setattr(accumulate.TrialStatsAccumulator, "_block", fail)
-    else:
+    elif step == "finish":
         monkeypatch.setattr(accumulate.TrialStatsAccumulator, "_maps", fail)
+    else:
+        monkeypatch.setattr(io, "write_stats", fail)
+        unlink = pathlib.Path.unlink
+
+        def locked(path, *args, **kwargs):
+            """Path.unlink, refusing the partial statistics file."""
+            if "REGSTATS" in path.name and path.name != STATS_NAME:
+                raise PermissionError("locked")
+            return unlink(path, *args, **kwargs)
+
+        STATS_NAME = stats_path(tmp_path / MOVIE).name
+        monkeypatch.setattr(pathlib.Path, "unlink", locked)
     d = tmp_path / "run"
     d.mkdir()
     stats_path(d / MOVIE).write_bytes(b"from an earlier registration")
@@ -683,3 +698,8 @@ def test_shared_pulses_read_zero(tmp_path):
         ):
             mean = np.mean(maps[name][ch][use])
             assert abs(mean) < tol, (ch, name, mean)
+    # the shared modes' input is in photon-noise units: unit variance per
+    # 2 x 2 bin and 8-frame bin (centred over time), pairs inside included
+    svd = res["svd"]
+    unit = svd["total_var"] / (svd["n_space"] * (svd["n_bins"] - 1))
+    np.testing.assert_allclose(unit, 1.0, atol=0.05)  # 1.08-1.11 without

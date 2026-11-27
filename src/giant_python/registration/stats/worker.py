@@ -84,7 +84,9 @@ class StatsWorker:
         ready = None
         if self._stream is not None:
             ready = torch.cuda.Event()
-            ready.record()  # on the caller's stream: its inputs are written
+            # on the caller's current stream of the statistics' device, where
+            # their inputs are written
+            ready.record(torch.cuda.current_stream(self._stream.device))
         self._slots.acquire()
         try:
             return self._pool.submit(self._step, fn, ready, tensors, *args)

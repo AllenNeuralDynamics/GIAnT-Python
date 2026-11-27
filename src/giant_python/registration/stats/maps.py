@@ -192,6 +192,18 @@ def sigma8_map(a: dict, mu, g: dict) -> np.ndarray:
         return np.where(a["n8"] > 0, np.sqrt(mu * v / n8), np.nan)
 
 
+def bin_var8(a: dict, mu, g: dict, kappa: float, lam: float) -> np.ndarray:
+    """Each pixel's share of the photon variance of a 2 x 2 sum of 8-frame
+    means: ``mu v8 (g2 kappa + 2 c2 lam) / n8``, with ``kappa`` the
+    trial's :func:`.geometry.spatial_factor` and ``lam`` its
+    :func:`.geometry.pair_bin_factor` (all pairs inside the sum, each
+    pixel's own among them)."""
+    n8 = np.maximum(a["n8"], 1)
+    v = a["v8"] * (g["g2"] * kappa + 2 * g["c2"] * lam)
+    with np.errstate(invalid="ignore"):
+        return np.where(a["n8"] > 0, mu * v / n8, np.nan)
+
+
 def finish_maps(o) -> dict:
     """All statistics of a finished accumulator.
 
@@ -225,7 +237,9 @@ def finish_maps(o) -> dict:
     compact.update(zero_maps(grid, a["n"], g["nu"], compact["zero_share"]))
     compact["sigma8_ph"] = sigma8_map(a, mu, g)
     kappa = o.kappa[0] / o.kappa[1] if o.kappa[1] else float("nan")
-    svd = shared_modes(o.bins, idx, (h, w), compact["sigma8_ph"], kappa)
+    lam = o.pair_bin / o.kappa[1] if o.kappa[1] else float("nan")
+    var8 = bin_var8(a, mu, g, kappa, lam)
+    svd = shared_modes(o.bins, idx, (h, w), compact["sigma8_ph"], var8)
 
     def dense(v):
         """Compact ``(channels, n_idx)`` values on the registered grid."""
@@ -243,6 +257,7 @@ def finish_maps(o) -> dict:
         "n_frames": o.n_frames,
         "n_lags": o.n_lags,
         "spatial_factor": kappa,
+        "pair_bin_factor": lam,
         "n_index": int(idx.size),
         "zero_shared": [float(v) for v in o.shared_zero],
     }
