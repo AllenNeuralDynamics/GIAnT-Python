@@ -45,8 +45,15 @@ from ...io.slap2_raster import INVALID_SAMPLE
 N_BINS = 16
 """Brightness groups of the gain curve (equal numbers of slots)."""
 
-SLOTS_PER_PASS = 8192
-"""Slots summed at a time (bounds memory)."""
+SLOTS_PER_PASS = {"cuda": 8192, "cpu": 128}
+"""Slots summed at a time, per device type (bounds memory; on the CPU
+small passes stay in cache: 3x faster). The sums are exact integers, so
+the pass size does not change them."""
+
+
+def _pass_size(device: torch.device) -> int:
+    """:data:`SLOTS_PER_PASS` of a device."""
+    return SLOTS_PER_PASS.get(device.type, SLOTS_PER_PASS["cpu"])
 
 
 @dataclass
@@ -166,9 +173,9 @@ def slot_sums(samples: torch.Tensor, channel: int) -> np.ndarray:
     n = samples.shape[1]
     if samples.shape[2] < 3:
         return np.zeros((n, 7), dtype=np.int64)
+    step = _pass_size(samples.device)
     parts = [
-        _slot_sums(samples[channel, a : a + SLOTS_PER_PASS])
-        for a in range(0, n, SLOTS_PER_PASS)
+        _slot_sums(samples[channel, a : a + step]) for a in range(0, n, step)
     ]
     return np.concatenate(parts) if parts else np.zeros((0, 7), np.int64)
 
@@ -223,10 +230,11 @@ def pair_sums(samples: torch.Tensor, channel: int, nxt: np.ndarray):
     if samples.shape[2] < 3 or first.size == 0:
         return np.zeros((0, 9), dtype=np.int64)
     dev = samples.device
+    step = _pass_size(dev)
     parts = []
-    for a in range(0, first.size, SLOTS_PER_PASS):
-        i = torch.from_numpy(first[a : a + SLOTS_PER_PASS]).to(dev)
-        j = torch.from_numpy(nxt[first[a : a + SLOTS_PER_PASS]]).to(dev)
+    for a in range(0, first.size, step):
+        i = torch.from_numpy(first[a : a + step]).to(dev)
+        j = torch.from_numpy(nxt[first[a : a + step]]).to(dev)
         parts.append(_pair_sums(samples[channel, i], samples[channel, j]))
     return np.concatenate(parts)
 

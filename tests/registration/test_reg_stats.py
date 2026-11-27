@@ -248,7 +248,7 @@ def test_gain_curve_of_compound_poisson():
     curve = curve_from_sums(slot_sums(torch.from_numpy(x[None]), 0))
     assert np.allclose(curve.g2, g2, rtol=0.03)  # >= 9000 photons each
     assert np.allclose(curve.g3, g3, rtol=0.08)
-    nu = curve.at(curve.mu)[2]
+    nu = curve.at(curve.mu)["nu"]
     zero = (x == 0).mean(1)
     mean = x.mean(1)
     want = np.interp(curve.mu, mean, -np.log(zero))
@@ -338,9 +338,23 @@ def test_events_raise_fast_skewness(uniform):
 # ------------------------------------------------- registration and command
 
 
-def test_registration_and_command_agree(patched, tmp_path):
-    """``giant reg-stats`` on registration's outputs gives the same maps;
-    the mean equals ``meanIM``; statistics do not change the movie."""
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="no CUDA device"
+            ),
+        ),
+    ],
+)
+def test_registration_and_command_agree(patched, tmp_path, device):
+    """``giant reg-stats`` on registration's outputs gives the same maps
+    (on a GPU registration's run on a thread and stream of their own, the
+    command's in line); the mean equals ``meanIM``; statistics do not
+    change the movie."""
     from giant_python.pipeline.reg_stats import trial_stats
 
     layout = patched
@@ -350,8 +364,9 @@ def test_registration_and_command_agree(patched, tmp_path):
         d.mkdir()
         params = multiroi.MultiRoiRegistrationParams(maxshift=6)
         multiroi.register_trial(
-            layout.files[0], 1, 3000, d / MOVIE, d / ADATA, params, stats=stats
-        )
+            layout.files[0], 1, 3000, d / MOVIE, d / ADATA, params,
+            device=device, stats=stats,
+        )  # fmt: skip
         with h5py.File(d / MOVIE) as f:
             out[stats] = f["data"][()]
     np.testing.assert_array_equal(out[True], out[False])
@@ -363,7 +378,7 @@ def test_registration_and_command_agree(patched, tmp_path):
         mean_im = np.swapaxes(np.moveaxis(f["meanIM"][()], -1, 0), 1, 2)
     np.testing.assert_array_equal(a["maps"]["mean"], mean_im)
     cmd = tmp_path / "cmd" / stats_path(d / MOVIE).name
-    trial_stats(layout.files[0], 1, 3000, d / MOVIE, d / ADATA, cmd, "cpu",
+    trial_stats(layout.files[0], 1, 3000, d / MOVIE, d / ADATA, cmd, device,
                 {"maxshift": 6})  # fmt: skip
     b = read_stats(cmd)
     for grp in ("maps", "svd", "gain"):
@@ -381,6 +396,49 @@ def test_rerun_without_stats_removes_old_file(patched, tmp_path):
     assert stats_path(tmp_path / MOVIE).exists()
     multiroi.register_trial(*args, params, stats=False)
     assert not stats_path(tmp_path / MOVIE).exists()
+
+
+@pytest.mark.parametrize("step", ["setup", "add", "finish"])
+def test_failed_statistics_leave_registration(
+    patched, tmp_path, step, monkeypatch, caplog
+):
+    """A statistics step that fails (on the worker thread) is logged;
+    registration publishes the same movie and alignment file, without
+    statistics (and removes an earlier statistics file)."""
+    from giant_python.registration.stats import accumulate
+
+    layout = patched
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6)
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    multiroi.register_trial(
+        layout.files[0], 1, 3000, ref / MOVIE, ref / ADATA, params, stats=False
+    )
+
+    def fail(*args, **kwargs):
+        """A broken step."""
+        raise RuntimeError("broken statistics")
+
+    if step == "setup":
+        monkeypatch.setattr(accumulate.TrialStatsAccumulator, "__init__", fail)
+    elif step == "add":
+        monkeypatch.setattr(accumulate.TrialStatsAccumulator, "_block", fail)
+    else:
+        monkeypatch.setattr(accumulate.TrialStatsAccumulator, "_maps", fail)
+    d = tmp_path / "run"
+    d.mkdir()
+    stats_path(d / MOVIE).write_bytes(b"from an earlier registration")
+    multiroi.register_trial(
+        layout.files[0], 1, 3000, d / MOVIE, d / ADATA, params
+    )
+    assert "summary statistics failed" in caplog.text
+    assert not stats_path(d / MOVIE).exists()
+    assert sorted(p.name for p in d.iterdir()) == [ADATA, MOVIE]
+    with h5py.File(d / MOVIE) as f, h5py.File(ref / MOVIE) as g:
+        np.testing.assert_array_equal(f["data"][()], g["data"][()])
+    with h5py.File(d / ADATA) as f, h5py.File(ref / ADATA) as g:
+        for k in ("motionDSr", "motionDSc", "meanIM"):
+            np.testing.assert_array_equal(f[k][()], g[k][()])
 
 
 def test_reg_stats_command(patched, tmp_path):

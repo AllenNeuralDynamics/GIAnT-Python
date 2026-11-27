@@ -53,8 +53,10 @@ BIN_T_MIN = 6
 """Valid frames a time bin needs at a pixel."""
 GROW_PX = 1
 """Dilation (pixels) of new pixels added to the index."""
-GEO_CHUNK = 64
-"""Frames whose photon-noise sums are formed at a time."""
+GEO_CHUNK = {"cuda": 64, "cpu": 32}
+"""Frames whose photon-noise sums are formed at a time, per device type
+(on the CPU 32 frames need 1-1.7 GB less memory on a 780125 trial and are
+as fast). The chunk changes only float32 rounding (about 1e-8 relative)."""
 PER_CHANNEL = ("F", "B", "C", "K")
 """Per-frame photon-noise sums kept per channel (see the module text)."""
 SHARED = ("G0", "R0", "N0", "QA2", "QA3a", "QA3b", "M0")
@@ -214,9 +216,13 @@ class TrialStatsAccumulator:
         self.in_index = torch.zeros(h * w, dtype=torch.bool, device=dev)
         self.index = torch.zeros(0, dtype=torch.long, device=dev)
         self.acc = _Accumulators(self.c, dev)
+        kind = torch.device(self.device).type
+        self.geo_chunk = GEO_CHUNK.get(kind, GEO_CHUNK["cpu"])
         # frames from a pending block's first window frame to the newest
-        # (geometry lags by up to GEO_CHUNK + n_lags frames), with margin
-        self.ring = _Ring(BLOCK + 2 * FAST_HALF + GEO_CHUNK + self.n_lags + 8)
+        # (geometry lags by up to geo_chunk + n_lags frames), with margin
+        self.ring = _Ring(
+            BLOCK + 2 * FAST_HALF + self.geo_chunk + self.n_lags + 8
+        )
         self.hist = None
         self.lagbuf = None
         self.motion = np.full((self.n_frames, 2), np.nan)
@@ -307,9 +313,9 @@ class TrialStatsAccumulator:
         """Form the frame sums and blocks whose inputs have all arrived."""
         end = self.n_added if final else self.n_added - self.n_lags
         while self.geo_done < end and (
-            final or end - self.geo_done >= GEO_CHUNK
+            final or end - self.geo_done >= self.geo_chunk
         ):
-            g1 = min(end, self.geo_done + GEO_CHUNK)
+            g1 = min(end, self.geo_done + self.geo_chunk)
             self._geometry(self.geo_done, g1)
             self.geo_done = g1
         n_blocks = -(-self.n_frames // BLOCK)

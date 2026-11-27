@@ -47,12 +47,10 @@ from .outputs import (
 )
 from .sources import has_samples, make_source
 from .stats.io import stats_path
+from .stats.worker import FAILED, StatsWorker
 from .template import TemplateState, consensus, initial_template
 
 log = logging.getLogger(__name__)
-
-_FAILED = object()
-"""What a failed statistics step returns."""
 
 
 def matlab_colon(a: float, d: float, b: float) -> np.ndarray:
@@ -238,9 +236,9 @@ class OutputSink:
         Where the mean images accumulate.
     movie_deflate, var_deflate : int
         Deflate levels of an HDF5 movie and of ``varFacDS`` (0: none).
-    stats : TrialStatsAccumulator, optional
-        Accumulates the trial's summary statistics
-        (:mod:`.stats`) from the frames as they are written.
+    stats : StatsWorker, optional
+        Accumulates the trial's summary statistics (:mod:`.stats`) from
+        the frames as they are written (on a GPU, on a thread of its own).
     stats_path : Path, optional
         The trial's statistics file. Written with the movie when ``stats``
         is given; otherwise an existing one is removed on publishing (it
@@ -265,9 +263,7 @@ class OutputSink:
         ho, wo = out_shape
         self.stats = stats
         self.stats_path = None if stats_path is None else Path(stats_path)
-        self.stats_seconds = 0.0
         self.n_frames = int(n_frames)
-        self._stats_done = None
         self.sum = torch.zeros(n_channels, ho, wo, device=device)
         self.count = torch.zeros(n_channels, ho, wo, device=device)
         self.movie_ds = np.full(
@@ -314,32 +310,15 @@ class OutputSink:
             total = reg if total is None else total + reg
         self.movie_ds[k] = downsample2(downsample2(total)).cpu().numpy()
         if self.stats is not None:
-            self._stats_call(self.stats.add, k, regs, var_factor, motion)
-            if self.stats is not None and k == self.n_frames - 1:
-                self._finish_stats_in_background()
+            self.stats.add(k, regs, var_factor, motion)
+            if k == self.n_frames - 1:  # maps while the files are completed
+                self.stats.finish()
         return total
 
-    def _finish_stats_in_background(self) -> None:
-        """Finish the statistics on a worker thread while the movie and the
-        alignment file are completed."""
-        from concurrent.futures import ThreadPoolExecutor
-
-        pool = ThreadPoolExecutor(max_workers=1)
-        self._stats_done = pool.submit(self._stats_call, self.stats.finish)
-        pool.shutdown(wait=False)
-
-    def _stats_call(self, fn, *args):
-        """Run a statistics step; on failure, log it and stop the
-        statistics (registration goes on without them)."""
-        t0 = time.perf_counter()
-        try:
-            return fn(*args)
-        except Exception:
-            log.exception("summary statistics failed; continuing without")
-            self.stats = None
-            return _FAILED
-        finally:
-            self.stats_seconds += time.perf_counter() - t0
+    @property
+    def stats_seconds(self) -> float:
+        """Time the statistics' worker spent on them."""
+        return 0.0 if self.stats is None else self.stats.seconds
 
     def mean_image(self) -> np.ndarray:
         """Per-channel mean of the registered frames (meanIM)."""
@@ -354,17 +333,12 @@ class OutputSink:
         Path or None
             The temporary file (None without statistics).
         """
-        if self.stats_path is None or (
-            self.stats is None and self._stats_done is None
-        ):
+        if self.stats_path is None or self.stats is None:
             return None
         from .stats.io import alignment_digest, write_stats
 
-        if self._stats_done is not None:
-            result = self._stats_done.result()
-        else:
-            result = self._stats_call(self.stats.finish)
-        if result is _FAILED or self.stats is None:
+        result = self.stats.finish().result()
+        if result is FAILED:
             return None
         tmp = partial_path(self.stats_path)
         attrs = {
@@ -378,7 +352,10 @@ class OutputSink:
             "align_hz": float(fields["alignHz"]),
             "device": str(self.sum.device),
         }
-        if self._stats_call(write_stats, tmp, result, attrs) is _FAILED:
+        try:
+            write_stats(tmp, result, attrs)
+        except Exception:
+            log.exception("summary statistics failed; continuing without")
             tmp.unlink(missing_ok=True)
             return None
         return tmp
@@ -387,14 +364,14 @@ class OutputSink:
         """Complete the alignment file and publish it with the movie (and
         the statistics file)."""
         self.movie.close()
+        self.adata.finish(fields, settings)  # while the maps are formed
         stats_tmp = self._write_stats(fields)
-        self.adata.finish(fields, settings)
         publish(self.movie, self.adata, stats_tmp, self.stats_path)
 
     def abort(self) -> None:
         """Discard the partial movie and alignment file."""
-        if self._stats_done is not None:
-            self._stats_done.cancel()
+        if self.stats is not None:
+            self.stats.cancel()
         try:
             self.movie.abort()
         finally:
@@ -625,16 +602,48 @@ def open_trial(dat_path, first_line, last_line, params, device):
     return layout, FrameFormer(layout, samples, c0, 1, device), init, ds, dtk
 
 
-def trial_stats(source, ds, margin: int, n_channels: int):
-    """The trial's statistics accumulator, or None if it cannot be made
-    (logged; registration goes on without statistics)."""
+def trial_stats(source, ds, margin: int, n_channels: int) -> StatsWorker:
+    """Start the trial's statistics (:class:`.stats.worker.StatsWorker`):
+    on a GPU their accumulator is set up on a thread of its own while the
+    template is built, and then takes the registered frames there. A
+    failure is logged and registration goes on without statistics."""
     from .stats import new_accumulator
 
+    return StatsWorker(
+        lambda: new_accumulator(source, ds, margin, n_channels),
+        source.former.device,
+    )
+
+
+def _template_and_sink(source, init, ds, params, dtype, paths, stats, timer):
+    """Start the statistics (if ``stats``), build the template and open the
+    outputs ``paths`` (movie, alignment file); the statistics are given up
+    if either fails."""
+    layout = source.former.layout
+    m = int(params.maxshift)
+    h, w = source.window.shape
+    acc = trial_stats(source, ds, m, layout.num_channels) if stats else None
     try:
-        return new_accumulator(source, ds, margin, n_channels)
-    except Exception:
-        log.exception("summary statistics cannot be set up; skipping them")
-        return None
+        state, cons = build_template(source, init, params, dtype)
+        timer.mark("template")
+        sink = OutputSink(
+            paths[0],
+            paths[1],
+            (h + 2 * m, w + 2 * m),
+            ds.size,
+            layout.num_channels,
+            params.save_tif,
+            source.former.device,
+            params.movie_deflate,
+            params.var_factor_deflate,
+            stats=acc,
+            stats_path=stats_path(paths[0]),
+        )
+    except BaseException:
+        if acc is not None:
+            acc.cancel()
+        raise
+    return state, cons, sink
 
 
 def register_trial(
@@ -707,24 +716,8 @@ def register_trial(
             "undoing the online motion correction (%d x/y switches)",
             source.compensation.switch_lines.size,
         )
-    state, cons = build_template(source, init, params, dtype)
-    timer.mark("template")
-    m = int(params.maxshift)
-    h, w = source.window.shape
-    acc = trial_stats(source, ds, m, layout.num_channels) if stats else None
-    timer.mark("stats setup")
-    sink = OutputSink(
-        movie_path,
-        adata_path,
-        (h + 2 * m, w + 2 * m),
-        ds.size,
-        layout.num_channels,
-        params.save_tif,
-        device,
-        params.movie_deflate,
-        params.var_factor_deflate,
-        stats=acc,
-        stats_path=stats_path(movie_path),
+    state, cons, sink = _template_and_sink(
+        source, init, ds, params, dtype, (movie_path, adata_path), stats, timer
     )
     qc = None
     try:

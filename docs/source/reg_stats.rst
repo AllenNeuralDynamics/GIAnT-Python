@@ -22,8 +22,10 @@ without the movie.
 GIAnT-Python's (HDF5 or TIFF) and GIAnT-MATLAB's: it reads each trial's raw
 recording again (for the photon-noise model), then the registered movie and
 ``varFacDS`` frame by frame, and passes them through the same code as
-registration, so the maps are equal (bit for bit on the same device; across
-CPU and GPU to floating-point rounding). Frame times, motion, registration
+registration, so the maps are equal: bit for bit on the same GPU, or on the
+CPU with the same number of threads (as ``giant register`` and ``giant
+reg-stats`` with the same ``--max-workers``); otherwise to float32 rounding
+(with another CPU thread count, a few pixels differ by 1e-7 relative). Frame times, motion, registration
 window and online compensation come from the alignment file and are checked
 against the raw recording. Options: ``--out DIR`` (write the files there
 instead of next to the movies), ``--datadr`` and ``--moco`` (folders that
@@ -213,7 +215,18 @@ registration only), ``m_ph`` and the normalised map:
 
 Under photon noise all read 0. A ratio estimated from few blocks is
 unbiased, but its median is below 0 (as for a chi-square: about -0.02 for
-34 blocks).
+34 blocks); likewise the median of ``fast_skew_rel`` at pixels with well
+under one photon per frame is far below its mean (the third moment of a few
+photons is heavy-tailed).
+
+**What the maps respond to.** Slow drift raises ``slow_rel`` and leaves the
+fast maps at 0. Sparse events (positive transients) raise ``fast_skew_rel``
+and ``fast_rel`` at their sources, but also ``slow_rel``: the number and
+size of events in a 64-frame block vary, and a block mean's photon noise is
+small, so at bright sources ``slow_rel`` rises as much as ``fast_rel`` or
+more. ``slow_rel`` therefore measures slow changes of the pixel's value, of
+which baseline changes are one source; the fast skewness tells activity
+apart.
 
 **Approximations.** The expectation is that of a pixel whose brightness is
 its mean and the same for the 2 x 2 raw pixels it interpolates: at sharp
@@ -271,5 +284,33 @@ Cost
 ----
 
 The statistics are formed while registration writes the movie, on the
-registration's device. See the pull request that added them for timings and
-memory on a 780125 trial.
+registration's device: on a GPU on a thread and a CUDA stream of their own
+(their setup, the gain curves and the frame geometry, while the template
+is built), on the CPU in line (a second thread there competes for the same
+cores and was slower). On a 780125 trial (2 channels, 2,254 frames of 845 x
+320 pixels) on a quiet machine (RTX 4060 Ti; 8 CPU threads of a
+Threadripper PRO 5955WX), registration took:
+
+.. list-table::
+   :header-rows: 1
+
+   * - device
+     - without statistics
+     - with
+     - memory added
+   * - GPU
+     - 20.9 s
+     - 27.8 s (+33%)
+     - 2.3 GB GPU, 0.5 GB RAM
+   * - CPU
+     - 71.6 s
+     - 166.3 s (+132%)
+     - 3.0 GB RAM
+
+The time is the statistics' own arithmetic: on the GPU their kernels (about
+2.4 ms per frame, mostly the per-frame photon-noise geometry and the
+64-frame blocks) and the Python work of launching them, on the CPU the same
+arithmetic, memory-bound, at about 40 ms per frame. Registration on the CPU
+can leave the statistics out (``--no-stats``) and ``giant reg-stats
+--device cuda`` add them later (27 s for this trial, reading the raw
+recording and the movie again).
