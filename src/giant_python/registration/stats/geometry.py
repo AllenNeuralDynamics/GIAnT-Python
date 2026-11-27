@@ -56,7 +56,7 @@ frames that share samples never spans a whole bin (SLAP2 rasters reach it
 at about 530 lines per cycle; 80 Hz frames share samples over 6 frames
 up to 402 lines)."""
 
-PAIR_ELEMENTS = 20_000_000
+PAIR_ELEMENTS = 10_000_000
 """Largest pair-sum array formed at once (lag quantities x frames x
 pixels; bounds memory)."""
 
@@ -205,6 +205,7 @@ class FrameGeometry:
         if source.compensation is not None:
             self.refs = source.references(self.ds)
         self._incidence = {}
+        self.tables = self._precompute()
 
     # ------------------------------------------------------------ raw sums
 
@@ -282,25 +283,79 @@ class FrameGeometry:
             out.append((key, single, pair))
         return out
 
-    def _raw(self, tables: list, which: int, frames: slice) -> torch.Tensor:
-        """Line tables summed over each window pixel's lines (and the
-        displacement groups): ``(quantities, frames, n_win + 1)`` float32,
-        0 in the last column."""
+    def _precompute(self) -> dict:
+        """Line tables of every frame, by displacement group, on the device.
+
+        Returns
+        -------
+        dict
+            ``(dr, dc) -> (rows, single, pair)``: ``rows`` ``(frames,)``
+            int64, each frame's row in the group's tables (-1 if the group
+            has no samples of it); ``single`` ``(4, n_g, P)`` and ``pair``
+            ``(3 n_lags, n_g, P)`` float32 (see :meth:`line_tables`).
+        """
+        n = self.ds.size
+        parts = {}
+        for a in range(0, n, 512):
+            b = min(n, a + 512)
+            e = min(n, b + self.n_lags)
+            for key, single, pair in self.line_tables(a, b, e):
+                has = single[0, : b - a].sum(1) > 0
+                frames = a + np.flatnonzero(has)
+                parts.setdefault(key, []).append(
+                    (frames, single[:, : b - a][:, has], pair[:, has])
+                )
+        out = {}
+        for key, chunks in parts.items():
+            frames = np.concatenate([c[0] for c in chunks])
+            rows = np.full(n, -1, dtype=np.int64)
+            rows[frames] = np.arange(frames.size)
+            tabs = [
+                torch.from_numpy(
+                    np.concatenate([c[i] for c in chunks], 1).astype(
+                        np.float32
+                    )
+                ).to(self.device)
+                for i in (1, 2)
+            ]
+            out[key] = (rows, tabs[0], tabs[1])
+        return out
+
+    def _raw(self, which: int, a: int, b: int) -> torch.Tensor:
+        """Line tables of frames ``[a, b)`` summed over each window pixel's
+        lines and the displacement groups: ``(quantities, b - a, n_win +
+        1)`` float32 (``which`` 1: single-frame sums, 2: pair sums), 0 in
+        the last column."""
         total = None
-        for key, *arrays in tables:
-            t = arrays[which - 1][:, frames]
-            t = torch.from_numpy(t.astype(np.float32)).to(self.device)
+        for key, (rows, single, pair) in self.tables.items():
+            r = rows[a:b]
+            sel = np.flatnonzero(r >= 0)
+            if sel.size == 0:
+                continue
+            tab = single if which == 1 else pair
+            if sel.size == b - a and r[-1] - r[0] == b - a - 1:
+                t = tab[:, r[0] : r[-1] + 1]
+            else:
+                t = tab[:, torch.from_numpy(r[sel]).to(self.device)]
             m = self.incidence(*key)
             img = (t.reshape(-1, t.shape[-1]) @ m).reshape(
                 t.shape[:2] + (m.shape[1],)
             )
+            if sel.size != b - a:
+                full = img.new_zeros((img.shape[0], b - a, img.shape[2]))
+                full[:, torch.from_numpy(sel).to(self.device)] = img
+                img = full
             total = img if total is None else total + img
+        if total is None:
+            q = 4 if which == 1 else 3 * self.n_lags
+            total = torch.zeros((q, b - a, self.n_win + 1), device=self.device)
         return total
 
     # ----------------------------------------------------- registered sums
 
     def corners(self, motion: np.ndarray, present: np.ndarray):
-        """Each frame's bilinear offsets, coefficients and fractions.
+        """Each frame's bilinear offsets, coefficients and fractions
+        (:func:`bilinear_corners`, for many frames).
 
         Parameters
         ----------
@@ -315,13 +370,21 @@ class FrameGeometry:
         coef : ndarray of float64 ``(n, 4)``
         frac : ndarray of float64 ``(n, 2)``
         """
-        n = motion.shape[0]
-        off = np.zeros((n, 2), dtype=np.int64)
-        coef = np.zeros((n, 4))
-        frac = np.zeros((n, 2))
-        for i in np.flatnonzero(present):
-            r, c, cf, fr = bilinear_corners(*motion[i], self.margin)
-            off[i], coef[i], frac[i] = (r, c), cf, fr
+        present = np.asarray(present, dtype=bool)
+        first = (1 - self.margin) + np.where(
+            present[:, None], np.asarray(motion, np.float64), 0.0
+        )
+        whole = np.floor(first)
+        frac = first - whole
+        fr, fc = frac[:, 0], frac[:, 1]
+        coef = np.stack(
+            [(1 - fc) * (1 - fr), fc * (1 - fr), (1 - fc) * fr, fc * fr], 1
+        )
+        coef = coef.astype(np.float32).astype(np.float64)
+        off = (whole - 1).astype(np.int64)
+        coef[~present] = 0.0
+        off[~present] = 0
+        frac[~present] = 0.0
         return off, coef, frac
 
     def corner_index(self, out_idx: torch.Tensor, off: np.ndarray):
@@ -420,8 +483,7 @@ class FrameGeometry:
         n = f1 - f0
         off, coef, _ = self.corners(motion, present)
         cidx = self.corner_index(out_idx, off)
-        tables = self.line_tables(f0, f1, f_ext)
-        single = self._raw(tables, 1, slice(None))
+        single = self._raw(1, f0, f_ext)
         nrm = self._norms(single, cidx, coef, varfac)
         ok = nrm["ok"][:n]
         zero = torch.zeros_like(nrm["d_g"][:n])
@@ -438,17 +500,17 @@ class FrameGeometry:
             step = max(1, int(PAIR_ELEMENTS // max(1, lag3 * zero.shape[1])))
             for a in range(0, n, step):
                 b = min(n, a + step)
-                pairs[:, a:b] = self._pair_part(tables, cidx, cc, nrm, a, b)
+                pairs[:, a:b] = self._pair_part(f0, cidx, cc, nrm, a, b)
         out["G"] = torch.cat([g0[None], pairs[0::3]])
         out["R"] = pairs[1::3]
         out["Rp"] = pairs[2::3]
         return out
 
-    def _pair_part(self, tables, cidx, cc, nrm, a: int, b: int):
+    def _pair_part(self, f0: int, cidx, cc, nrm, a: int, b: int):
         """``A2``, ``A3(t, t, u)``, ``A3(t, u, u)`` of frames ``[a, b)``
-        (relative to the chunk) with ``u = t + l``: ``(3 n_lags, b - a,
-        n_idx)`` lag-major."""
-        raw = self._raw(tables, 2, slice(a, b))
+        (relative to the chunk starting at frame ``f0``) with ``u = t + l``:
+        ``(3 n_lags, b - a, n_idx)`` lag-major."""
+        raw = self._raw(2, f0 + a, f0 + b)
         lag3 = raw.shape[0]
         acc = None
         for k in range(4):
@@ -457,17 +519,14 @@ class FrameGeometry:
             acc = term if acc is None else acc + term
         n2, n3, ok = nrm["n2"], nrm["n3"], nrm["ok"]
         m = n2.shape[0]
-        dens, both = [], []
-        for lag in range(1, self.n_lags + 1):
-            u = torch.arange(a, b, device=self.device) + lag
-            has = (u < m)[:, None]
-            uc = u.clamp(max=m - 1)
-            both.append(ok[a:b] & ok[uc] & has)
-            dens += [
-                n2[a:b] * n2[uc],
-                n3[a:b] * n3[a:b] * n3[uc],
-                n3[a:b] * n3[uc] * n3[uc],
-            ]
-        mask = torch.stack(both).repeat_interleave(3, 0)
-        den = torch.stack(dens)
+        lags = torch.arange(1, self.n_lags + 1, device=self.device)
+        u = torch.arange(a, b, device=self.device)[None, :] + lags[:, None]
+        uc = u.clamp(max=m - 1)
+        both = ok[a:b][None] & ok[uc] & (u < m)[:, :, None]
+        n2a, n3a = n2[a:b][None], n3[a:b][None]
+        n2u, n3u = n2[uc], n3[uc]
+        den = torch.stack(
+            [n2a * n2u, n3a * n3a * n3u, n3a * n3u * n3u], 1
+        ).reshape(acc.shape)
+        mask = both.repeat_interleave(3, 0)
         return torch.where(mask, acc / den, torch.zeros_like(acc))

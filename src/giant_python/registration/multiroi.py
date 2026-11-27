@@ -266,6 +266,8 @@ class OutputSink:
         self.stats = stats
         self.stats_path = None if stats_path is None else Path(stats_path)
         self.stats_seconds = 0.0
+        self.n_frames = int(n_frames)
+        self._stats_done = None
         self.sum = torch.zeros(n_channels, ho, wo, device=device)
         self.count = torch.zeros(n_channels, ho, wo, device=device)
         self.movie_ds = np.full(
@@ -313,7 +315,18 @@ class OutputSink:
         self.movie_ds[k] = downsample2(downsample2(total)).cpu().numpy()
         if self.stats is not None:
             self._stats_call(self.stats.add, k, regs, var_factor, motion)
+            if self.stats is not None and k == self.n_frames - 1:
+                self._finish_stats_in_background()
         return total
+
+    def _finish_stats_in_background(self) -> None:
+        """Finish the statistics on a worker thread while the movie and the
+        alignment file are completed."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        self._stats_done = pool.submit(self._stats_call, self.stats.finish)
+        pool.shutdown(wait=False)
 
     def _stats_call(self, fn, *args):
         """Run a statistics step; on failure, log it and stop the
@@ -341,12 +354,17 @@ class OutputSink:
         Path or None
             The temporary file (None without statistics).
         """
-        if self.stats is None or self.stats_path is None:
+        if self.stats_path is None or (
+            self.stats is None and self._stats_done is None
+        ):
             return None
         from .stats.io import alignment_digest, write_stats
 
-        result = self._stats_call(self.stats.finish)
-        if result is _FAILED:
+        if self._stats_done is not None:
+            result = self._stats_done.result()
+        else:
+            result = self._stats_call(self.stats.finish)
+        if result is _FAILED or self.stats is None:
             return None
         tmp = partial_path(self.stats_path)
         attrs = {
@@ -375,6 +393,8 @@ class OutputSink:
 
     def abort(self) -> None:
         """Discard the partial movie and alignment file."""
+        if self._stats_done is not None:
+            self._stats_done.cancel()
         try:
             self.movie.abort()
         finally:

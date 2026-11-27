@@ -30,6 +30,9 @@ forms ``meanIM``, so the ``mean`` map equals the alignment file's ``meanIM``.
 
 from __future__ import annotations
 
+import functools
+import time
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -56,72 +59,91 @@ PER_CHANNEL = ("F", "B", "C", "K")
 """Per-frame photon-noise sums kept per channel (see the module text)."""
 
 
+def _capacity(n: int, cap: int) -> int:
+    """Pixel capacity for ``n`` pixels (grown by half when exceeded)."""
+    return cap if n <= cap else max(n, cap + cap // 2, 1024)
+
+
+def _widen(buf: torch.Tensor, cap: int, fill) -> torch.Tensor:
+    """``buf`` with its last axis padded to ``cap`` with ``fill``."""
+    pad = buf.new_full(buf.shape[:-1] + (cap - buf.shape[-1],), fill)
+    return torch.cat([buf, pad], -1)
+
+
 class _Accumulators:
-    """Per-pixel float64 sums ``(channels, n_idx)``, extended on growth."""
+    """Per-pixel float64 sums ``(channels, n_idx)``, extended on growth
+    (stored with spare pixel capacity)."""
 
     def __init__(self, n_channels: int, device):
         """No sums yet."""
         self.c = n_channels
         self.device = device
         self.n = 0
+        self.cap = 0
         self.data = {}
 
     def __getitem__(self, name: str) -> torch.Tensor:
-        """The sums ``name`` (zeros on first use)."""
+        """The sums ``name`` (zeros on first use), a view of ``n`` pixels."""
         if name not in self.data:
             self.data[name] = torch.zeros(
-                (self.c, self.n), dtype=torch.float64, device=self.device
+                (self.c, self.cap), dtype=torch.float64, device=self.device
             )
-        return self.data[name]
-
-    def __setitem__(self, name: str, value: torch.Tensor) -> None:
-        """Replace the sums ``name``."""
-        self.data[name] = value
+        return self.data[name][:, : self.n]
 
     def extend(self, n_new: int) -> None:
-        """Append zeros for ``n_new`` pixels."""
+        """Add ``n_new`` pixels (zeros)."""
         self.n += n_new
-        for k, v in self.data.items():
-            pad = v.new_zeros(v.shape[:-1] + (n_new,))
-            self.data[k] = torch.cat([v, pad], -1)
+        cap = _capacity(self.n, self.cap)
+        if cap != self.cap:
+            self.cap = cap
+            self.data = {k: _widen(v, cap, 0.0) for k, v in self.data.items()}
 
 
 class _Ring:
     """Per-frame arrays ``(..., frames, n_idx)``; frame ``t`` is row
-    ``t % cap``. Extended with each field's fill value on growth."""
+    ``t % frames``. Extended with each field's fill value on growth (stored
+    with spare pixel capacity)."""
 
-    def __init__(self, cap: int):
+    def __init__(self, frames: int):
         """Empty fields."""
-        self.cap = cap
+        self.frames = frames
+        self.n = 0
+        self.cap = 0
         self.fields = {}
+
+    def _slots(self, frames, device) -> torch.Tensor:
+        """Rows of frames ``frames``."""
+        return torch.tensor([f % self.frames for f in frames], device=device)
 
     def put(self, name: str, frames, values: torch.Tensor, fill) -> None:
         """Store ``values`` ``(..., len(frames), n)`` as frames ``frames``."""
         if name not in self.fields:
-            shape = values.shape[:-2] + (self.cap, values.shape[-1])
-            self.fields[name] = (
-                torch.full(
-                    shape, fill, dtype=values.dtype, device=values.device
-                ),
-                fill,
+            shape = values.shape[:-2] + (self.frames, self.cap)
+            buf = torch.full(
+                shape, fill, dtype=values.dtype, device=values.device
             )
-        buf = self.fields[name][0]
-        slots = torch.tensor(
-            [f % self.cap for f in frames], device=values.device
-        )
-        buf.index_copy_(buf.ndim - 2, slots, values)
+            self.fields[name] = (buf, fill)
+        buf = self.fields[name][0][..., : self.n]
+        if len(frames) == 1:
+            buf[..., frames[0] % self.frames, :] = values[..., 0, :]
+            return
+        buf.index_copy_(buf.ndim - 2, self._slots(frames, buf.device), values)
 
     def rows(self, name: str, frames) -> torch.Tensor:
         """Frames ``frames`` of field ``name``: ``(..., len, n)``."""
-        buf = self.fields[name][0]
-        slots = torch.tensor([f % self.cap for f in frames], device=buf.device)
-        return buf.index_select(buf.ndim - 2, slots)
+        buf = self.fields[name][0][..., : self.n]
+        return buf.index_select(buf.ndim - 2, self._slots(frames, buf.device))
 
     def extend(self, n_new: int) -> None:
-        """Append ``n_new`` pixels (fill values) to every field."""
-        for name, (buf, fill) in self.fields.items():
-            pad = buf.new_full(buf.shape[:-1] + (n_new,), fill)
-            self.fields[name] = (torch.cat([buf, pad], -1), fill)
+        """Add ``n_new`` pixels (fill values) to every field."""
+        self.n += n_new
+        cap = _capacity(self.n, self.cap)
+        if cap != self.cap:
+            self.cap = cap
+            self.fields = {
+                k: (_widen(buf, cap, fill), fill)
+                for k, (buf, fill) in self.fields.items()
+            }
 
 
 def _window(cs: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor):
@@ -133,6 +155,32 @@ def _window(cs: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor):
 def _cumsum0(x: torch.Tensor) -> torch.Tensor:
     """Cumulative sum over rows with a leading zero row."""
     return torch.cat([torch.zeros_like(x[:1]), torch.cumsum(x, 0)], 0)
+
+
+def _timed(fn):
+    """Time a method into ``self.timing`` when ``self.profile`` is set
+    (synchronizing the device; for measuring the cost only)."""
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        """Run ``fn``, timed if profiling."""
+        if not self.profile:
+            return fn(self, *args, **kwargs)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        t0 = time.perf_counter()
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            key = fn.__name__.strip("_")
+            self.timing[key] = self.timing.get(key, 0.0) + (
+                time.perf_counter() - t0
+            )
+            self.timing["n_" + key] = self.timing.get("n_" + key, 0) + 1
+
+    return wrapper
 
 
 class TrialStatsAccumulator:
@@ -164,9 +212,9 @@ class TrialStatsAccumulator:
         self.in_index = torch.zeros(h * w, dtype=torch.bool, device=dev)
         self.index = torch.zeros(0, dtype=torch.long, device=dev)
         self.acc = _Accumulators(self.c, dev)
-        self.ring = _Ring(
-            BLOCK + 2 * FAST_HALF + 2 * self.n_lags + 2 * GEO_CHUNK
-        )
+        # frames from a pending block's first window frame to the newest
+        # (geometry lags by up to GEO_CHUNK + n_lags frames), with margin
+        self.ring = _Ring(BLOCK + 2 * FAST_HALF + GEO_CHUNK + self.n_lags + 8)
         self.hist = None
         self.lagbuf = None
         self.motion = np.full((self.n_frames, 2), np.nan)
@@ -176,6 +224,8 @@ class TrialStatsAccumulator:
         self.n_added = 0
         self.geo_done = 0
         self.block_done = 0
+        self.profile = False
+        self.timing = {}
         lay = self.geo.former.layout
         k_max = 2 * self.geo.reach // lay.lines_per_cycle + 1
         self.n_hist = 4 * int(self.geo.pixel_lines.shape[1]) * k_max + 1
@@ -198,6 +248,13 @@ class TrialStatsAccumulator:
         """
         if k != self.n_added:
             raise ValueError(f"frame {k} came after {self.n_added - 1}")
+        self._intake(k, regs, var_factor, motion)
+        self.n_added += 1
+        self._advance(final=False)
+
+    @_timed
+    def _intake(self, k: int, regs, var_factor, motion) -> None:
+        """Add frame ``k`` to the mean and the ring buffers."""
         x = torch.stack([r.to(self.device, torch.float32) for r in regs])
         good = ~torch.isnan(x)
         self.sum32 += torch.where(good, x, 0.0)
@@ -212,17 +269,15 @@ class TrialStatsAccumulator:
         self.ring.put("vf", [k], vf[self.index][None], float("nan"))
         self.ring.put("v", [k], ~torch.isnan(xs)[:, None], False)
         self.motion[k] = motion
-        self.present[k] = bool(np.all(np.isfinite(motion))) and bool(
-            valid.any()
-        )
-        self.n_added += 1
-        self._advance(final=False)
+        # frames with samples have a motion; missing frames have NaN
+        self.present[k] = bool(np.all(np.isfinite(motion)))
 
     def add_missing(self, k: int) -> None:
         """Take frame ``k`` as missing (no samples)."""
         blank = torch.full(self.shape, float("nan"), device=self.device)
         self.add(k, [blank] * self.c, blank, (np.nan, np.nan))
 
+    @_timed
     def _grow(self, new: torch.Tensor) -> None:
         """Add the new valid pixels, dilated by :data:`GROW_PX`."""
         g = GROW_PX
@@ -235,8 +290,10 @@ class TrialStatsAccumulator:
         n_new = int(idx.numel())
         self.acc.extend(n_new)
         self.ring.extend(n_new)
-        if self.hist is not None:
-            pad = self.hist.new_zeros((self.c, n_new, self.n_hist))
+        if self.hist is not None and self.hist.shape[1] < self.acc.cap:
+            pad = self.hist.new_zeros(
+                (self.c, self.acc.cap - self.hist.shape[1], self.n_hist)
+            )
             self.hist = torch.cat([self.hist, pad], 1)
         if self.lagbuf is not None:
             self.lagbuf = {
@@ -267,6 +324,7 @@ class TrialStatsAccumulator:
 
     # ------------------------------------------------------------ geometry
 
+    @_timed
     def _geometry(self, g0: int, g1: int) -> None:
         """Photon-noise sums of frames ``[g0, g1)``, reduced per frame."""
         lag = self.n_lags
@@ -351,6 +409,7 @@ class TrialStatsAccumulator:
 
     # -------------------------------------------------------------- blocks
 
+    @_timed
     def _block(self, j: int) -> None:
         """Add block ``j`` to every per-pixel sum."""
         b0 = j * BLOCK
@@ -379,6 +438,11 @@ class TrialStatsAccumulator:
                 f"{self.n_added} of {self.n_frames} frames were added"
             )
         self._advance(final=True)
+        return self._maps()
+
+    @_timed
+    def _maps(self) -> dict:
+        """:func:`.maps.finish_maps` of this accumulator."""
         return finish_maps(self)
 
 
@@ -532,7 +596,9 @@ class _BlockChannel:
         n = self.v.shape[1]
         if o.hist is None:
             o.hist = torch.zeros(
-                (o.c, n, o.n_hist), dtype=torch.float64, device=o.device
+                (o.c, o.acc.cap, o.n_hist),
+                dtype=torch.float32,
+                device=o.device,
             )
         idx = self.n0[rows].round().long().clamp(0, o.n_hist - 1)
-        o.hist[self.ch].scatter_add_(1, idx.T, self.v[rows].T)
+        o.hist[self.ch, :n].scatter_add_(1, idx.T, self.v[rows].T.float())

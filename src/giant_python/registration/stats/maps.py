@@ -156,7 +156,12 @@ def finish_maps(o) -> dict:
     compact.update(single_frame_maps(a, mu, g2))
     compact.update(slow_maps(a, mu, g2))
     compact.update(fast_maps(a, mu, g2, g3))
-    hist = _np(o.hist) if o.hist is not None else np.zeros(mu.shape + (1,))
+    n_idx = idx.size
+    hist = (
+        _np(o.hist[:, :n_idx])
+        if o.hist is not None
+        else np.zeros(mu.shape + (1,))
+    )
     compact.update(zero_maps(hist, a["n"], nu, compact["zero_share"]))
     with np.errstate(invalid="ignore", divide="ignore"):
         v8 = np.where(a["n8"] > 0, a["v8"] / np.maximum(a["n8"], 1), np.nan)

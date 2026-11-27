@@ -240,6 +240,13 @@ def _add_reg_stats_command(subparsers) -> None:
         action="store_true",
         help="Recompute statistics that are up to date.",
     )
+    for name in ("paths", "trials"):
+        stats.add_argument(
+            f"--{name}",
+            type=lambda v: [int(x) for x in v.split(",") if x],
+            default=None,
+            help=f"One-based {name}, comma-separated (default: all).",
+        )
     stats.add_argument(
         "--verbose", action="store_true", help="Print progress messages."
     )
@@ -402,6 +409,8 @@ def _cmd_reg_stats(args: argparse.Namespace) -> int:
         device=args.device,
         max_workers=args.max_workers,
         overwrite=args.overwrite,
+        paths=args.paths,
+        trials=args.trials,
     )
     failed = [r for r in results if r["error"] is not None]
     print(

@@ -4,7 +4,7 @@ GIAnT-Python
 GIAnT-Python is a Python package for processing glutamate imaging data,
 with advanced capabilities for SLAP2 recordings. Currently implemented:
 **SLAP2 raster registration** (a port of GIAnT-MATLAB's
-MultiRoiRegistration), **SILo source extraction of SLAP2 raster recordings**
+MultiRoiRegistration, with per-trial summary statistics: :doc:`reg_stats`), **SILo source extraction of SLAP2 raster recordings**
 (:doc:`silo`) and **SLAP2 Band Scan processing**: **BandSILo source
 extraction and Band Scan ROI annotation** from a pre-registered trial table.
 
@@ -25,6 +25,7 @@ lookup table.
    file_formats
    architecture
    silo
+   reg_stats
 
 Getting started
 ---------------

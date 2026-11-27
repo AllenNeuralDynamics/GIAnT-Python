@@ -27,6 +27,7 @@ from .io import (
     stats_path,
     write_stats,
 )
+from .session import combine_trials
 
 __all__ = [
     "STATS_VERSION",
@@ -34,6 +35,7 @@ __all__ = [
     "GainCurve",
     "TrialStatsAccumulator",
     "alignment_digest",
+    "combine_trials",
     "measure_gain_curves",
     "new_accumulator",
     "read_stats",

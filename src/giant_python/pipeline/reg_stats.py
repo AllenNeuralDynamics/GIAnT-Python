@@ -20,7 +20,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -307,7 +307,17 @@ def _grid(value, shape) -> np.ndarray:
     return np.asarray(value, dtype=object).reshape(shape)
 
 
-def _jobs(tt, files, moco, datadr, out_dir, device, settings, overwrite):
+def _selected(shape, paths, trials) -> np.ndarray:
+    """Cells of the requested one-based paths and trials (all if None)."""
+    keep = np.ones(shape, dtype=bool)
+    if paths is not None:
+        keep &= np.isin(np.arange(shape[0]) + 1, list(paths))[:, None]
+    if trials is not None:
+        keep &= np.isin(np.arange(shape[1]) + 1, list(trials))[None, :]
+    return keep
+
+
+def _jobs(tt, files, opts: dict) -> list:
     """One job per registered trial-path that needs statistics."""
     from ..registration.stats import stats_path
 
@@ -318,6 +328,8 @@ def _jobs(tt, files, moco, datadr, out_dir, device, settings, overwrite):
     first = np.asarray(tt.slap2_info.first_line, float).reshape(shape)
     last = np.asarray(tt.slap2_info.last_line, float).reshape(shape)
     present = recorded_cells(files) & recorded_cells(fn_reg)
+    present &= _selected(shape, opts["paths"], opts["trials"])
+    moco = opts["moco"]
     jobs = []
     for d, t in zip(*np.nonzero(present)):
         movie, adata = moco / str(fn_reg[d, t]), moco / str(fn_ad[d, t])
@@ -325,21 +337,21 @@ def _jobs(tt, files, moco, datadr, out_dir, device, settings, overwrite):
             log.warning("%s or its alignment file is missing", movie.name)
             continue
         out = stats_path(movie)
-        if out_dir is not None:
-            out = Path(out_dir) / out.name
-        if not overwrite and _up_to_date(out, adata):
+        if opts["out_dir"] is not None:
+            out = Path(opts["out_dir"]) / out.name
+        if not opts["overwrite"] and _up_to_date(out, adata):
             log.info("%s is up to date; skipping", out.name)
             continue
         jobs.append(
             dict(
-                dat=Path(datadr) / str(files[d, t]),
+                dat=opts["datadr"] / str(files[d, t]),
                 first=float(first[d, t]),
                 last=float(last[d, t]),
                 movie=movie,
                 adata=adata,
                 out=out,
-                device=str(device),
-                settings=settings,
+                device=str(opts["device"]),
+                settings=opts["settings"],
                 threads=None,
             )
         )
@@ -355,6 +367,8 @@ def reg_stats(
     device: str = "auto",
     max_workers: int = 1,
     overwrite: bool = False,
+    paths: Optional[Sequence[int]] = None,
+    trials: Optional[Sequence[int]] = None,
 ) -> list:
     """Statistics of every registered trial of a trial table.
 
@@ -376,6 +390,8 @@ def reg_stats(
     overwrite : bool
         Recompute statistics that are up to date (same version, same
         registration).
+    paths, trials : sequence of int, optional
+        One-based paths (DMDs) and trials to do (default: all).
 
     Returns
     -------
@@ -390,10 +406,17 @@ def reg_stats(
         raise ValueError("the trial table has no slap2_info")
     files = np.atleast_2d(np.asarray(tt.filename, dtype=object))
     dev = resolve_device(device)
-    moco = Path(moco) if moco else Path(tt.savedr) / "motion_correction"
-    datadr = Path(datadr) if datadr else Path(tt.datadr)
-    settings = _table_settings(path)
-    jobs = _jobs(tt, files, moco, datadr, out_dir, dev, settings, overwrite)
+    opts = dict(
+        moco=Path(moco) if moco else Path(tt.savedr) / "motion_correction",
+        datadr=Path(datadr) if datadr else Path(tt.datadr),
+        out_dir=out_dir,
+        device=dev,
+        settings=_table_settings(path),
+        overwrite=overwrite,
+        paths=paths,
+        trials=trials,
+    )
+    jobs = _jobs(tt, files, opts)
     workers = 1
     if dev.type == "cpu":
         workers = max(1, min(max_workers, len(jobs), os.cpu_count() or 1))

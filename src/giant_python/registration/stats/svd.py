@@ -45,27 +45,35 @@ def _stack_bins(bins: list, n_idx: int) -> np.ndarray:
     return np.concatenate(parts, 1)
 
 
-def _binned(full: np.ndarray, idx, shape):
+def bin_members(idx, shape) -> np.ndarray:
+    """``(n_space, 4)`` compact positions of the four pixels of every
+    2 x 2 bin whose pixels are all in the index (bins in raster order).
+
+    Parameters
+    ----------
+    idx : ndarray of int
+        Flat registered-grid index of the compact pixels.
+    shape : (int, int)
+        Registered grid.
+    """
+    h, w = shape
+    h2, w2 = h // 2, w // 2
+    pos = np.full(h * w, -1, dtype=np.int64)
+    pos[idx] = np.arange(idx.size)
+    grid = pos.reshape(h, w)[: 2 * h2, : 2 * w2]
+    four = grid.reshape(h2, 2, w2, 2).transpose(0, 2, 1, 3).reshape(-1, 4)
+    return four[(four >= 0).all(1)]
+
+
+def _binned(full: np.ndarray, members: np.ndarray) -> np.ndarray:
     """2 x 2 bin means ``(n_bins, n_space)`` of compact time bins
-    ``(n_bins, n_idx)`` (missing unless all four pixels are present)."""
-    h, w = shape
-    nb = full.shape[0]
-    dense = np.full((nb, h * w), np.nan)
-    dense[:, idx] = full
-    h2, w2 = h // 2 * 2, w // 2 * 2
-    d = dense.reshape(nb, h, w)[:, :h2, :w2]
-    d = d.reshape(nb, h2 // 2, 2, w2 // 2, 2)
-    return d.mean(axis=(2, 4)).reshape(nb, -1)
+    ``(n_bins, n_idx)`` (NaN unless all four pixels are present)."""
+    return full[:, members].mean(-1)
 
 
-def _bin_sigma(sigma8: np.ndarray, idx, shape, kappa: float):
+def _bin_sigma(sigma8: np.ndarray, members: np.ndarray, kappa: float):
     """Photon-noise SD of each 2 x 2 bin's mean ``(n_space,)``."""
-    h, w = shape
-    dense = np.full(h * w, np.nan)
-    dense[idx] = sigma8
-    h2, w2 = h // 2 * 2, w // 2 * 2
-    d = dense.reshape(h, w)[:h2, :w2].reshape(h2 // 2, 2, w2 // 2, 2)
-    return np.sqrt(kappa * (d**2).sum(axis=(1, 3)) / 16).ravel()
+    return np.sqrt(kappa * (sigma8[members] ** 2).sum(-1) / 16)
 
 
 def _components(y: np.ndarray, k: int):
@@ -149,8 +157,9 @@ def _empty(c: int, nb: int, n_idx: int, k: int) -> dict:
 
 def _channel(out, ch, full, idx, shape, sigma8, kappa, k) -> None:
     """Fill channel ``ch`` of ``out``."""
-    b = _binned(full, idx, shape)
-    sd = _bin_sigma(sigma8, idx, shape, kappa)
+    members = bin_members(idx, shape)
+    b = _binned(full, members)
+    sd = _bin_sigma(sigma8, members, kappa)
     use = np.isfinite(b).all(0) & np.isfinite(sd) & (sd > 0)
     if use.sum() < k or b.shape[0] <= k:
         return
