@@ -271,6 +271,10 @@ def test_gain_sums_do_not_overflow():
     assert abs(want[0]) > 2**63  # int64 would have overflowed
     short = slot_sums(torch.from_numpy(x[None, :, :100]), 0)
     assert short.dtype == np.int64
+    # nor do a group's sums of large per-slot sums
+    rows = np.tile([100, 1000, 10, 98, 980, 6000, 3 * 10**18], (32, 1))
+    curve = curve_from_sums(rows.astype(np.int64), n_bins=2)
+    np.testing.assert_allclose(curve.g3, 3e18 / (6 * 980), rtol=1e-12)
 
 
 def test_regression_weights_of_undetermined_pixels():

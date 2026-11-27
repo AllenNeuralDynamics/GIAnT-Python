@@ -294,7 +294,10 @@ def pair_curve(sums: np.ndarray, n_bins: int = N_BINS) -> dict:
     Pairs with at least 3 triples and a positive mean are sorted by their
     mean and split into ``n_bins`` groups of equal size.
     """
-    n_trip, s_mid, s2, s3a, s3b, n_both, za, zb, zab = sums.T
+    # group sums in float64: exact below 2^53, no int64 overflow
+    n_trip, s_mid, s2, s3a, s3b, n_both, za, zb, zab = np.asarray(
+        sums, dtype=np.float64
+    ).T
     use = np.flatnonzero((n_trip >= 3) & (s_mid > 0))
     order = use[np.argsort(s_mid[use] / n_trip[use], kind="stable")]
     rows = []
@@ -339,7 +342,10 @@ def curve_from_sums(sums: np.ndarray, n_bins: int = N_BINS) -> GainCurve:
     differ by at most one); groups without photons are dropped. A group
     without zeros keeps its gains; its non-zero rate is NaN.
     """
-    n_valid, total, zeros, n_trip, s1, s2, s3 = sums.T
+    # group sums in float64: exact below 2^53, no int64 overflow
+    n_valid, total, zeros, n_trip, s1, s2, s3 = np.asarray(
+        sums, dtype=np.float64
+    ).T
     use = np.flatnonzero((n_trip >= 3) & (total > 0))
     mean = total[use] / n_valid[use]
     order = use[np.argsort(mean, kind="stable")]
