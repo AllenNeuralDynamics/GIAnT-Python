@@ -115,7 +115,13 @@ the baselines are given:
 with the run's ``activity_channel``, ``nan_thresh``, ``motion_thresh`` and
 ``discard_initial_s``, on the GPU (``--f0-device cpu`` works, many times
 slower), into ``--baseline-dir`` or ``<work-dir>/baselines``.
-GIAnT-Python does not import slap2-f0.
+GIAnT-Python does not import slap2-f0. Beside each file it predicts it
+writes a record (``<trial>_BASELINE-80Hz.json``: those settings, the movie,
+alignment and baseline files, the checkpoint's SHA-256 at prediction
+time); a baseline whose record does not fit the run is refused, and the
+summary takes the checkpoint's identity from the record. Files made
+elsewhere (without a record) are used as they are; slap2-f0 records only
+the checkpoint's path and step in them.
 
 ``baseline_source`` sets the defaults of the settings that go with the
 baseline; any of them can still be set:

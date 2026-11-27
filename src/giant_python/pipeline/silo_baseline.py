@@ -6,11 +6,21 @@ not import slap2-f0: :func:`predict_baselines` runs its command line, when
 it is installed, for the trial-paths whose baseline file is missing
 (``giant silo --f0-ckpt PATH``). Elsewhere (Code Ocean) the prediction is
 its own step and the files are given with ``--baseline-dir``.
+
+slap2-f0's files do not record how the trial was prepared for the network
+(channel, thresholds). :func:`predict_baselines` therefore writes a record
+beside each file it makes (``<trial>_BASELINE-80Hz.json``: those settings,
+the movie, alignment and baseline files' identities, and the checkpoint's
+SHA-256 at prediction time), and :func:`check_baseline_record` refuses a
+baseline whose record does not fit the run. A file without a record (made
+elsewhere) is used as it is: its checkpoint is then known only by the
+path and step the file names.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -24,6 +34,16 @@ from .silo_session import SiloSession
 
 F0_COMMAND = "slap2-f0"
 """The slap2-F0-network command line (found on the PATH)."""
+
+RECORD_FORMAT = "giant-silo-baseline-record"
+
+# the run's settings that the prediction prepares the trial with
+_PREDICTION_SETTINGS = (
+    "activity_channel",
+    "nan_thresh",
+    "motion_thresh",
+    "discard_initial_s",
+)
 
 _SHA_CACHE: dict = {}
 
@@ -66,6 +86,82 @@ def f0_command(command: Optional[str] = None) -> str:
             "baselines' folder (--baseline-dir)"
         )
     return found
+
+
+def record_path(baseline: Path) -> Path:
+    """The record of a baseline file (``<trial>_BASELINE-80Hz.json``)."""
+    return Path(baseline).with_suffix(".json")
+
+
+def _file_id(path: Path) -> dict:
+    """A file's identity (name, size, modification time)."""
+    from .silo_session import file_id
+
+    return file_id(Path(path))
+
+
+def prediction_settings(params: SiloParams) -> dict:
+    """The run's settings that a baseline's prediction depends on."""
+    return {n: getattr(params, n) for n in _PREDICTION_SETTINGS}
+
+
+def write_baseline_record(
+    baseline: Path, movie: Path, alignment: Path, params, checkpoint: dict
+) -> Path:
+    """Record how a baseline file was predicted (see the module)."""
+    path = record_path(baseline)
+    rec = {
+        "format": RECORD_FORMAT,
+        "baseline": _file_id(baseline),
+        "movie": _file_id(movie),
+        "alignment": _file_id(alignment),
+        "settings": prediction_settings(params),
+        "checkpoint": checkpoint,
+    }
+    path.write_text(json.dumps(rec, indent=1, sort_keys=True))
+    return path
+
+
+def check_baseline_record(
+    baseline: Path, movie: Optional[Path], alignment: Path, params
+) -> Optional[dict]:
+    """The record of a baseline file, checked against the run.
+
+    Returns
+    -------
+    dict or None
+        The record; None for a file without one (made elsewhere).
+
+    Raises
+    ------
+    ValueError
+        If the record is not of this file (replaced since), or the file was
+        predicted with other settings, or from another movie or alignment
+        than the run's.
+    """
+    path = record_path(baseline)
+    if not path.exists():
+        return None
+    rec = json.loads(path.read_text())
+    again = f"predict {Path(baseline).name} again (remove it and its record)"
+    if rec.get("baseline") != _file_id(baseline):
+        raise ValueError(
+            f"{path.name} does not describe {Path(baseline).name} (replaced "
+            f"since?): remove the record, or {again}"
+        )
+    given = prediction_settings(params)
+    if rec.get("settings") != given:
+        raise ValueError(
+            f"{Path(baseline).name} was predicted with {rec.get('settings')}, "
+            f"this run has {given}: {again}"
+        )
+    for name, f in (("movie", movie), ("alignment", alignment)):
+        if f is not None and rec.get(name) != _file_id(f):
+            raise ValueError(
+                f"{Path(baseline).name} was predicted from another {name} "
+                f"file than {Path(f).name} is now: {again}"
+            )
+    return rec
 
 
 def _units(session: SiloSession, units=None) -> list:
@@ -189,6 +285,15 @@ def predict_baselines(
     identity = checkpoint_identity(ckpt)
     _check_checkpoint(session, baseline_dir, units, ckpt)
     todo = missing_baselines(session, baseline_dir, units)
+    have = {(d, t) for d, t, _ in todo}
+    for d, t in _units(session, units):  # files kept: they must fit
+        if (d, t) not in have:
+            check_baseline_record(
+                baseline_path(baseline_dir, session.movie(d, t)),
+                session.movie(d, t),
+                session.alignment(d, t),
+                params,
+            )
     record = {"predicted": [], "seconds": 0.0, "checkpoint": identity}
     if not todo:
         return record
@@ -240,6 +345,14 @@ def predict_baselines(
         raise RuntimeError(
             "slap2-f0 predict-registered wrote no baseline for "
             + ", ".join(m.name for _, _, m in left)
+        )
+    for d, t, movie in todo:
+        write_baseline_record(
+            baseline_path(baseline_dir, movie),
+            movie,
+            session.alignment(d, t),
+            params,
+            identity,
         )
     record["predicted"] = [[d + 1, t + 1] for d, t, _ in todo]
     return record

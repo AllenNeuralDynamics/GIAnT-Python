@@ -450,6 +450,8 @@ def test_predict_baselines(tmp_path, monkeypatch):
             stem = k[: -len("_REGISTERED")]
             src = bdir / "E1T1DMD1_BASELINE-80Hz.h5"
             (bdir / f"{stem}_BASELINE-80Hz.h5").write_bytes(src.read_bytes())
+            with h5py.File(bdir / f"{stem}_BASELINE-80Hz.h5", "a") as f:
+                f.attrs["source"] = f"{stem}_REGISTERED_DOWNSAMPLED-80Hz.tif"
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr(silo_baseline.subprocess, "run", fake_run)
@@ -457,6 +459,7 @@ def test_predict_baselines(tmp_path, monkeypatch):
     rec = silo_baseline.predict_baselines(s, params, bdir, ckpt, device="cpu")
     assert rec["predicted"] == [[2, 2], [2, 3]]
     assert rec["checkpoint"]["name"] == "s6_test.pt"
+    rec_ckpt = rec["checkpoint"]
     assert len(rec["checkpoint"]["sha256"]) == 64
     (args,) = calls
     assert args[:2] == ["/bin/slap2-f0", "predict-registered"]
@@ -475,6 +478,46 @@ def test_predict_baselines(tmp_path, monkeypatch):
         == []
     )
     assert not calls
+
+    # the predicted files have records: the prediction's settings, the
+    # inputs and the checkpoint as it was then
+    base = bdir / "E1T2DMD2_BASELINE-80Hz.h5"
+    rec = json.loads(silo_baseline.record_path(base).read_text())
+    assert rec["settings"]["motion_thresh"] == 1.5
+    assert rec["checkpoint"] == rec_ckpt
+    assert rec["movie"]["name"].startswith("E1T2DMD2_REGISTERED")
+    imported = bdir / "E1T1DMD1_BASELINE-80Hz.h5"
+    assert not silo_baseline.record_path(imported).exists()
+    ckpt.write_bytes(b"other weights")  # overwritten after the prediction
+    trial = fake_load(
+        "x_DMD2-TRIAL000002.dat",
+        1,
+        2000,
+        None,
+        np.ones((H, W), bool),
+        None,
+        None,
+        None,
+    )
+    tb = silo.load_trial_baseline(s, params, trial, base, 1, 1)
+    assert tb.identity["checkpoint"] == rec_ckpt
+    assert tb.identity["prediction"]["activity_channel"] == 1
+    tb = silo.load_trial_baseline(s, params, trial, imported, 0, 0)
+    assert "checkpoint" not in tb.identity  # not verified: path and step only
+    assert tb.identity["network"]["step"] == 1700
+    # a baseline predicted with other settings is refused, not reused
+    other = replace(params, activity_channel=2)
+    with pytest.raises(ValueError, match="was predicted with"):
+        silo_baseline.predict_baselines(s, other, bdir, ckpt)
+    with pytest.raises(ValueError, match="was predicted with"):
+        silo.localize(s, other, EX, baseline_dir=bdir)
+    # a record of a file that was replaced since
+    with h5py.File(base, "a") as f:
+        f.attrs["step"] = 1800
+    with pytest.raises(ValueError, match="does not describe"):
+        silo.localize(s, params, EX, baseline_dir=bdir)
+    silo_baseline.record_path(base).unlink()
+    ckpt.write_bytes(b"weights")
 
     # a failed or incomplete prediction is an error
     (bdir / "E1T3DMD1_BASELINE-80Hz.h5").unlink()

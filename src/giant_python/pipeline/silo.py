@@ -108,9 +108,12 @@ def registered_name(session: SiloSession, d: int, t: int) -> Path:
     return Path(PurePath(str(session.fn_reg_ds[d, t]).replace("\\", "/")).name)
 
 
-def _network_baseline(session, d, t, baseline_dir) -> Path:
+def _network_baseline(session, params, d, t, baseline_dir) -> Path:
     """The baseline file of trial-path ``(d, t)``; it must exist and have
-    been predicted from the movie that SILo reads."""
+    been predicted from the movie that SILo reads (and, if it has a record,
+    with this run's settings: ``check_baseline_record``)."""
+    from .silo_baseline import check_baseline_record
+
     base = _baseline_file(
         baseline_folder(session, baseline_dir), registered_name(session, d, t)
     )
@@ -129,6 +132,7 @@ def _network_baseline(session, d, t, baseline_dir) -> Path:
             f"{movie.name}: predict it again from that movie (or remove "
             "the other one)"
         )
+    check_baseline_record(base, movie, session.alignment(d, t), params)
     return base
 
 
@@ -269,7 +273,9 @@ def localize_jobs(
     for d, t in _units(session, units):
         movie = session.movie(d, t)
         base = (
-            _network_baseline(session, d, t, baseline_dir) if network else None
+            _network_baseline(session, params, d, t, baseline_dir)
+            if network
+            else None
         )
         h = _localize_hash(
             session, params, d, t, None if base is None else _file_id(base)
@@ -670,17 +676,20 @@ def _extraction_baseline(session, params, d, t, baseline_dir):
     """The baseline file the solver's mode needs for ``(d, t)``, or None."""
     if params.baseline_mode == "fit":
         return None
-    return _network_baseline(session, d, t, baseline_dir)
+    return _network_baseline(session, params, d, t, baseline_dir)
 
 
-def load_trial_baseline(session: SiloSession, trial, base: Path, d, t):
+def load_trial_baseline(
+    session: SiloSession, params: SiloParams, trial, base: Path, d, t
+):
     """The network's baseline at a loaded trial's selected pixels.
 
     :func:`~giant_python.extraction.raster.baseline_map.read_trial_baseline`,
-    with the checkpoint's identity added when the file it names is here.
+    with the checkpoint's identity and the prediction's settings added from
+    the file's record (when it was predicted here).
     """
     from ..extraction.raster.baseline_map import read_trial_baseline
-    from .silo_baseline import checkpoint_identity
+    from .silo_baseline import check_baseline_record
 
     with h5py.File(session.alignment(d, t), "r") as f:
         # the registered frames' lines (DSframes, as read_alignment)
@@ -688,9 +697,12 @@ def load_trial_baseline(session: SiloSession, trial, base: Path, d, t):
     tb = read_trial_baseline(
         base, trial.trial_rc, ds_lines, trial.photon_scale
     )
-    ckpt = tb.identity["network"].get("checkpoint")
-    if ckpt and Path(str(ckpt)).is_file():
-        tb.identity["checkpoint"] = checkpoint_identity(ckpt)
+    rec = check_baseline_record(base, None, session.alignment(d, t), params)
+    if rec is not None:
+        # identified when it was predicted; a file without a record names
+        # its checkpoint only by path and step (tb.identity["network"])
+        tb.identity["checkpoint"] = rec["checkpoint"]
+        tb.identity["prediction"] = rec["settings"]
     return tb
 
 
@@ -802,7 +814,7 @@ def prepare(
         tb = (
             None
             if base is None
-            else load_trial_baseline(session, trial, base, d, t)
+            else load_trial_baseline(session, params, trial, base, d, t)
         )
         write_container(
             out,
@@ -1132,7 +1144,7 @@ def stream(  # noqa: C901
             tb = (
                 None
                 if base is None
-                else load_trial_baseline(session, trial, base, d, t)
+                else load_trial_baseline(session, params, trial, base, d, t)
             )
             load_s = time.perf_counter() - t0
             record = TrialRecord.from_trial(trial)
