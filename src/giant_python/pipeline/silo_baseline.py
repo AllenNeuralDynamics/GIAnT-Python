@@ -259,6 +259,38 @@ def _run(args: list, log: Path, verbose: bool):
         )
 
 
+def _predict_args(
+    exe, session, params, ckpt, baseline_dir, todo, device, out_frames
+) -> list:
+    """The ``predict-registered`` command line for the trial-paths
+    ``todo`` (the run's trial preparation settings)."""
+    keys = sorted({m.name[: m.name.index("_REGISTERED")] for _, _, m in todo})
+    args = [
+        exe,
+        "predict-registered",
+        str(session.moco_dir),
+        "--ckpt",
+        str(ckpt),
+        "--out",
+        str(baseline_dir),
+        "--files",
+        ",".join(f"{k}_REGISTERED" for k in keys),
+        "--channel",
+        str(params.activity_channel),
+        "--nan_thresh",
+        repr(float(params.nan_thresh)),
+        "--motion_thresh",
+        repr(float(params.motion_thresh)),
+        "--discard_initial_s",
+        repr(float(params.discard_initial_s)),
+        "--device",
+        device,
+    ]
+    if out_frames:
+        args += ["--out_frames", str(int(out_frames))]
+    return args
+
+
 def predict_baselines(
     session: SiloSession,
     params: SiloParams,
@@ -268,6 +300,7 @@ def predict_baselines(
     device: str = "cuda",
     command: Optional[str] = None,
     verbose: bool = False,
+    out_frames: Optional[int] = None,
 ) -> dict:
     """Predict the missing baselines with ``slap2-f0 predict-registered``.
 
@@ -294,6 +327,13 @@ def predict_baselines(
     verbose : bool
         Show its output (otherwise it goes to ``predict.log`` in
         ``baseline_dir``).
+    out_frames : int, optional
+        Frames per tile of the network (``--out_frames``; default: as many
+        as fit in 85% of the free GPU memory). On a GPU that also drives a
+        display, memory beyond what is free spills into shared system
+        memory instead of failing, several times slower; a fixed size
+        (512 on an 8 GB card) avoids that. Tiles overlap by the network's
+        reach, so the baseline is the same (to float16 rounding).
 
     Returns
     -------
@@ -310,6 +350,7 @@ def predict_baselines(
     if not ckpt.is_file():
         raise FileNotFoundError(f"no checkpoint {ckpt}")
     baseline_dir = Path(baseline_dir)
+    units = None if units is None else list(units)  # read more than once
     identity = checkpoint_identity(ckpt)
     _check_checkpoint(session, baseline_dir, units, ckpt)
     todo = missing_baselines(session, baseline_dir, units)
@@ -337,28 +378,9 @@ def predict_baselines(
             identity,
             done=False,
         )
-    keys = sorted({m.name[: m.name.index("_REGISTERED")] for _, _, m in todo})
-    args = [
-        exe,
-        "predict-registered",
-        str(session.moco_dir),
-        "--ckpt",
-        str(ckpt),
-        "--out",
-        str(baseline_dir),
-        "--files",
-        ",".join(f"{k}_REGISTERED" for k in keys),
-        "--channel",
-        str(params.activity_channel),
-        "--nan_thresh",
-        repr(float(params.nan_thresh)),
-        "--motion_thresh",
-        repr(float(params.motion_thresh)),
-        "--discard_initial_s",
-        repr(float(params.discard_initial_s)),
-        "--device",
-        device,
-    ]
+    args = _predict_args(
+        exe, session, params, ckpt, baseline_dir, todo, device, out_frames
+    )
     t0 = time.perf_counter()
     log = baseline_dir / "predict.log"
     proc = _run(args, log, verbose)

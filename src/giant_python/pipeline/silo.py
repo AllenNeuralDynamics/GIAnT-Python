@@ -312,6 +312,12 @@ def localize_jobs(
                     "align_hz": session.align_hz,
                     "num_channels": session.num_channels,
                     "localization_baseline": params.localization_baseline,
+                    # the file localized with, so that extraction uses it too
+                    "network_baseline_file": (
+                        json.dumps(_file_id(base), sort_keys=True)
+                        if base is not None
+                        else ""
+                    ),
                 },
             }
         )
@@ -673,10 +679,25 @@ def _prepare_hash(
 
 
 def _extraction_baseline(session, params, d, t, baseline_dir):
-    """The baseline file the solver's mode needs for ``(d, t)``, or None."""
+    """The baseline file the solver's mode needs for ``(d, t)``, or None.
+
+    It must be the file the trial was localized with, when it was localized
+    with the network's baseline (one baseline per run, whichever folders
+    the stages were given).
+    """
     if params.baseline_mode == "fit":
         return None
-    return _network_baseline(session, params, d, t, baseline_dir)
+    base = _network_baseline(session, params, d, t, baseline_dir)
+    loc = _attr(session.localize_file(d, t), "network_baseline_file")
+    if isinstance(loc, bytes):
+        loc = loc.decode()
+    if loc and json.loads(loc) != _file_id(base):
+        raise ValueError(
+            f"path {d + 1}, trial {t + 1} was localized with another "
+            f"baseline file than {base} ({json.loads(loc)}): give the "
+            "stages the same baselines (--baseline-dir)"
+        )
+    return base
 
 
 def load_trial_baseline(
@@ -1347,6 +1368,7 @@ def run_silo(
     f0_ckpt=None,
     f0_device: str = "cuda",
     f0_command: Optional[str] = None,
+    f0_out_frames: Optional[int] = None,
 ) -> dict:
     """SILo on one machine (``giant silo``), streaming as MATLAB's.
 
@@ -1399,6 +1421,9 @@ def run_silo(
         Device of the prediction ('cuda' by default, 'cpu', 'auto').
     f0_command : str, optional
         The slap2-f0 executable (default: ``slap2-f0`` on the PATH).
+    f0_out_frames : int, optional
+        Frames per tile of the prediction (see
+        :func:`~giant_python.pipeline.silo_baseline.predict_baselines`).
 
     Returns
     -------
@@ -1436,6 +1461,7 @@ def run_silo(
             f0_ckpt,
             device=f0_device,
             command=f0_command,
+            out_frames=f0_out_frames,
             verbose=ex.verbose,
         )
         timer["predict"] = timer["predict_detail"]["seconds"]

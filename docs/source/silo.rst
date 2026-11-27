@@ -115,6 +115,10 @@ the baselines are given:
 with the run's ``activity_channel``, ``nan_thresh``, ``motion_thresh`` and
 ``discard_initial_s``, on the GPU (``--f0-device cpu`` works, many times
 slower), into ``--baseline-dir`` or ``<work-dir>/baselines``.
+On a GPU that also drives a display, give ``--f0-out-frames 512`` (on an
+8 GB card): the default tile size fills the free memory, and Windows spills
+what does not fit into shared system memory instead of failing, which runs
+several times slower (the baselines are the same, to float16 rounding).
 GIAnT-Python does not import slap2-f0. Beside each file it predicts it
 writes a record (``<trial>_BASELINE-80Hz.json``: those settings, the movie,
 alignment and baseline files, the checkpoint's SHA-256 at prediction

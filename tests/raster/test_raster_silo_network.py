@@ -306,14 +306,23 @@ def test_baseline_file_change_redoes_its_containers(tmp_path, fake):
     bdir = write_baselines(
         root, root / "source_extraction" / "silo" / "baselines"
     )
-    silo.localize(s, NET, EX)  # the session's default baselines folder
-    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
-    assert len(silo.prepare(s, NET, EX)) == N_PATHS * N_TRIALS
-    assert silo.prepare(s, NET, EX) == []
+    # localized with the moving median, extracted with the network: a new
+    # baseline file redoes its container only (with network localization it
+    # redoes the localization, hence the plan, first)
+    ext = replace(
+        NET,
+        localization_baseline="median",
+        localization_surround=True,
+        localization_null="none",
+    )
+    silo.localize(s, ext, EX)
+    silo.plan(s, ext, EX, seeds=_seeds(s, tmp_path))
+    assert len(silo.prepare(s, ext, EX)) == N_PATHS * N_TRIALS
+    assert silo.prepare(s, ext, EX) == []  # the default baselines folder
     f = bdir / "E1T2DMD1_BASELINE-80Hz.h5"
     with h5py.File(f, "a") as h:
         h["baseline"][0, 0, 0] = 1.0
-    redone = silo.prepare(s, NET, EX)
+    redone = silo.prepare(s, ext, EX)
     assert [r["unit"] for r in redone] == [(0, 1)]
     # MATLAB's algorithm: the hash of the stage files before this change
     ph = "abc"
@@ -707,3 +716,56 @@ def test_localize_predicts_for_extraction_too(tmp_path, fake, monkeypatch):
     assert len(calls) == 1 and calls[0].baseline_mode == "gain"
     assert main(argv + ["--baseline", "median"]) == 0
     assert len(calls) == 1
+
+
+def test_extraction_uses_the_localization_baseline(tmp_path, fake):
+    """Extraction refuses another baseline file than the trial was
+    localized with (stages given different folders)."""
+    import shutil
+
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    a = write_baselines(root, tmp_path / "a")
+    b = tmp_path / "b"
+    # the same baselines, other files (new modification times)
+    shutil.copytree(a, b, copy_function=shutil.copy)
+    silo.localize(s, NET, EX, baseline_dir=a)
+    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
+    with pytest.raises(ValueError, match="localized with another baseline"):
+        silo.prepare(s, NET, EX, baseline_dir=b)
+    assert len(silo.prepare(s, NET, EX, baseline_dir=a)) == 6
+
+
+def test_predict_units_may_be_a_generator(tmp_path, monkeypatch):
+    """The trial-paths to predict may be given as a generator."""
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    bdir = write_baselines(root, tmp_path / "b")
+    (bdir / "E1T2DMD2_BASELINE-80Hz.h5").unlink()
+    ckpt = tmp_path / "s6_test.pt"
+    ckpt.write_bytes(b"weights")
+    monkeypatch.setattr(
+        silo_baseline.shutil, "which", lambda c: f"/bin/{Path(c).name}"
+    )
+
+    rec_args = []
+
+    def fake_run(args, **kw):
+        """Write the one file asked for."""
+        rec_args.append(args)
+        src = bdir / "E1T1DMD1_BASELINE-80Hz.h5"
+        dest = bdir / "E1T2DMD2_BASELINE-80Hz.h5"
+        dest.write_bytes(src.read_bytes())
+        with h5py.File(dest, "a") as f:
+            f.attrs["source"] = "E1T2DMD2_REGISTERED_DOWNSAMPLED-80Hz.tif"
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(silo_baseline.subprocess, "run", fake_run)
+    units = (u for u in [(0, 0), (1, 1)])
+    rec = silo_baseline.predict_baselines(
+        s, NET, bdir, ckpt, units, out_frames=512
+    )
+    assert rec["predicted"] == [[2, 2]]
+    args = rec_args[-1]
+    assert args[args.index("--out_frames") + 1] == "512"
+    assert _args("silo", "t.h5", "--f0-out-frames", "256").f0_out_frames == 256

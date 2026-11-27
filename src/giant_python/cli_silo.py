@@ -198,6 +198,15 @@ def _add_baseline_files(parser: argparse.ArgumentParser, predict: bool):
         default=None,
         help="The slap2-f0 executable (default: slap2-f0 on the PATH).",
     )
+    g.add_argument(
+        "--f0-out-frames",
+        type=int,
+        default=None,
+        help="Frames per tile of the prediction (default: as many as fit in "
+        "the free GPU memory; 512 on a GPU that also drives a display, "
+        "where more spills into system memory and runs several times "
+        "slower).",
+    )
 
 
 def _add_execution(
@@ -509,6 +518,7 @@ def run_silo_command(args: argparse.Namespace) -> int:  # noqa: C901
                 f0_ckpt=args.f0_ckpt,
                 f0_device=args.f0_device,
                 f0_command=args.f0_command,
+                f0_out_frames=args.f0_out_frames,
             )
         )
         return 0
@@ -529,6 +539,7 @@ def run_silo_command(args: argparse.Namespace) -> int:  # noqa: C901
                 args.f0_device,
                 args.f0_command,
                 ex.verbose,
+                args.f0_out_frames,
             )
         done = silo.localize(session, params, ex, units, args.baseline_dir)
         _print({**report, "localize": done} if report else done)
