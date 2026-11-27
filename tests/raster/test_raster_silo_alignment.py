@@ -8,7 +8,6 @@ import h5py
 import numpy as np
 import pytest
 
-from giant_python.extraction.raster import trial as trial_mod
 from giant_python.extraction.raster.alignment import (
     TrialWarp,
     mask_to_consensus,
@@ -43,7 +42,6 @@ from .test_raster_silo_stages import (  # noqa: F401
     _equal,
     _summary,
     fake,
-    fake_localize,
     make_session,
 )
 
@@ -52,20 +50,9 @@ PATCHWISE = replace(
 )
 
 
-def _localize_with_halves(moco_dir, fn, num_channels, params=None, **kw):
-    """fake_localize, with two noisy halves of the mean image when asked."""
-    loc, reg = fake_localize(moco_dir, fn, num_channels, params, **kw)
-    if kw.get("half_ims"):
-        rng = np.random.default_rng(len(fn))
-        noise = 0.05 * rng.standard_normal((2,) + reg.mean_im.shape)
-        reg.half_ims = (reg.mean_im[None] + noise).astype(np.float32)
-    return loc, reg
-
-
 @pytest.fixture
-def halves(fake, monkeypatch):  # noqa: F811
-    """The fake session's localization with half images."""
-    monkeypatch.setattr(trial_mod, "localize_trial", _localize_with_halves)
+def halves(fake):  # noqa: F811
+    """The fake session's localization (half images when asked)."""
 
 
 def test_patchwise_streamed_and_staged_runs_agree(tmp_path, halves):
@@ -159,7 +146,9 @@ def test_plan_with_a_refined_alignment(tmp_path, mode):
     trials = _synthetic_trials()
     for t in trials:
         t.half_ims = np.stack([t.mean_im, t.mean_im * 1.01])
-    rigid = plan_path(trials, params=PlanParams(peak_th=12.0))
+    rigid = plan_path(
+        trials, params=PlanParams(peak_th=12.0, inter_trial_alignment="rigid")
+    )
     details = {}
     plan = plan_path(
         trials,

@@ -138,7 +138,7 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Across-trial alignment (MATLAB interTrialAlignment): a shift "
         "per trial, or refined to an affine map or a patchwise "
-        "displacement field per valid trial (default rigid).",
+        "displacement field per valid trial (default patchwise).",
     )
     g.add_argument(
         "--align-patch-px",
