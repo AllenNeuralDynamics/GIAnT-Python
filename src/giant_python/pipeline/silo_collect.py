@@ -146,6 +146,7 @@ def path_result(
     from ..extraction.raster.stage_files import read_localization
     from ..extraction.raster.summary import PathResult, read_alignment_record
     from .silo import (
+        _check_localizations,
         _check_same,
         _recorded,
         check_plan_localizations,
@@ -169,6 +170,7 @@ def path_result(
     alignment: list = [None] * n
     peaks: list = [None] * n
     check_plan_localizations(session, d)  # its peaks, its baselines
+    _check_localizations(session, params, d)  # what the summary records
     for t in range(n):
         f = session.localize_file(d, t)
         if session.keep[d, t] and f.exists():

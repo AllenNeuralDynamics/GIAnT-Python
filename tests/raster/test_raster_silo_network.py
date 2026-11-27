@@ -848,3 +848,24 @@ def test_one_baseline_mode_per_run(tmp_path, fake):
         c, "c.h5", "h", (0, 1), 1, True, "r", fit, EX.solver_options()
     )
     assert "network_baseline" not in attrs
+
+
+def test_collect_checks_the_localization_baseline(tmp_path, fake):
+    """collect refuses settings whose localization baseline is not the one
+    the trials were localized with (the summary would mislabel them)."""
+    root = tmp_path / "s"
+    table = make_session(root)
+    bdir = write_baselines(root, tmp_path / "b")
+    silo.run_silo(
+        table, NET, EX, seeds_file=seeds_file(tmp_path), baseline_dir=bdir
+    )
+    s = SiloSession.open(table)
+    median_loc = replace(
+        NET,
+        localization_baseline="median",
+        localization_surround=True,
+        localization_null="none",
+    )
+    assert median_loc.stage_settings("solve") == NET.stage_settings("solve")
+    with pytest.raises(ValueError, match="localization_baseline='network'"):
+        silo_collect.collect(s, median_loc, EX, baseline_dir=bdir)
