@@ -400,8 +400,8 @@ def _plan_inputs(session: SiloSession, d: int):
     return recs
 
 
-def _plan_hash(session, params, d, seeds, annotations) -> str:
-    """Settings hash of a path's plan."""
+def _localization_hashes(session, d) -> dict:
+    """The settings hashes of path ``d``'s localization files, by trial."""
     locs = {}
     for t in range(session.n_trials):
         if session.keep[d, t]:
@@ -409,6 +409,32 @@ def _plan_hash(session, params, d, seeds, annotations) -> str:
             locs[t] = _attr(f, "settings_hash")
             if locs[t] is None:
                 raise FileNotFoundError(f"not localized: {f}")
+    return locs
+
+
+def check_plan_localizations(session, d) -> None:
+    """Refuse a plan whose trials were localized again since it was made
+    (their peaks and baselines would not be the plan's): the plan records
+    its localizations' settings hashes (plans made before that are not
+    checked)."""
+    made = _attr(session.plan_file(d), "localization_hashes")
+    if not made:
+        return
+    if isinstance(made, bytes):
+        made = made.decode()
+    made = {int(k): v for k, v in json.loads(made).items()}
+    for t, h in made.items():
+        now = _attr(session.localize_file(d, t), "settings_hash")
+        if now != h:
+            raise ValueError(
+                f"path {d + 1}, trial {t + 1} was localized again since its "
+                "plan was made: plan again and redo the stages after it"
+            )
+
+
+def _plan_hash(session, params, d, seeds, annotations) -> str:
+    """Settings hash of a path's plan."""
+    locs = _localization_hashes(session, d)
     return _hash(
         {
             "stage": "plan",
@@ -533,6 +559,9 @@ def plan_one(
             f.attrs["path"] = d + 1
             f.attrs["z_depth"] = _z_depth(session, d)
             f.attrs["baseline_source"] = params.baseline_source
+            f.attrs["localization_hashes"] = json.dumps(
+                _localization_hashes(session, d), sort_keys=True
+            )
         os.replace(tmp, out)
     except BaseException:
         if tmp.exists():
@@ -827,6 +856,7 @@ def prepare(
     for d, t in _valid_units(session, units):
         if d not in plans:
             f = session.plan_file(d)
+            check_plan_localizations(session, d)
             _check_same(
                 f"the plan {f.name}",
                 _recorded(f, "baseline_source"),
@@ -1157,6 +1187,7 @@ def stream(  # noqa: C901
         plan = read_plan(pf)
         rois = read_user_rois(pf)[1]
         ph = _attr(pf, "settings_hash")
+        check_plan_localizations(session, d)
         _check_same(
             f"the plan {pf.name}",
             _recorded(pf, "baseline_source"),

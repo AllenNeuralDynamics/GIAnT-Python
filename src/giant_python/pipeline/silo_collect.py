@@ -145,7 +145,12 @@ def path_result(
     from ..extraction.raster.plan import read_plan
     from ..extraction.raster.stage_files import read_localization
     from ..extraction.raster.summary import PathResult, read_alignment_record
-    from .silo import _check_same, _recorded, read_user_rois
+    from .silo import (
+        _check_same,
+        _recorded,
+        check_plan_localizations,
+        read_user_rois,
+    )
 
     pf = session.plan_file(d)
     if not pf.exists():
@@ -163,6 +168,7 @@ def path_result(
     trials: list = [None] * n
     alignment: list = [None] * n
     peaks: list = [None] * n
+    check_plan_localizations(session, d)  # its peaks, its baselines
     for t in range(n):
         f = session.localize_file(d, t)
         if session.keep[d, t] and f.exists():
@@ -330,12 +336,13 @@ def localization_baselines(session: SiloSession) -> dict:
     """The network baselines the planned paths' trials were localized with
     (which decided the seeds), keyed ``path<d>_trial<tttt>``; empty with
     the moving median."""
-    from .silo import localization_baseline
+    from .silo import check_plan_localizations, localization_baseline
 
     out = {}
     for d in range(session.n_paths):
         if not session.plan_file(d).exists():
             continue
+        check_plan_localizations(session, d)
         for t in range(session.n_trials):
             if session.keep[d, t] and session.localize_file(d, t).exists():
                 used = localization_baseline(session, d, t)

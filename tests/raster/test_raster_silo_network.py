@@ -790,3 +790,29 @@ def test_summary_records_the_localization_baseline(tmp_path, fake):
     first = loc["path1_trial0001"]
     assert first["file"]["name"] == "E1T1DMD1_BASELINE-80Hz.h5"
     assert first["network"] == {"checkpoint": "ckpt/s6_test.pt", "step": 1700}
+
+
+def test_localized_again_after_the_plan(tmp_path, fake):
+    """Trials localized again (here with other baseline files) after their
+    plan was made: prepare and collect refuse the stale plan and results
+    instead of reading the new localization's peaks and baselines."""
+    import shutil
+
+    root = tmp_path / "s"
+    s = SiloSession.open(make_session(root))
+    a = write_baselines(root, tmp_path / "a")
+    b = tmp_path / "b"
+    shutil.copytree(a, b, copy_function=shutil.copy)
+    silo.localize(s, NET, EX, baseline_dir=a)
+    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, NET, EX, baseline_dir=a)
+    for job in silo_solve.dispatch(s, NET, 1, EX):
+        silo_solve.solve_job(job, execution=EX)
+    silo_collect.collect(s, NET, EX, baseline_dir=a)
+    silo.localize(s, NET, EX, baseline_dir=b)  # every trial again
+    with pytest.raises(ValueError, match="localized again since its plan"):
+        silo_collect.collect(s, NET, EX, baseline_dir=a)
+    with pytest.raises(ValueError, match="localized again since its plan"):
+        silo.prepare(s, NET, EX, baseline_dir=b)
+    silo.plan(s, NET, EX, seeds=_seeds(s, tmp_path))  # made again: fine
+    assert len(silo.prepare(s, NET, EX, baseline_dir=b)) == 6
