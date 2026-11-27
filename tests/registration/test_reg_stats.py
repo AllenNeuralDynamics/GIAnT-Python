@@ -253,6 +253,27 @@ def test_gain_groups_without_zeros_keep_their_gains():
     assert np.isfinite(at["nu"]).all()
     ok = np.isfinite(curve.nu_per_mu)
     np.testing.assert_allclose(at["nu"][ok], (curve.mu * curve.nu_per_mu)[ok])
+    one = curve.at(100.0)  # a scalar mean too
+    assert one["g2"].shape == () and np.isfinite(one["g2"])
+    assert np.isnan(curve.at(np.nan)["g2"])
+
+
+def test_regression_weights_of_undetermined_pixels():
+    """A pixel whose valid bins leave a time course flat gets NaN weights
+    (not an error); the others are fitted."""
+    from giant_python.registration.stats.svd import regression_weights
+
+    rng = np.random.default_rng(8)
+    nb = 280
+    u = np.zeros((nb, 2))
+    u[:100, 0] = rng.normal(size=100)  # active in the first 100 bins only
+    u[:, 1] = rng.normal(size=nb)
+    u /= np.linalg.norm(u, axis=0)
+    y = 5 + u @ np.array([[3.0, 2.0, 1.0], [1.0, -1.0, 4.0]])
+    y[:100, 1] = np.nan  # pixel 1 misses the first course's activity
+    w = regression_weights(y, u)
+    np.testing.assert_allclose(w[[0, 2]], [[3.0, 1.0], [1.0, 4.0]])
+    assert np.isnan(w[1]).all()
 
 
 def test_gain_curve_of_compound_poisson():

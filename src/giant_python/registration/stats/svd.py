@@ -32,6 +32,9 @@ N_COMPONENTS = 3
 MIN_BINS = 64
 """Valid time bins a pixel needs for its weights."""
 
+MAX_CONDITION = 1e8
+"""Largest condition number of a pixel's regression (normal equations)."""
+
 
 def _stack_bins(bins: list, n_idx: int) -> np.ndarray:
     """``(channels, n_bins, n_idx)`` float64, NaN-padded per block."""
@@ -124,7 +127,9 @@ def regression_weights(y: np.ndarray, u: np.ndarray) -> np.ndarray:
     -------
     ndarray ``(n_px, k)``
         Coefficients (with an intercept in the fit); NaN for pixels with
-        fewer than :data:`MIN_BINS` bins.
+        fewer than :data:`MIN_BINS` bins, or whose bins do not determine
+        the fit (a time course that is flat over them: condition number of
+        the normal equations above :data:`MAX_CONDITION`).
     """
     nb, k = u.shape
     d = np.concatenate([np.ones((nb, 1)), u], 1)
@@ -133,6 +138,9 @@ def regression_weights(y: np.ndarray, u: np.ndarray) -> np.ndarray:
     gram = (m.T @ prod).reshape(-1, k + 1, k + 1)
     rhs = np.where(m > 0, y, 0.0).T @ d
     ok = m.sum(0) >= MIN_BINS
+    if ok.any():
+        sv = np.linalg.svd(gram[ok], compute_uv=False)
+        ok[ok] = sv[:, -1] > sv[:, 0] / MAX_CONDITION
     out = np.full((y.shape[1], k), np.nan)
     if ok.any():
         sol = np.linalg.solve(gram[ok], rhs[ok][:, :, None])[:, :, 0]

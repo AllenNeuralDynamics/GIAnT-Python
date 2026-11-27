@@ -245,6 +245,13 @@ true slow and fast variance). With online compensation, a sample that two
 frames share is placed by the earlier frame's displacement (they differ only
 around an x/y switch). Rasters whose frames share samples over more than 7
 frames (cycles longer than about 530 lines at 80 Hz) are not supported.
+The fast moments are central (the mean of ``z`` over the centres is taken
+out, which matters at edge pixels whose valid windows are uneven), but
+their expectations are the means of the centres' own ``z`` moments: they
+leave out the variance of that mean, so under photon noise ``fast_rel``
+reads about -0.3% (independent frames) to -0.8% (frames sharing samples)
+at the minimum of 64 centres, and about -1e-6 for a pixel with data in
+the whole of a 28 s trial.
 
 Session maps
 ------------

@@ -117,9 +117,7 @@ class GainCurve:
                     out[y] = np.interp(x, np.log(mu[ok]), v[ok])
         out["nu"] = mean * out.pop("nu_per_mu")
         bad = ~np.isfinite(mean)
-        for a in out.values():
-            a[bad] = np.nan
-        return out
+        return {k: np.where(bad, np.nan, v) for k, v in out.items()}
 
     def shared_zero_fraction(self) -> float:
         """The pairs' rate of shared non-zero events relative to their own
