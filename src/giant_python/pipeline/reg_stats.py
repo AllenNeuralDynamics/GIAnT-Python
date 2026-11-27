@@ -276,7 +276,11 @@ def trial_stats(
     for k, frame in _movie_reader(movie, align["n_channels"]):
         vf = next(vfs)
         mr, mc = align["motion"][k]
-        if not (np.isfinite(mr) and np.isfinite(mc)):
+        # as registration: a frame without data is missing, whatever motion
+        # an alignment file (GIAnT-MATLAB's) gives it
+        if not (
+            np.isfinite(mr) and np.isfinite(mc) and np.isfinite(frame).any()
+        ):
             acc.add_missing(k)
             continue
         x = torch.from_numpy(np.ascontiguousarray(frame)).to(dev)

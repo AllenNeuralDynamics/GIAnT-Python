@@ -27,7 +27,8 @@ CPU with the same number of threads (as ``giant register`` and ``giant
 reg-stats`` with the same ``--max-workers``); otherwise to float32 rounding
 (with another CPU thread count, a few pixels differ by 1e-7 relative). Frame times, motion, registration
 window and online compensation come from the alignment file and are checked
-against the raw recording. Options: ``--out DIR`` (write the files there
+against the raw recording; a frame without data counts as missing whatever
+motion the alignment file gives it, as in registration. Options: ``--out DIR`` (write the files there
 instead of next to the movies), ``--datadr`` and ``--moco`` (folders that
 moved since the trial table was written), ``--device``, ``--max-workers``,
 ``--overwrite`` (statistics that record the same version, frame times,

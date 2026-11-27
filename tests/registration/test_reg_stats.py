@@ -426,6 +426,52 @@ def test_registration_and_command_agree(patched, tmp_path, device):
             np.testing.assert_array_equal(a[grp][k], b[grp][k], err_msg=k)
 
 
+@pytest.mark.parametrize("last", [2.0, 60.0])
+def test_short_trials_get_statistics(patched, tmp_path, last):
+    """A one-frame (or three-frame) trial gets a statistics file (maps
+    NaN where too few frames), equal to the command's."""
+    from giant_python.pipeline.reg_stats import trial_stats
+
+    layout = patched
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6)
+    args = (layout.files[0], 1, last, tmp_path / MOVIE, tmp_path / ADATA)
+    res = multiroi.register_trial(*args, params)
+    assert res.ds_frames.size <= 3
+    a = read_stats(stats_path(tmp_path / MOVIE))
+    assert np.isnan(a["maps"]["fast_rel"]).all()
+    assert np.nanmax(a["maps"]["n_valid"]) == res.ds_frames.size
+    b = trial_stats(*args, tmp_path / "cmd.h5", "cpu", {"maxshift": 6})
+    for k in a["maps"]:
+        np.testing.assert_array_equal(a["maps"][k], b["maps"][k], err_msg=k)
+
+
+def test_command_treats_empty_frames_as_missing(patched, tmp_path):
+    """A frame without data counts as missing in the command even where
+    the alignment file gives it a motion (as GIAnT-MATLAB's may)."""
+    from giant_python.pipeline.reg_stats import trial_stats
+
+    layout = patched
+    params = multiroi.MultiRoiRegistrationParams(maxshift=6)
+    args = (layout.files[0], 1, 3000, tmp_path / MOVIE, tmp_path / ADATA)
+    multiroi.register_trial(*args, params)
+    with h5py.File(tmp_path / MOVIE, "r+") as f:
+        n_ch = layout.num_channels
+        f["data"][10 * n_ch : 11 * n_ch] = np.nan  # frame 10 without data
+    finite = trial_stats(*args, tmp_path / "a.h5", "cpu", {"maxshift": 6})
+    with h5py.File(tmp_path / ADATA, "r+") as f:
+        for key in ("motionDSr", "motionDSc"):
+            m = f[key][()]
+            m.reshape(-1)[10] = np.nan
+            f[key][...] = m
+    missing = trial_stats(*args, tmp_path / "b.h5", "cpu", {"maxshift": 6})
+    for k in finite["maps"]:
+        np.testing.assert_array_equal(
+            finite["maps"][k], missing["maps"][k], err_msg=k
+        )
+    for k in ("spatial_factor", "pair_bin_factor"):  # frame 10 left out
+        assert finite["attrs"][k] == missing["attrs"][k]
+
+
 def test_rerun_without_stats_removes_old_file(patched, tmp_path):
     """A registration without statistics leaves none from an earlier one."""
     layout = patched

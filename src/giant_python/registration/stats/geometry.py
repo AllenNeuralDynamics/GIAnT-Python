@@ -237,7 +237,10 @@ class FrameGeometry:
         lay = self.former.layout
         self.reach = max(3 * self.dt, lay.lines_per_cycle)
         spacing = int(np.diff(self.ds).min()) if self.ds.size > 1 else 1
-        self.n_lags = int((2 * self.reach) // max(1, spacing))
+        # no partners beyond the trial (a one-frame trial has none)
+        self.n_lags = min(
+            int((2 * self.reach) // max(1, spacing)), max(0, self.ds.size - 1)
+        )
         if self.n_lags > MAX_LAGS:
             raise ValueError(
                 f"frames share samples over {self.n_lags} frames; the "
