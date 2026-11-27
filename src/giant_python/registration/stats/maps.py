@@ -260,6 +260,7 @@ def finish_maps(o) -> dict:
         "pair_bin_factor": lam,
         "n_index": int(idx.size),
         "zero_shared": [float(v) for v in o.shared_zero],
+        "validity_differs": [int(v) for v in o.validity_differs],
     }
     curves = [cv.describe() for cv in o.gains]
     gain = {k: _stack_curves([c[k] for c in curves]) for k in curves[0]}

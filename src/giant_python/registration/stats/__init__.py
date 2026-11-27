@@ -17,8 +17,10 @@ registered earlier, MATLAB's included. See ``docs/source/reg_stats.rst``.
 
 from __future__ import annotations
 
+import logging
+
 from .accumulate import TrialStatsAccumulator
-from .gain import GainCurve, measure_gain_curves
+from .gain import GainCurve, measure_gain_curves, validity_mismatch
 from .geometry import FrameGeometry
 from .io import (
     STATS_VERSION,
@@ -28,6 +30,8 @@ from .io import (
     write_stats,
 )
 from .session import combine_trials
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "STATS_VERSION",
@@ -65,8 +69,20 @@ def new_accumulator(source, ds, margin: int, n_channels: int):
     from .gain import next_slots
 
     lay = source.former.layout
+    samples = source.former._samples
     gains = measure_gain_curves(
-        source.former._samples, next_slots(lay.slot_line, lay.slot_pos)
+        samples, next_slots(lay.slot_line, lay.slot_pos)
     )
+    differ = validity_mismatch(samples)
+    for ch, n in enumerate(differ):
+        if n:
+            log.warning(
+                "channel %d: %d samples whose validity differs from channel "
+                "1's; its photon-noise expectations assume channel 1's",
+                ch + 1,
+                n,
+            )
     geometry = FrameGeometry(source, ds, margin)
-    return TrialStatsAccumulator(geometry, gains, n_channels)
+    acc = TrialStatsAccumulator(geometry, gains, n_channels)
+    acc.validity_differs = differ
+    return acc

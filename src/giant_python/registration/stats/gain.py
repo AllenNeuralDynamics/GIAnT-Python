@@ -182,6 +182,35 @@ def slot_sums(samples: torch.Tensor, channel: int) -> np.ndarray:
     return np.concatenate(parts) if parts else np.zeros((0, 7), np.int64)
 
 
+def validity_mismatch(samples: torch.Tensor) -> list:
+    """Per channel, the samples whose validity differs from the first
+    channel's.
+
+    Frames are formed from each channel's own valid samples, but
+    registration's freshness and ``varFacDS``, and so the photon-noise
+    model, follow the first channel's; where another channel's invalid
+    samples differ, its expectations assume the first channel's samples.
+
+    Parameters
+    ----------
+    samples : torch.Tensor of int16
+        ``(channels, slots, cycles)`` raw samples.
+
+    Returns
+    -------
+    list of int
+        One count per channel (0 for the first).
+    """
+    out = [0] * samples.shape[0]
+    step = _pass_size(samples.device)
+    for a in range(0, samples.shape[1], step):
+        first = samples[0, a : a + step] != INVALID_SAMPLE
+        for ch in range(1, samples.shape[0]):
+            other = samples[ch, a : a + step] != INVALID_SAMPLE
+            out[ch] += int((first != other).sum())
+    return out
+
+
 def next_slots(slot_line: np.ndarray, slot_pos: np.ndarray) -> np.ndarray:
     """The slot sampled right after each slot on its line (-1 for none)."""
     order = np.lexsort((slot_pos, slot_line))

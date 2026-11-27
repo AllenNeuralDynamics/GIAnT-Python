@@ -591,6 +591,24 @@ def test_reg_stats_command(patched, tmp_path):
     written = out / "E1T1DMD1_REGSTATS-80Hz.h5"
     assert written.exists()
     assert reg_stats(table, out, device="cpu") == []  # up to date
+    with h5py.File(written, "r+") as f:  # as if the movie were rewritten
+        f.attrs["movie_size"] = int(f.attrs["movie_size"]) + 1
+    assert len(reg_stats(table, out, device="cpu")) == 1
+    assert read_stats(written)["attrs"]["validity_differs"] == [0, 0]
+
+
+def test_validity_mismatch_counts_channels():
+    """Samples whose validity differs from the first channel's are counted
+    per channel."""
+    from giant_python.io.slap2_raster import INVALID_SAMPLE
+    from giant_python.registration.stats.gain import validity_mismatch
+
+    x = np.ones((3, 300, 50), dtype=np.int16)
+    x[:, 0, :5] = INVALID_SAMPLE  # all channels: no mismatch
+    x[1, 10, :7] = INVALID_SAMPLE
+    x[2, 200, :3] = INVALID_SAMPLE
+    x[0, 250, :2] = INVALID_SAMPLE  # first channel only: both others
+    assert validity_mismatch(torch.from_numpy(x)) == [0, 9, 5]
 
 
 def test_stats_path_names():

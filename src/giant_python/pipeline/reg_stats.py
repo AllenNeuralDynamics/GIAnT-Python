@@ -300,23 +300,29 @@ def trial_stats(
     return result
 
 
-def _up_to_date(out: Path, adata: Path) -> bool:
-    """Whether ``out`` holds this version's statistics of ``adata``."""
+def _up_to_date(out: Path, adata: Path, movie: Path) -> bool:
+    """Whether ``out`` holds this version's statistics of ``adata`` and
+    ``movie`` (same frame times and motion, same movie size)."""
     from ..registration.stats import STATS_VERSION, alignment_digest
 
-    if not (out.exists() and adata.exists()):
+    if not (out.exists() and adata.exists() and movie.exists()):
         return False
     try:
         with h5py.File(out, "r") as f:
             version = int(f.attrs.get("stats_version", -1))
             digest = f.attrs.get("alignment_digest", "")
+            size = int(f.attrs.get("movie_size", -1))
         align = read_alignment(adata)
     except (OSError, KeyError, ValueError):
         return False
     want = alignment_digest(
         align["ds"], align["motion"][:, 0], align["motion"][:, 1]
     )
-    return version == STATS_VERSION and digest == want
+    return (
+        version == STATS_VERSION
+        and digest == want
+        and size == movie.stat().st_size
+    )
 
 
 def _stats_job(job: dict) -> dict:
@@ -391,7 +397,7 @@ def _jobs(tt, files, opts: dict) -> list:
         out = stats_path(movie)
         if opts["out_dir"] is not None:
             out = Path(opts["out_dir"]) / out.name
-        if not opts["overwrite"] and _up_to_date(out, adata):
+        if not opts["overwrite"] and _up_to_date(out, adata, movie):
             log.info("%s is up to date; skipping", out.name)
             continue
         jobs.append(

@@ -229,6 +229,7 @@ class TrialStatsAccumulator:
         self.present = np.zeros(self.n_frames, dtype=bool)
         self.bins = []
         self.kappa = [0.0, 0]
+        self.validity_differs = [0] * self.c
         self.pair_bin = 0.0
         self.n_added = 0
         self.geo_done = 0

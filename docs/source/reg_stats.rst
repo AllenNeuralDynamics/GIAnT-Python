@@ -30,8 +30,8 @@ window and online compensation come from the alignment file and are checked
 against the raw recording. Options: ``--out DIR`` (write the files there
 instead of next to the movies), ``--datadr`` and ``--moco`` (folders that
 moved since the trial table was written), ``--device``, ``--max-workers``,
-``--overwrite`` (statistics that record the same version and registration
-are otherwise kept).
+``--overwrite`` (statistics that record the same version, frame times,
+motion and movie size are otherwise kept).
 
 From Python:
 
@@ -251,7 +251,13 @@ their expectations are the means of the centres' own ``z`` moments: they
 leave out the variance of that mean, so under photon noise ``fast_rel``
 reads about -0.3% (independent frames) to -0.8% (frames sharing samples)
 at the minimum of 64 centres, and about -1e-6 for a pixel with data in
-the whole of a 28 s trial.
+the whole of a 28 s trial. Frames are formed from each channel's own
+valid samples, but registration's freshness and ``varFacDS`` follow the
+first channel's: where another channel's invalid samples differ, its
+expectations assume the first channel's samples. Such samples are counted
+(attribute ``validity_differs``, per channel, with a warning); SLAP2
+recordings mark invalid samples in all channels alike (none differ on the
+trials checked).
 
 Session maps
 ------------
@@ -279,7 +285,8 @@ centres, 8 valid blocks)::
    ├── (attributes) stats_version, layout, created, source (registration |
    │   reg-stats), movie, movie_size, alignment, alignment_digest (SHA-256
    │   of DSframes, motionDSr, motionDSc), align_hz, n_frames, n_lags,
-   │   n_index, spatial_factor, pair_bin_factor, zero_shared, device
+   │   n_index, spatial_factor, pair_bin_factor, zero_shared,
+   │   validity_differs, device
    ├── maps/
    │   ├── n_valid, mean, var, var_q, var_qa, var_ph, var_rel
    │   ├── zero_share, zero_ph, zero_excess
