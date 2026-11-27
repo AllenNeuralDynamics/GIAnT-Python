@@ -182,8 +182,8 @@ def check_plan_alignment(what: str, plan, params: SiloParams) -> None:
     if params.inter_trial_alignment == "patchwise":
         _check_same(
             what,
-            int(plan.params.align_patch_px),
-            int(params.align_patch_px),
+            float(plan.params.align_patch_px),
+            float(params.align_patch_px),
             "align_patch_px",
             "--align-patch-px",
         )

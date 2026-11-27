@@ -137,6 +137,13 @@ def test_later_stages_refuse_another_alignment(tmp_path, halves):
     silo.plan(s, PATCHWISE, EX)
     rigid = replace(PATCHWISE, inter_trial_alignment="rigid")
     other = replace(PATCHWISE, align_patch_px=300)
+    # a fractional plan setting is not equal to its integer part
+    pf = s.plan_file(0)
+    plan = read_plan(pf)
+    plan.params = replace(plan.params, align_patch_px=200.5)
+    with pytest.raises(ValueError, match="align_patch_px"):
+        silo.check_plan_alignment("plan", plan, PATCHWISE)
+    silo.check_plan_alignment("plan", read_plan(pf), PATCHWISE)
     for p in (rigid, other):
         with pytest.raises(ValueError, match="align"):
             silo.prepare(s, p, EX)
