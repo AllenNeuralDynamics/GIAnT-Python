@@ -606,8 +606,8 @@ class SiloParams:
         trial, refined for the valid trials to an affine map or to a
         patchwise displacement field (see
         :mod:`~giant_python.extraction.raster.alignment`). With
-        ``'patchwise'`` the localize stage also stores each trial's half
-        images.
+        ``'patchwise'`` (the default; MATLAB's default is ``'rigid'``) the
+        localize stage also stores each trial's half images.
     align_patch_px : int
         Imaged pixels per patch of the patchwise field (``alignPatchPx``).
     peak_method : {'getactimpeaks'}
@@ -694,7 +694,7 @@ class SiloParams:
     localization_soft_th: float = 2.0
     localization_peak_th: Optional[float] = None
     trial_peaks: bool = True
-    inter_trial_alignment: str = "rigid"
+    inter_trial_alignment: str = "patchwise"
     align_patch_px: int = 1500
     peak_method: str = "getactimpeaks"
     seed_fit: Optional[str] = None

@@ -60,12 +60,17 @@ def fake_localize(moco_dir, fn, num_channels, params=None, **kw):
         peaks=None,
         valid=np.ones((H, W), bool),
     )
+    half_ims = None
+    if kw.get("half_ims"):  # two noisy halves, as the patchwise plan needs
+        noise = 0.05 * rng.standard_normal((2,) + mean.shape)
+        half_ims = (mean[None] + noise).astype(np.float32)
     reg = RegisteredTrial(
         movie=np.zeros((1, H, W), np.float32),
         var_factor=None,
         mean_im=mean.astype(np.float32),
         discard=np.zeros(50, bool),
         align_hz=80.0,
+        half_ims=half_ims,
     )
     return loc, reg
 

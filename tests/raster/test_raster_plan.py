@@ -447,9 +447,11 @@ def _matlab_case(case):
             min_peak_distance=int(a["minPeakDistance"]),
             d_xy=float(a["dXY"]),
             sigma_px=float(a["sigma_px"]),
-            # MATLAB's algorithm (the defaults are the local fit, merging)
+            # MATLAB's algorithm (the defaults are the local fit, merging
+            # and patchwise alignment)
             seed_fit="matlab",
             seed_merge_px=0.0,
+            inter_trial_alignment="rigid",
         )
     keep = ref["keep_trials"].astype(bool)
     trials = [

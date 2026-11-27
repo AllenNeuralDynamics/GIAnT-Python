@@ -7,9 +7,11 @@ same files: ``source_extraction/experiment_summary.h5``,
 ``source_extraction/per_trial_summary.h5`` and the trial table's
 ``source_extraction`` group, in MATLAB's schema (names, sizes as MATLAB's
 ``h5read`` sees them, classes, ``/row_major = 0``). MATLAB's algorithm is the
-default (moving-median localization, the fitted baseline, rigid
-across-trial alignment, ``getActImPeaks`` seeding, the kinetics test), with
-these differences: the solver's fits run to convergence, and by default
+default (moving-median localization, the fitted baseline,
+``getActImPeaks`` seeding, the kinetics test), with these differences: the
+trials are aligned with patchwise displacement fields
+(``inter_trial_alignment='patchwise'``, an option of GIAnT-MATLAB main whose
+default is ``'rigid'``); the solver's fits run to convergence, and by default
 the footprint fit holds its variance term at its start (the solver's
 default, ``footprint_variance='fixed'``; ``'model'`` is MATLAB's loss);
 the seeding's Gaussian fits are local and converged, and a residual peak
@@ -238,14 +240,15 @@ seeded, pixels are selected and sources grouped into subproblems
 ``interTrialAlignment``) is a rigid shift per trial, refined for the valid
 trials as GIAnT-MATLAB main does:
 
-* ``rigid`` (the default): the shift;
+* ``rigid``: the shift;
 * ``affine``: an affine map per trial, fitted groupwise to the mean of the
   warped trials (``alignTrialsAffine``);
 * ``patchwise``: a smooth displacement field per trial, set by its values
   at the centres of patches of about ``--align-patch-px`` (1500) imaged
   pixels on top of the field's plane, fitted groupwise with robust weights;
   a patch's bend is kept only as far as it exceeds its noise, measured
-  between the two halves of each trial (``alignTrialsPatchwise``).
+  between the two halves of each trial (``alignTrialsPatchwise``). The
+  default.
 
 Trials that are aligned but not valid keep their shift. Every per-trial
 image, the extraction's sampling of each trial (each selected pixel at its

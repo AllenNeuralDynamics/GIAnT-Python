@@ -87,7 +87,8 @@ class PlanParams:
     inter_trial_alignment : str
         ``"rigid"`` (a shift per trial), ``"affine"`` (an affine map per
         valid trial) or ``"patchwise"`` (a smooth displacement field per
-        valid trial on top of its affine plane) (``interTrialAlignment``).
+        valid trial on top of its affine plane; the default)
+        (``interTrialAlignment``).
     align_patch_px : float
         Imaged pixels per patch of the patchwise field (``alignPatchPx``).
     peak_method : str
@@ -120,7 +121,7 @@ class PlanParams:
     align_clip: float = 80.0
     template_trials: int = 20
     max_corr_thresh: float = 0.90
-    inter_trial_alignment: str = "rigid"
+    inter_trial_alignment: str = "patchwise"
     align_patch_px: float = 1500.0
     peak_method: str = "getactimpeaks"
     seed_fit: str = "local"
