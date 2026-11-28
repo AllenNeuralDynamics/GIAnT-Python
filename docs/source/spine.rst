@@ -74,13 +74,60 @@ covers them); an image with values only at the fitted pixels takes it over
 the sources of that set it covers, which is the whole set unless a
 footprint reaches past the fitted pixels.
 
+Trend tests
+-----------
+
+Each image's normalized source sizes go through the tests of GIAnT-MATLAB's
+``spineTrends.m`` and ``spineTrendsResid.m``
+(:mod:`giant_python.spine.trends`), over the trials in which the image has
+values, for the sources in ``ok`` that it covers:
+
+``step``
+    For each split of the trials into the first ``k`` and the rest, the t
+    statistic of the difference of their means (pooled SD); the source's
+    statistic is the largest ``|t|`` over splits, with the split and the
+    size of the step.
+``brief``
+    A change of 1 to ``--max-brief`` (3) consecutive trials that comes
+    back: each such run, with trials on both sides in the same block of
+    consecutive acquisition numbers (a trial without a number is a block of
+    its own; when no trial of the path has a number, the trial table's
+    order stands in),
+    against the up to 2 trials before it
+    and the up to 2 after it, with the noise SD from the median
+    trial-to-trial difference away from the run. The run's statistic is
+    the smaller of the two t's when they agree in sign; the source's is the
+    largest over runs.
+``resid`` (beyond the shared trend)
+    The trend shared by the sources is the first right singular vector of
+    their normalized sizes (signed so that it ends positive). Each source's
+    part of it is removed and the step test is run on what is left.
+
+The p-values come from ``--n-perm`` (20000) random orders of each source's
+trials (seeded per source with ``--seed``, so a source's step and brief p
+do not depend on which other sources are tested; its beyond-trend p does,
+through the shared trend), counting a permuted statistic within a
+relative 1e-9 of the observed one as a tie: the step at the first or last
+split depends only on which trial stands alone, so ties are common there.
+q-values come from Benjamini-Hochberg across the tested sources of a path;
+the report counts the sources with ``q <= --fdr-q`` (0.1) per test and
+direction. ``--n-perm 0`` gives the statistics without p.
+
+On GIAnT-MATLAB's own normalized sizes, the statistics, splits, brief runs
+and the shared trend agree with ``spineTrends.m`` and
+``spineTrendsResid.m`` at single precision, and the p-values within Monte
+Carlo error, except at splits within 3 trials of an end, where MATLAB's
+rounding decided whether a tie counted and its p could be far too small.
+
 The output
 ----------
 
 ``giant spine readout`` writes ``spine_summary_<key>.h5`` into
-``--out-dir``. The key covers the inputs' identities and the settings, so a
-rerun with unchanged inputs reuses the file. It holds, per path, the images,
-the windows (sparse), the readouts, the normalized sizes, each source's
+``--out-dir``. The key covers the inputs' identities and the settings
+(including those of the trend tests), so a rerun with unchanged inputs
+reuses the file; the network images' cache does not depend on the trend
+settings. It holds, per path, the images, the windows (sparse), the
+readouts, the normalized sizes, their trend tests, each source's
 per-trial activity in the activity channel (mean ``dF_ls`` and event
 frames, to check whether activity moves the readout), which file channel
 that is (``activity_channel``), and the acquisition trial numbers. See

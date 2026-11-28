@@ -496,3 +496,126 @@ def test_untrimmed_trials_are_reported(session, tmp_path):
     p = read_product(rep["output"])["paths"][1]
     assert not p["image_attrs"]["f0_net"]["untrimmed"].any()
     assert "f0_untrimmed" not in rep["paths"][1]
+
+
+def test_readout_runs_the_trend_tests(session, tmp_path):
+    """Every normalized image gets the trend tests over its trials, with
+    trial positions as trial-table indices; the test settings change the
+    output's key but not the network images' cache."""
+    from giant_python.spine.trends import trend_tests
+
+    kw = dict(
+        baseline_dir=session["baselines"], moco_dir=session["moco"], trim_s=0.1
+    )
+    rep = make_spine_summary(
+        session["run"], session["table"], tmp_path / "o", n_perm=200, **kw
+    )
+    p = read_product(rep["output"])["paths"][1]
+    norm = p["normalized"]["sources"]
+    tr = p["trends"]["sources"]
+    assert set(tr) == set(norm) - {"ok"}
+    rec = tr["f0_net"]
+    rows = rec["trials"]
+    np.testing.assert_array_equal(rows, np.arange(syn.N_TRIALS))
+    direct = trend_tests(
+        norm["f0_net"][rows],
+        norm["ok"],
+        p["trials"]["acquisition"][rows],
+        n_perm=200,
+    )
+    tested = direct["tested"]
+    assert tested.any()
+    np.testing.assert_array_equal(rec["tested"], tested)
+    for k in ("step_t", "step_p", "brief_t", "resid_p", "shared_r"):
+        np.testing.assert_array_equal(rec[k], direct[k])
+    # positions as trial-table indices where a split or a run was found,
+    # -1 elsewhere
+    step = tested & (direct["step_k"] > 0)
+    assert step.any()
+    np.testing.assert_array_equal(
+        rec["step_after"][step], rows[direct["step_k"][step] - 1]
+    )
+    assert (rec["step_after"][~step] == -1).all()
+    run = tested & (direct["brief_start"] >= 0)
+    np.testing.assert_array_equal(
+        rec["brief_first"][run], rows[direct["brief_start"][run]]
+    )
+    assert (rec["brief_first"][~run] == -1).all()
+    np.testing.assert_array_equal(
+        rec["brief_len"][tested & ~run], 0
+    )
+    assert rec["attrs"]["n_perm"] == 200
+    assert rec["attrs"]["var_share"] == pytest.approx(direct["var_share"])
+    summ = rep["paths"][1]["trends"]["f0_net"]
+    assert summ["tested"] == int(tested.sum())
+    assert summ["counts"] == direct["counts"]
+    rep2 = make_spine_summary(
+        session["run"], session["table"], tmp_path / "o", n_perm=0, **kw
+    )
+    assert rep2["output"] != rep["output"] and not rep2["reused"]
+    assert rep2["paths"][1]["f0_reused"]
+    p2 = read_product(rep2["output"])["paths"][1]
+    assert np.isnan(p2["trends"]["sources"]["f0_net"]["step_p"]).all()
+
+
+def test_readout_refuses_bad_trend_settings(session, tmp_path):
+    """Invalid trend settings are refused before anything is read or
+    reused."""
+    with pytest.raises(ValueError, match="fdr_q"):
+        make_spine_summary(
+            session["run"], session["table"], tmp_path / "o", fdr_q=2.0
+        )
+    assert not (tmp_path / "o").exists()
+
+
+def test_trials_without_numbers_are_noted(session, tmp_path, monkeypatch):
+    """A trial whose raw file has no acquisition number is left out of the
+    brief test's runs, and the summary's notes say so."""
+    import giant_python.spine.pipeline as pl
+
+    real = pl.table_trials
+
+    def no_number(table, path):
+        """The table's trials with trial 2 unnumbered."""
+        stems, acq = real(table, path)
+        acq = acq.copy()
+        acq[1] = -1
+        return stems, acq
+
+    monkeypatch.setattr(pl, "table_trials", no_number)
+    notes = []
+    rep = make_spine_summary(
+        session["run"],
+        session["table"],
+        tmp_path / "o",
+        n_perm=0,
+        progress=notes.append,
+    )
+    assert sum("trial(s) 2 have no acquisition number" in m for m in notes)
+    p = read_product(rep["output"])["paths"][1]
+    blocks = p["trends"]["sources"]["mean_ch1"]["blocks"]
+    assert blocks[1] != blocks[0] and blocks[1] != blocks[2]
+
+
+def test_unnumbered_trials_follow_the_path_not_the_image():
+    """With some numbered trials on the path, unnumbered trials stay
+    blocks of their own even in an image that covers only them; with no
+    numbers on the path, the table's order stands in (gaps split)."""
+    from giant_python.spine.pipeline import _trends
+
+    vals = np.random.default_rng(0).normal(size=(6, 4)) * 0.1
+    norm = {"img": vals.copy(), "ok": np.ones(4, bool)}
+    norm["img"][[0, 1]] = np.nan  # the image covers trials 2-5 only
+    opts = dict(n_perm=0, fdr_q=0.1, max_brief=3, seed=1)
+    acq = np.array([3, 4, -1, -1, -1, -1])
+    tr, _ = _trends(1, norm, acq, opts, 1, lambda m: None, lambda m: None)
+    np.testing.assert_array_equal(
+        tr["img"]["arrays"]["blocks"], [-1, -1, 0, 1, 2, 3]
+    )
+    norm["img"][3] = np.nan  # a gap in table order
+    tr, _ = _trends(
+        1, norm, np.full(6, -1), opts, 1, lambda m: None, lambda m: None
+    )
+    np.testing.assert_array_equal(
+        tr["img"]["arrays"]["blocks"], [-1, -1, 0, -1, 1, 1]
+    )
