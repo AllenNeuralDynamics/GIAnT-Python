@@ -891,6 +891,149 @@ def test_load_trial_reads_selected_pixels_beyond_the_frame(
     np.testing.assert_allclose(general.finv, td.finv, rtol=1e-8)
 
 
+def test_recording_layout_is_read_once_per_file(
+    recording, monkeypatch, tmp_path
+):
+    """Trials of one recording file (a continuous recording's line
+    ranges) read its layout once, also when loaded at the same time; a
+    changed file, another file or a missing one is read again; the loads
+    are the same as with a layout read every time."""
+    import os
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    layout, _, truth = recording
+    calls = []
+    lock = threading.Lock()
+
+    def counted(path):
+        """The fake layout, counting reads."""
+        with lock:
+            calls.append(str(path))
+        return layout
+
+    monkeypatch.setattr(trial_data, "raster_layout", counted)
+    alignment, sel, mean, rois, discard, _ = loader_inputs(layout, truth)
+    rest = (discard, mean, rois, TrialLoadParams(baseline_window_s=0.2))
+    path = layout.files[0]
+
+    def load(first, last):
+        """One line range of the recording."""
+        return load_trial(path, first, last, alignment, sel, RigidShift(),
+                          *rest, dtype=np.float64)  # fmt: skip
+
+    a = load(10.0, 2000.0)
+    b = load(1500.0, 3000.0)
+    assert calls == [trial_data._layout_path(path)]  # read once, absolute
+    assert a.timings["layout"] <= a.timings["setup"]
+    # concurrent loads of a new key read it once
+    other = tmp_path / "copy_DMD1-TRIAL000001.dat"
+    other.write_bytes(Path(path).read_bytes())
+    calls.clear()
+    with ThreadPoolExecutor(3) as pool:
+        got = list(pool.map(lambda k: trial_data.recording_layout(other),
+                            range(3)))  # fmt: skip
+    assert calls == [trial_data._layout_path(other)]
+    assert all(g is layout for g in got)
+    # a changed file is read again; a missing one every time
+    stat = other.stat()
+    os.utime(other, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    trial_data.recording_layout(other)
+    assert calls == [trial_data._layout_path(other)] * 2
+    # a relative path is read through its absolute path (and is the same
+    # key as the absolute one)
+    rel = tmp_path / "rel_DMD1-TRIAL000001.dat"
+    rel.write_bytes(b"r")
+    calls.clear()
+    here = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        trial_data.recording_layout(rel.name)
+    finally:
+        os.chdir(here)
+    trial_data.recording_layout(rel)
+    assert calls == [trial_data._layout_path(rel)]
+    assert os.path.isabs(calls[0])
+    calls.clear()
+    for _ in range(2):
+        trial_data.recording_layout(tmp_path / "missing.dat")
+    assert len(calls) == 2
+    # the same loads as reading the layout every time
+    monkeypatch.setattr(trial_data, "recording_layout", lambda p: layout)
+    for got, first, last in ((a, 10.0, 2000.0), (b, 1500.0, 3000.0)):
+        ref = load(first, last)
+        np.testing.assert_array_equal(got.y, ref.y)
+        np.testing.assert_array_equal(got.finv, ref.finv)
+
+
+def test_recording_layout_follows_segments_and_metadata(
+    recording, monkeypatch, tmp_path
+):
+    """A CYCLE-split recording's layout is read again when a segment is
+    added or removed or its metadata changes, and the path as given is
+    part of the key (its name decides how the reader opens it)."""
+    import os
+
+    layout = recording[0]
+    calls = []
+    monkeypatch.setattr(
+        trial_data, "raster_layout", lambda path: calls.append(path) or layout
+    )
+    folder = tmp_path / "split"
+    folder.mkdir()
+    first = folder / "rec_DMD1-TRIAL000001-CYCLE-000000.dat"
+    first.write_bytes(b"x")
+    meta = folder / "rec_DMD1.meta"
+    meta.write_bytes(b"m")
+    (folder / "rec_DMD2-TRIAL000001-CYCLE-000000.dat").write_bytes(b"y")
+    read = trial_data.recording_layout
+    read(first), read(first)
+    assert len(calls) == 1
+    names = [n for n, _, _ in trial_data._layout_inputs(first)]
+    assert names == [first.name, meta.name]  # not the other DMD's
+    second = folder / "rec_DMD1-TRIAL000001-CYCLE-000100.dat"
+    second.write_bytes(b"z")  # a segment added
+    read(first), read(first)
+    assert len(calls) == 2
+    st = meta.stat()  # the metadata changed
+    os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    read(first)
+    assert len(calls) == 3
+    second.unlink()  # a segment removed
+    read(first)
+    assert len(calls) == 4
+    # a missing segment of an existing group is read every time
+    for _ in range(2):
+        read(second)
+    assert len(calls) == 6
+    # the same absolute path is the same key; a link to the file is not
+    (folder / "sub").mkdir()
+    read(str(folder / "sub" / ".." / first.name))
+    assert len(calls) == 6
+    link = folder / "link_DMD1-TRIAL000001.dat"
+    try:
+        os.symlink(first, link)
+    except (OSError, NotImplementedError):
+        return  # no symbolic links here
+    read(link)
+    assert len(calls) == 7
+    # a directory link followed by ".." is resolved before the key
+    elsewhere = tmp_path / "elsewhere" / "deep"
+    elsewhere.mkdir(parents=True)
+    (tmp_path / "elsewhere" / first.name).write_bytes(b"other")
+    dir_link = folder / "dlink"
+    try:
+        os.symlink(elsewhere, dir_link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return
+    via = str(dir_link) + os.sep + ".." + os.sep + first.name
+    assert trial_data._layout_path(via) == os.path.join(
+        os.path.realpath(tmp_path / "elsewhere"), first.name
+    )
+    read(via)
+    assert len(calls) == 8  # not the cached layout of folder/first
+
+
 def test_load_trial_without_selected_pixels(recording, monkeypatch):
     """No selected pixel, no ROI and no labeled pixel: empty data, and the
     traces are missing. A selection that is never sampled is an error."""

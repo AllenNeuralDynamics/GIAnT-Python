@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -1247,7 +1248,9 @@ class TrialData:
     photon_scale : float
         Counts per unit of ``y``.
     timings : dict
-        Wall time in seconds of each phase.
+        Wall time in seconds of each phase (``setup``, ``frames``,
+        ``roi_svd``, ``finish``; ``layout``, the part of ``setup`` spent
+        reading the recording's layout).
     """
 
     y: np.ndarray
@@ -1380,6 +1383,99 @@ def _points(need, alignment: TrialAlignment, warp):
     return r_d, c_d, (0.0, 0.0), centre, qpos
 
 
+_LAYOUTS: dict = {}
+_LAYOUTS_LOCK = threading.Lock()
+_LAYOUTS_KEPT = 4
+"""Recording layouts read by :func:`recording_layout` (the last few)."""
+
+
+def _layout_path(dat_path) -> str:
+    """The ``.dat`` path a layout is kept under: its directory resolved
+    (links followed before any ``..``, as the system opens it) and its
+    name as given (the name decides whether the reader opens one file or
+    the CYCLE group)."""
+    folder, name = os.path.split(os.fspath(dat_path))
+    return os.path.join(os.path.realpath(folder or os.curdir), name)
+
+
+def _layout_inputs(dat_path) -> tuple:
+    """``(name, size, modification time)`` of every file the reader of
+    ``dat_path`` opens, as ``slap2_utils`` finds them: the ``.dat`` file or,
+    for a CYCLE-split recording, every segment of its group (the ``.dat``
+    files of its directory whose names start with its stem), and the
+    metadata file of each (``<name without -TRIAL and -CYCLE>.meta``); a
+    missing file has size and time None."""
+    import re
+
+    from ...io.slap2 import is_cycle_split
+
+    path = _layout_path(dat_path)
+    folder, name = os.path.split(path)
+    stem = os.path.splitext(name)[0]
+    names = [name]
+    if is_cycle_split(path):
+        group = re.sub(r"-CYCLE-?[0-9]+$", "", stem, flags=re.IGNORECASE)
+        names = [
+            f
+            for f in os.listdir(folder)
+            if f.lower().endswith(".dat")
+            and os.path.splitext(f)[0].startswith(group)
+        ]
+    metas = set()
+    for f in names:
+        base = re.sub(r"-TRIAL\d+", "", os.path.splitext(f)[0], flags=re.I)
+        metas.add(re.sub(r"-CYCLE-?\d+", "", base, flags=re.I) + ".meta")
+    out = []
+    for f in sorted(set(names) | metas):
+        try:
+            st = os.stat(os.path.join(folder, f))
+            out.append((f, st.st_size, st.st_mtime_ns))
+        except OSError:
+            out.append((f, None, None))
+    return tuple(out)
+
+
+def recording_layout(dat_path) -> RasterLayout:
+    """:func:`~giant_python.io.slap2_raster.raster_layout` of a recording,
+    read once per recording.
+
+    The trials of a continuous (CYCLE-split) recording are line ranges of
+    the same ``.dat`` file, and reading its layout opens every file of the
+    recording and parses its metadata: tens of seconds per trial on a
+    network mount, the same for every trial. The layout is kept for the
+    last few recordings, keyed by the path (its directory resolved, its
+    name as given: the name decides whether the reader takes one file or
+    the group) and the name, size and
+    modification time of every file the reader opens (the group's segments
+    and their metadata, :func:`_layout_inputs`), so that a changed, added
+    or removed file is read again. One reader at a time, so concurrent
+    loads of one recording read it once. The layout is read through that
+    absolute path, so its file names do not depend on the working
+    directory. A ``.dat`` file that cannot be found is read every time (the
+    reader reports it).
+    """
+    if not os.path.isfile(dat_path):
+        return raster_layout(dat_path)  # the reader reports it
+    try:
+        inputs = _layout_inputs(dat_path)
+    except OSError:
+        return raster_layout(dat_path)
+    if any(size is None for f, size, _ in inputs if f.endswith(".dat")):
+        return raster_layout(dat_path)
+    path = _layout_path(dat_path)
+    key = (raster_layout, path, inputs)  # the reader too: tests replace it
+    with _LAYOUTS_LOCK:
+        layout = _LAYOUTS.get(key)
+        if layout is None:
+            # read through the absolute path, so that the layout's files
+            # stay right if the working directory changes
+            layout = raster_layout(path)
+            _LAYOUTS[key] = layout
+            while len(_LAYOUTS) > _LAYOUTS_KEPT:
+                _LAYOUTS.pop(next(iter(_LAYOUTS)))
+        return layout
+
+
 def _check_layout(layout: RasterLayout) -> None:
     """Reject recordings that the loader does not support."""
     if layout.fast_zs.size != 1:
@@ -1451,7 +1547,8 @@ def load_trial(  # noqa: C901
     dev = torch.device(device)
     t0 = time.perf_counter()
     timings = {}
-    layout = raster_layout(dat_path)
+    layout = recording_layout(dat_path)
+    timings["layout"] = time.perf_counter() - t0
     _check_layout(layout)
     if not isinstance(alignment, TrialAlignment):
         alignment = read_alignment(Path(alignment))
