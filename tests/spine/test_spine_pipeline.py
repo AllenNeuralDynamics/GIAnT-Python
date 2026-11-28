@@ -8,6 +8,7 @@ import pytest
 from giant_python.cli import main
 from giant_python.spine.pipeline import (
     _stem,
+    _trials_and_window,
     make_spine_summary,
     table_trials,
 )
@@ -387,3 +388,23 @@ def test_fitted_images_do_not_shrink_the_windows(tmp_path):
     assert "not_covered" not in reps["full"]["paths"][1]
     assert b["image_attrs"]["f0_silo_ch1"]["covers"] == "fitted"
     assert b["image_attrs"]["f0_net"]["covers"] == "field"
+
+
+def test_no_shared_trial_reads_nothing():
+    """Field images without a trial in common leave no trial and no valid
+    pixel, with a note, rather than windows over the whole frame."""
+    from giant_python.spine.readout import common_valid
+
+    a = np.ones((4, 3, 3))
+    b = np.ones((4, 3, 3))
+    a[2:] = np.nan
+    b[:2] = np.nan
+    images = {
+        "mean_ch1": (a, {"covers": "field"}),
+        "f0_net": (b, {"covers": "field"}),
+    }
+    notes = []
+    used, window = _trials_and_window(1, images, np.full(4, 10), notes.append)
+    assert used.size == 0 and window == ["mean_ch1", "f0_net"]
+    assert any("nothing is read out" in m for m in notes)
+    assert not common_valid([a, b], used).any()

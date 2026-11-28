@@ -42,6 +42,7 @@ def common_valid(stacks, trials=None) -> np.ndarray:
     Returns
     -------
     ndarray of bool, shape (rows, cols)
+        No pixel is valid without trials (nothing to compare).
     """
     stacks = [np.asarray(s) for s in stacks]
     if trials is None:
@@ -50,6 +51,8 @@ def common_valid(stacks, trials=None) -> np.ndarray:
             np.isfinite(first.reshape(first.shape[0], -1)).any(axis=1)
         )
     trials = np.asarray(trials, dtype=np.int64)
+    if trials.size == 0:
+        return np.zeros(stacks[0].shape[1:], bool)
     ok = np.ones(stacks[0].shape[1:], bool)
     for s in stacks:
         ok &= np.isfinite(s[trials]).all(axis=0)

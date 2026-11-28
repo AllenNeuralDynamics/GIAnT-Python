@@ -94,6 +94,11 @@ def _trials_and_window(n: int, images: dict, nfr, say):
                 f"{', '.join(str(t + 1) for t in lost)}; they are not read out"
             )
         ok &= has[k]
+    if frames.any() and not ok.any():
+        say(
+            f"Path{n}: no trial has values in every one of {', '.join(window)}"
+            "; nothing is read out"
+        )
     return np.flatnonzero(ok), window
 
 

@@ -78,6 +78,8 @@ def test_common_valid_requires_every_trial_and_stack():
     ok = common_valid([a, b], [0, 1, 2])
     assert not ok[0, 0] and not ok[3, 4] and ok.sum() == 18
     assert common_valid([a, b], [0])[0, 0]
+    # without trials nothing can be compared, so no pixel is valid
+    assert not common_valid([a, b], []).any()
 
 
 def test_mask_mean_and_coverage():
