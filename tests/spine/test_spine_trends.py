@@ -329,6 +329,14 @@ def test_noise_free_edge_outlier_ties_with_its_mirror():
     np.testing.assert_array_equal(k, [9, 1])
     r = trend_tests(x[:1].T, np.ones(1, bool), np.arange(10), n_perm=4000)
     assert r["step_p"][0] == pytest.approx(0.2, abs=0.03)
+    # step_at agrees at the chosen split, also for a nearly noise-free step
+    y = np.array([[0.0, 1e-6, 1.0, 1.000001]])
+    t, k, d = step_stat(y)
+    ta, da = step_at(y, k)
+    assert np.isinf(t[0]) and k[0] == 2
+    np.testing.assert_array_equal(ta, t)
+    np.testing.assert_allclose(da, d)
+    np.testing.assert_array_equal(step_at(x, [9, 1])[0], step_stat(x)[0])
 
 
 def test_trend_tests_without_permutations():

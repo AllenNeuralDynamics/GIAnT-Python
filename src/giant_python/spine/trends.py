@@ -173,8 +173,8 @@ def step_at(x: np.ndarray, k):
     Returns
     -------
     t, d : ndarray of float64, shape (series,)
-        As :func:`step_stat` at those splits; NaN where ``k`` is out of
-        range.
+        As :func:`step_stat` at those splits (with its rule for groups
+        without spread); NaN where ``k`` is out of range.
     """
     x = np.asarray(x, dtype=np.float64)
     k = np.asarray(k, dtype=np.int64).ravel()
@@ -187,6 +187,8 @@ def step_at(x: np.ndarray, k):
         a, b = x[i, : k[i]], x[i, k[i] :]
         d[i] = b.mean() - a.mean()
         ss = ((a - a.mean()) ** 2).sum() + ((b - b.mean()) ** 2).sum()
+        if ss <= _SS_RTOL * ((x[i] - x[i].mean()) ** 2).sum():
+            ss = 0.0
         with np.errstate(invalid="ignore", divide="ignore"):
             t[i] = d[i] / (
                 math.sqrt(ss / (T - 2)) * math.sqrt(1 / k[i] + 1 / (T - k[i]))
