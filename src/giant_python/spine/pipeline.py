@@ -184,8 +184,8 @@ def _trends(n, norm: dict, acq, opts: dict, workers, say) -> tuple:
     -------
     trends : dict
         Per image, the arrays of the product's ``trends`` group (trial
-        positions as zero-based trial-table indices, -1 where untested) and
-        its attributes.
+        positions as zero-based trial-table indices, -1 where untested or
+        where a test found no split or run) and its attributes.
     summary : dict
         Per image, the tested sources, the shared mode's variance share and
         the counts of the tests.

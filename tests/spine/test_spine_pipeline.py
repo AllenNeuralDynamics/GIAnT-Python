@@ -528,13 +528,22 @@ def test_readout_runs_the_trend_tests(session, tmp_path):
     np.testing.assert_array_equal(rec["tested"], tested)
     for k in ("step_t", "step_p", "brief_t", "resid_p", "shared_r"):
         np.testing.assert_array_equal(rec[k], direct[k])
+    # positions as trial-table indices where a split or a run was found,
+    # -1 elsewhere
+    step = tested & (direct["step_k"] > 0)
+    assert step.any()
     np.testing.assert_array_equal(
-        rec["step_after"][tested], rows[direct["step_k"][tested] - 1]
+        rec["step_after"][step], rows[direct["step_k"][step] - 1]
     )
+    assert (rec["step_after"][~step] == -1).all()
+    run = tested & (direct["brief_start"] >= 0)
     np.testing.assert_array_equal(
-        rec["brief_first"][tested], rows[direct["brief_start"][tested]]
+        rec["brief_first"][run], rows[direct["brief_start"][run]]
     )
-    assert (rec["step_after"][~tested] == -1).all()
+    assert (rec["brief_first"][~run] == -1).all()
+    np.testing.assert_array_equal(
+        rec["brief_len"][tested & ~run], 0
+    )
     assert rec["attrs"]["n_perm"] == 200
     assert rec["attrs"]["var_share"] == pytest.approx(direct["var_share"])
     summ = rep["paths"][1]["trends"]["f0_net"]

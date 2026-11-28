@@ -94,6 +94,32 @@ def test_step_stat_is_the_matlab_loop():
     np.testing.assert_allclose(d, got[2], rtol=1e-10, atol=1e-15)
 
 
+def test_no_step_or_run_keeps_a_missing_position():
+    """A series without a non-zero statistic reports no split and no run
+    (not the first trial), and so does the summary through the pipeline's
+    mapping."""
+    x = np.zeros((2, 8))
+    x[1] = np.arange(8) * 0.01
+    t, k, d = step_stat(x)
+    assert t[0] == 0 and k[0] == 0 and d[0] == 0
+    assert k[1] > 0
+    # a strictly linear series: every trial is the mean of its neighbours,
+    # so no run differs from both sides
+    t, start, length, d = brief_stat(x, np.zeros(8, int), 3)
+    np.testing.assert_array_equal(t, 0)
+    np.testing.assert_array_equal(start, -1)
+    np.testing.assert_array_equal(length, 0)
+    # blocks of one or two trials leave no run with neighbours
+    rng = np.random.default_rng(1)
+    y = rng.normal(size=(3, 6))
+    t, start, length, _ = brief_stat(y, trial_blocks([1, 2, 5, 6, 9, 10]), 3)
+    assert (t == 0).all() and (start == -1).all() and (length == 0).all()
+    r = trend_tests(x.T, np.ones(2, bool), np.arange(8), n_perm=50)
+    assert r["tested"].all()
+    assert r["step_k"][0] == 0 and r["step_p"][0] == 1
+    assert r["brief_start"][0] == -1 and r["brief_len"][0] == 0
+
+
 def test_step_at_out_of_range_is_nan():
     """A split outside 1..T-1 gives NaN."""
     t, d = step_at(np.zeros((2, 5)) + [[0, 1, 2, 3, 4]], [0, 2])

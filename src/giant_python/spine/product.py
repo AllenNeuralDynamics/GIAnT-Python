@@ -58,11 +58,13 @@ run's consensus frame, zero-based coordinates)::
                                 covered in every trial tested)
         step_t, step_d          (R,) step statistic and size (log units)
         step_after              (R,) zero-based trial after which the
-                                step falls (-1: not tested)
+                                step falls (-1: not tested, or no split
+                                with a non-zero statistic)
         step_p, step_q          (R,) permutation p, BH q-value (per path)
         brief_t, brief_d        (R,) transient-change statistic and size
         brief_first, brief_len  (R,) its first trial (zero-based) and
-                                number of trials
+                                number of trials (-1 and 0 without a
+                                run; -1 and -1 when not tested)
         brief_p, brief_q        (R,)
         resid_t, resid_d, resid_after, resid_p, resid_q
                                 (R,) the step test beyond the shared

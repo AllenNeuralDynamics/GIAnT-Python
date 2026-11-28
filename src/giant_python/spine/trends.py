@@ -88,17 +88,17 @@ def step_stat(x: np.ndarray):
     -------
     t : ndarray of float64, shape (series,)
         Signed t of mean(after) - mean(before) at the best split (0 when no
-        split gives a finite t).
+        split gives a finite, non-zero t).
     k : ndarray of int, shape (series,)
-        Trials before the step at that split, 1 to ``trials - 1`` (1 when no
-        split gives a finite t).
+        Trials before the step at that split, 1 to ``trials - 1``; 0 when
+        no split gives a finite, non-zero t (MATLAB reports 1 there).
     d : ndarray of float64, shape (series,)
-        mean(after) - mean(before) at that split.
+        mean(after) - mean(before) at that split (0 without one).
     """
     x = np.asarray(x, dtype=np.float64)
     n, T = x.shape
     t_best = np.zeros(n)
-    k_best = np.ones(n, np.int64)
+    k_best = np.zeros(n, np.int64)
     d_best = np.zeros(n)
     if T < 3:
         return t_best, k_best, d_best
@@ -204,18 +204,20 @@ def brief_stat(x: np.ndarray, blocks, max_len: int = 3):
     t : ndarray of float64, shape (series,)
         Signed statistic of the strongest run (0 without one).
     start : ndarray of int, shape (series,)
-        The run's first trial (zero-based; 0 without a run).
+        The run's first trial (zero-based, at least 1); -1 without a run
+        with a non-zero statistic (MATLAB reports the first trial there).
     length : ndarray of int, shape (series,)
-        The run's number of trials (1 without a run).
+        The run's number of trials; 0 without a run.
     d : ndarray of float64, shape (series,)
-        The run's mean minus the mean of the before and after means.
+        The run's mean minus the mean of the before and after means (0
+        without a run).
     """
     x = np.asarray(x, dtype=np.float64)
     blocks = np.asarray(blocks).ravel()
     n, T = x.shape
     t_best = np.zeros(n)
-    s_best = np.zeros(n, np.int64)
-    w_best = np.ones(n, np.int64)
+    s_best = np.full(n, -1, np.int64)
+    w_best = np.zeros(n, np.int64)
     d_best = np.zeros(n)
     if T < 3:
         return t_best, s_best, w_best, d_best
@@ -441,9 +443,11 @@ def trend_tests(
 
         * ``tested`` (bool);
         * ``step_t``, ``step_k`` (trials before the step, 1 to
-          ``trials - 1``), ``step_d``, ``step_p``, ``step_q``;
+          ``trials - 1``; 0 for a tested source without a step),
+          ``step_d``, ``step_p``, ``step_q``;
         * ``brief_t``, ``brief_start`` (zero-based first trial of the
-          run), ``brief_len``, ``brief_d``, ``brief_p``, ``brief_q``;
+          run; -1 for a tested source without a run), ``brief_len`` (0
+          without a run), ``brief_d``, ``brief_p``, ``brief_q``;
         * ``resid_*``: the step test beyond the shared trend;
         * ``shared_loading`` (``L . v``) and ``shared_r`` (correlation of
           the source's sizes with ``v``);
