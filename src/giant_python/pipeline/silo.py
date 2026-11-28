@@ -189,6 +189,21 @@ def check_plan_alignment(what: str, plan, params: SiloParams) -> None:
         )
 
 
+def check_plan_seeding(what: str, plan, params: SiloParams) -> None:
+    """Refuse to collect with another seed threshold than the plan's: the
+    summary records ``peakth``, and the evidence test judges the sources
+    by their height above it (a folder made with the network's earlier
+    default, 8, is not collected with today's, 3)."""
+    used, given = float(plan.params.peak_th), float(params.peak_th)
+    if used != given:
+        raise ValueError(
+            f"{what} was seeded with peak_th={used:g}, these settings have "
+            f"{given:g}: run the stages again from localization with these "
+            f"settings (giant silo redoes them), or collect with "
+            f"--peak-th {used:g}"
+        )
+
+
 def check_plan_support(what: str, plan, params: SiloParams) -> None:
     """Refuse to extract with a footprint support other than the one the
     plan's zones were made for (``valid_kernel``: one per run)."""

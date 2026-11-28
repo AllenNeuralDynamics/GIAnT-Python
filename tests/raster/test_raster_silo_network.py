@@ -663,6 +663,27 @@ def test_earlier_network_defaults_are_localized_again(tmp_path, fake):
     assert old.stage_settings("solve") == NET.stage_settings("solve")
 
 
+def test_collect_refuses_another_seed_threshold(tmp_path, fake):
+    """A standalone collect of a folder seeded with the network's earlier
+    default (peak_th 8) is refused under today's (3), which would record
+    peakth 3 and judge the sources' evidence against it; the earlier
+    settings collect it."""
+    old = replace(NET, peak_th=8.0, min_source_event_rate=0.0)
+    s = SiloSession.open(make_session(tmp_path / "s"))
+    bdir = write_baselines(tmp_path / "s", tmp_path / "b")
+    silo.localize(s, old, EX, baseline_dir=bdir)
+    silo.plan(s, old, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, old, EX, baseline_dir=bdir)
+    for job in silo_solve.dispatch(s, old, 3, EX):
+        silo_solve.solve_job(job, execution=EX)
+    with pytest.raises(ValueError, match="seeded with peak_th=8.*--peak-th 8"):
+        silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+    record = silo_collect.collect(s, old, EX, baseline_dir=bdir)
+    assert record is not None
+    with h5py.File(s.out_dir / "experiment_summary.h5", "r") as f:
+        assert float(np.ravel(f["params/peakth"][()])[0]) == 8.0
+
+
 def test_unrecorded_network_localization_is_redone(tmp_path, fake):
     """A localization file without the record of its baseline (made before
     it was recorded) counts as the moving median's: with the network's
