@@ -201,14 +201,16 @@ def check_plan_support(what: str, plan, params: SiloParams) -> None:
     )
 
 
-def trial_null_seed(base: int, d: int, t: int) -> int:
+def trial_null_seed(base: int, d: int, t: int, draws: int = 1) -> int:
     """The first null seed of trial-path ``(d, t)`` (zero-based) when the
     run keeps its null images: ``base`` plus a trial-path offset, so that
     the trials' null movies are independent draws (with one seed for all
     trials the same random stream recurs in every trial, and the combined
-    null keeps much of one trial's spread). Offsets are 1000 apart, more
-    than the draws of a trial."""
-    return int(base) + 1000 * (1 + int(t) + 100000 * int(d))
+    null keeps much of one trial's spread). A trial-path's ``draws`` seeds
+    (``seed .. seed + draws - 1``) never overlap another's: offsets are
+    ``max(1000, draws)`` apart."""
+    width = max(1000, int(draws))
+    return int(base) + width * (1 + int(t) + 100000 * int(d))
 
 
 def _localize_job(job: dict) -> dict:
@@ -221,7 +223,12 @@ def _localize_job(job: dict) -> dict:
     p = SiloParams(**job["params"])
     lp = p.localization_params(job["align_hz"])
     if p.localization_keep_null:
-        lp = replace(lp, null_seed=trial_null_seed(lp.null_seed, *job["unit"]))
+        lp = replace(
+            lp,
+            null_seed=trial_null_seed(
+                lp.null_seed, *job["unit"], draws=lp.null_draws
+            ),
+        )
     loc, trial = localize_trial(
         job["moco_dir"],
         job["movie"],

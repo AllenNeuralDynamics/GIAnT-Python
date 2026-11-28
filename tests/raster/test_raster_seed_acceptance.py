@@ -364,3 +364,37 @@ def test_trial_null_seeds_are_independent():
     s = sorted(seeds)
     assert min(np.diff(s)) >= 1000 and min(s) > 0
     assert trial_null_seed(7, 0, 0) == trial_null_seed(0, 0, 0) + 7
+
+
+def test_pixel_rule_uses_the_fits_pixel_edges():
+    """Beside a gap in the imaged columns the fits' pixel is wider, and the
+    'pixel' rule integrates the same wider pixel."""
+    from giant_python.extraction.raster.peaks import _finish, _pixel_bounds
+
+    finite = np.ones((20, 20), bool)
+    finite[:, 11:14] = False  # a gap of 3 columns right of column 10
+    (ylo, yhi), (xlo, xhi) = _pixel_bounds(finite)
+    np.testing.assert_allclose([ylo[5], yhi[5]], [5.5, 6.5])
+    assert xhi[10] - xlo[10] == pytest.approx(2.5)  # midpoint to column 15
+    theta = np.array([[0.3, 10.0, 11.4, 0.6]])  # 1-based centre in col 11
+    excl = np.zeros((20, 20), bool)
+    unit = _finish(theta, 0.22, excl, False, "pixel")
+    wide = _finish(
+        theta, 0.22, excl, False, "pixel", 0.0, ((ylo, yhi), (xlo, xhi))
+    )
+    assert unit.shape[0] == 0 and wide.shape[0] == 1
+
+
+def test_trial_null_seeds_leave_room_for_many_draws():
+    """With more draws than the default block, blocks widen so that no two
+    trial-paths share a seed."""
+    from giant_python.pipeline.silo import trial_null_seed
+
+    draws = 2500
+    used = set()
+    for d in range(2):
+        for t in range(4):
+            s0 = trial_null_seed(0, d, t, draws)
+            block = set(range(s0, s0 + draws))
+            assert not block & used
+            used |= block

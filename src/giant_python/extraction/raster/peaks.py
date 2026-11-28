@@ -337,6 +337,7 @@ def get_act_im_peaks(  # noqa: C901
             exclusion_mask is not None,
             amplitude_rule,
             mu_bg,
+            _pixel_bounds(finite) if amplitude_rule == "pixel" else None,
         )
 
     p_y, p_x = _find_f(p_tmp)
@@ -436,6 +437,7 @@ def get_act_im_peaks(  # noqa: C901
         exclusion_mask is not None,
         amplitude_rule,
         mu_bg,
+        _pixel_bounds(finite) if amplitude_rule == "pixel" else None,
     )
 
 
@@ -448,19 +450,48 @@ def _next_to_another(theta, idx, merge_px):
     return bool(d.min() < merge_px)
 
 
-def _finish(theta, peak_thresh, excl, masked, rule="matlab", mu_bg=0.0):
+def _pixel_bounds(finite: np.ndarray):
+    """1-based ``(lo, hi)`` edges of every row and of every column, as the
+    local fit integrates them: from the rows and columns that hold data
+    (:func:`_edges`, so a pixel beside a gap is wider), unit pixels
+    elsewhere. (MATLAB's fit takes the edges of the pixels it fits, a
+    subset; they differ only beside gaps of that subset.)"""
+    out = []
+    for axis in (1, 0):  # rows (any column finite), then columns
+        n = finite.shape[1 - axis]
+        lo = np.arange(n) + 0.5
+        hi = lo + 1.0
+        used = np.flatnonzero(finite.any(axis=axis))
+        if used.size:
+            e = _edges(used + 1.0)
+            lo[used], hi[used] = e[:-1], e[1:]
+        out.append((lo, hi))
+    return out
+
+
+def _finish(
+    theta, peak_thresh, excl, masked, rule="matlab", mu_bg=0.0, bounds=None
+):
     """Drop peaks too small for the threshold and (if ``masked``) peaks
     whose centre ended in the exclusion mask; 0-based ``N x 4``.
 
     ``rule`` 'matlab': getActImPeaks' test; 'pixel': the peak's own value
     (above ``mu_bg``, the level it was fitted above) on the pixel its centre
-    falls in (see :func:`get_act_im_peaks`)."""
+    falls in, integrated over that pixel's edges in the fits (``bounds``
+    from :func:`_pixel_bounds`; unit pixels when None; see
+    :func:`get_act_im_peaks`)."""
     s = np.maximum(theta[:, 3], np.finfo(float).eps)
     if rule == "pixel":
         iy, ix = _rounded_index(theta, excl.shape)
+        if bounds is None:
+            (ylo, yhi), (xlo, xhi) = (
+                (np.arange(n) + 0.5, np.arange(n) + 1.5) for n in excl.shape
+            )
+        else:
+            (ylo, yhi), (xlo, xhi) = bounds
         own = theta[:, 0] * (
-            _integral(iy + 0.5, iy + 1.5, theta[:, 1], s)
-            * _integral(ix + 0.5, ix + 1.5, theta[:, 2], s)
+            _integral(ylo[iy], yhi[iy], theta[:, 1], s)
+            * _integral(xlo[ix], xhi[ix], theta[:, 2], s)
         )
         theta = theta[~(own + mu_bg < peak_thresh)]
     else:
