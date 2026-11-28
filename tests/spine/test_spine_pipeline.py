@@ -6,7 +6,11 @@ import numpy as np
 import pytest
 
 from giant_python.cli import main
-from giant_python.spine.pipeline import make_spine_summary, table_trials
+from giant_python.spine.pipeline import (
+    _stem,
+    make_spine_summary,
+    table_trials,
+)
 from giant_python.spine.product import read_product
 from giant_python.spine.readout import norm_log
 from giant_python.spine.summary_io import RunSummary, TrialMap
@@ -232,3 +236,29 @@ def test_write_atomic_gives_each_writer_its_own_file(tmp_path):
     with pytest.raises(RuntimeError):
         _write_atomic(other, fail)
     assert [p.name for p in dest.parent.iterdir()] == ["x.txt"]
+
+
+def test_stem_strips_windows_folders():
+    """A table written on Windows gives the bare stem on any system."""
+    name = "E1T1DMD1_REGISTERED_DOWNSAMPLED-80Hz.tif"
+    assert _stem("C:\\moco\\" + name) == "E1T1DMD1"
+    assert _stem("/data/moco/" + name) == "E1T1DMD1"
+    assert _stem("E1T1DMD1.tif") is None
+
+
+def test_network_images_follow_the_runs_discards(tmp_path):
+    """Without overrides the network images leave out the frames the run
+    discarded (``params/discardInitial_s``); an explicit value wins."""
+    s = syn.make_session(tmp_path, discard_initial_s=0.5)
+    kw = dict(baseline_dir=s["baselines"], moco_dir=s["moco"], trim_s=0.1)
+    rep = make_spine_summary(s["run"], s["table"], tmp_path / "a", **kw)
+    prod = read_product(rep["output"])
+    assert prod["attrs"]["settings"]["discard_initial_s"] == 0.5
+    n_run = prod["paths"][1]["image_attrs"]["f0_net"]["n_frames"]
+    # 40 discarded frames at the start, 8 trimmed at the end
+    assert (n_run == syn.N_FRAMES - 48).all()
+    rep0 = make_spine_summary(
+        s["run"], s["table"], tmp_path / "b", discard_initial_s=0.0, **kw
+    )
+    n0 = read_product(rep0["output"])["paths"][1]["image_attrs"]["f0_net"]
+    assert (n0["n_frames"] == syn.N_FRAMES - 16).all()

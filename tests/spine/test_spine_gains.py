@@ -115,6 +115,15 @@ def test_results_files_select_the_plan_and_the_exact_trial(tmp_path):
     )
     with pytest.raises(ValueError, match="more than one solve"):
         results_files(work, 1, 1)
+    # other numerical settings (solve_settings) of the same science
+    syn.write_results(
+        res / "path1_trial0003_s1.h5",
+        {0: ([0], info)},
+        container_hash="c1-2",
+        solve_settings="other-iterations",
+    )
+    with pytest.raises(ValueError, match="more than one solve"):
+        results_files(work, 1, 2)
 
 
 def test_trial_gains_counts_a_copied_subproblem_once(tmp_path):

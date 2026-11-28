@@ -55,20 +55,23 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--align-hz",
         type=float,
-        default=80.0,
-        help="Frame rate of the registered movies (default 80).",
+        default=None,
+        help="Frame rate of the registered movies (default: the run's "
+        "alignHz, else 80).",
     )
     p.add_argument(
         "--motion-thresh",
         type=float,
-        default=2.0,
-        help="SiLo's motion threshold for discarded frames (default 2).",
+        default=None,
+        help="SiLo's motion threshold for discarded frames (default: the "
+        "run's motionThresh, else 2).",
     )
     p.add_argument(
         "--discard-initial-s",
         type=float,
-        default=0.0,
-        help="Seconds discarded at the start of each trial (default 0).",
+        default=None,
+        help="Seconds discarded at the start of each trial (default: the "
+        "run's discardInitial_s, else 0).",
     )
     p.add_argument(
         "--affine-base",

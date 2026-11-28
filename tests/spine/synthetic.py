@@ -83,13 +83,16 @@ def make_session(
     with_f0_silo: bool = True,
     activity_channel: int = 1,
     missing_trial: int | None = None,
+    discard_initial_s: float | None = None,
 ) -> dict:
     """Write the synthetic session under ``root``; return its folders.
 
     ``dF_ls`` counts up through the frames in file channel 1 and from 1000
     in file channel 2; ``activity_channel`` is the run's
     ``params/activityChannel``. ``missing_trial`` (zero-based) gets NaN
-    traces, as a trial without extracted sources.
+    traces, as a trial without extracted sources. ``discard_initial_s``
+    is recorded as the run's ``params/discardInitial_s`` (not recorded if
+    None).
     """
     root = Path(root)
     run = root / "run"
@@ -107,6 +110,8 @@ def make_session(
             "numChannels": 2.0,
         }
     }
+    if discard_initial_s is not None:
+        exp["params"]["discardInitial_s"] = float(discard_initial_s)
     per: dict = {}
     dF = np.tile(np.arange(N_TRIALS * 10, dtype=float), (len(SOURCES), 2, 1))
     dF[:, 1] += 1000

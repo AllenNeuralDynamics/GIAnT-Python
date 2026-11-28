@@ -289,13 +289,20 @@ class RunSummary:
                 affine[:, :, 2] += affine[:, :, 0] + affine[:, :, 1] - 1
         return TrialMap(affine, None)
 
+    def param(self, name: str, default=None):
+        """A scalar setting of the run (the summary's ``params/<name>``),
+        or ``default`` if it is not recorded."""
+        with self._exp() as f:
+            key = f"params/{name}"
+            if key not in f:
+                return default
+            v = np.asarray(f[key][()]).ravel()
+            return float(v[0]) if v.size else default
+
     def activity_channel(self) -> int:
         """The run's activity channel (one-based file channel, the
         summary's ``params/activityChannel``; 1 if it is not recorded)."""
-        with self._exp() as f:
-            if "params/activityChannel" not in f:
-                return 1
-            return int(np.asarray(f["params/activityChannel"][()]).ravel()[0])
+        return int(self.param("activityChannel", 1))
 
     def activity(self, path: int) -> dict:
         """Per-trial activity of each source: the mean of ``dF_ls`` and the

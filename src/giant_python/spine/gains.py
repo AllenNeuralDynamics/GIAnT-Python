@@ -76,7 +76,8 @@ def current_results(files, plan: str) -> list:
     settings hash ``plan``, as SILo's collect stage selects them.
 
     Files of other plans are left out. The rest must come from one solve
-    (one ``solve_science`` and ``container_hash``); otherwise the work
+    (one ``solve_science``, ``solve_settings`` and ``container_hash``, as
+    the collect stage requires of a container's files); otherwise the work
     folder holds results of earlier runs that the summaries may not have
     used.
 
@@ -90,7 +91,11 @@ def current_results(files, plan: str) -> list:
         with h5py.File(path, "r") as f:
             if _attr(f, "plan_hash") != plan:
                 continue
-            key = (_attr(f, "solve_science"), _attr(f, "container_hash"))
+            key = (
+                _attr(f, "solve_science"),
+                _attr(f, "solve_settings"),
+                _attr(f, "container_hash"),
+            )
         groups.setdefault(key, []).append(path)
     if len(groups) > 1:
         names = "; ".join(

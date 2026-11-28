@@ -26,7 +26,7 @@ are also read out as GIAnT-MATLAB's ``user_rois/per_trial_F0``
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import h5py
 import numpy as np
@@ -52,7 +52,10 @@ def _stem(name) -> str | None:
     name = str(name) if name is not None else ""
     if _REGISTERED not in name:
         return None
-    return Path(name).name.split(_REGISTERED)[0]
+    # tables written on Windows keep backslashes, which Linux paths do not
+    # split
+    base = PurePosixPath(name.replace("\\", "/")).name
+    return base.split(_REGISTERED)[0]
 
 
 def table_trials(table_path, path: int) -> tuple[list, np.ndarray]:
@@ -212,9 +215,9 @@ def make_spine_summary(  # noqa: C901
     moco_dir=None,
     paths=None,
     trim_s: float = 1.0,
-    align_hz: float = 80.0,
-    motion_thresh: float = 2.0,
-    discard_initial_s: float = 0.0,
+    align_hz: float | None = None,
+    motion_thresh: float | None = None,
+    discard_initial_s: float | None = None,
     cache_dir=None,
     overwrite: bool = False,
     images_only: bool = False,
@@ -237,9 +240,15 @@ def make_spine_summary(  # noqa: C901
         them there is no ``f0_net`` image.
     paths : list of int, optional
         Imaging paths (default: all in the run).
-    trim_s, align_hz, motion_thresh, discard_initial_s : float
-        Settings of the network's per-trial F0 images
-        (:func:`~giant_python.spine.images.kept_frames`).
+    trim_s : float
+        Seconds left out at each end of a trial in the network's per-trial
+        F0 images (:func:`~giant_python.spine.images.kept_frames`).
+    align_hz, motion_thresh, discard_initial_s : float, optional
+        The registered frame rate and SILo's motion discards for those
+        images; by default the run's own (``params/alignHz``,
+        ``params/motionThresh``, ``params/discardInitial_s``; 80, 2 and 0
+        where the run does not record them), so that the images leave out
+        the frames that SILo left out.
     cache_dir : str or Path, optional
         Cache of the network's F0 stacks (default ``<out_dir>/cache``).
     overwrite : bool
@@ -268,6 +277,13 @@ def make_spine_summary(  # noqa: C901
     if gain_work_dir is not None and baseline_dir is None:
         raise ValueError("--gain-work-dir needs --baseline-dir")
     run = RunSummary(run_dir)
+    # the run's own discards unless overridden (before the cache keys)
+    if align_hz is None:
+        align_hz = run.param("alignHz", 80.0)
+    if motion_thresh is None:
+        motion_thresh = run.param("motionThresh", 2.0)
+    if discard_initial_s is None:
+        discard_initial_s = run.param("discardInitial_s", 0.0)
     out_dir = Path(out_dir)
     cache_dir = Path(cache_dir) if cache_dir else out_dir / "cache"
     paths = list(paths) if paths else run.paths
