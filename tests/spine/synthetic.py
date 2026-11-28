@@ -216,10 +216,30 @@ def write_results(path: Path, subproblems: dict, **attrs) -> None:
             g.attrs["info"] = json.dumps(info)
 
 
-def make_gain_work(root: Path, gain_of_trial) -> Path:
+def baseline_record(path: Path) -> str:
+    """The ``network_baseline`` attribute SILo's results record for a
+    baseline file (its identity and network)."""
+    st = Path(path).stat()
+    return json.dumps(
+        {
+            "file": {
+                "name": Path(path).name,
+                "size": st.st_size,
+                "mtime_ns": st.st_mtime_ns,
+            },
+            "network": {"checkpoint": "synthetic.pt", "step": 1},
+        },
+        sort_keys=True,
+    )
+
+
+def make_gain_work(root: Path, gain_of_trial, baselines=None) -> Path:
     """A minimal 'gain'-mode work folder: a plan per path with the selected
     pixels, and per trial-path one results file with two overlapping
     subproblems whose gains are ``gain_of_trial(t)`` and twice that.
+
+    With ``baselines`` (the session's folder) the results record its files
+    as the baselines the gains were fitted against.
 
     Returns the work folder.
     """
@@ -239,6 +259,11 @@ def make_gain_work(root: Path, gain_of_trial) -> Path:
         )
         for t in range(N_TRIALS):
             g0 = float(gain_of_trial(t))
+            extra = {}
+            if baselines is not None:
+                extra["network_baseline"] = baseline_record(
+                    Path(baselines) / f"E1T{t + 1}DMD{p}_BASELINE-80Hz.h5"
+                )
             write_results(
                 work / "results" / f"path{p}_trial{t + 1:04d}.h5",
                 {
@@ -249,5 +274,6 @@ def make_gain_work(root: Path, gain_of_trial) -> Path:
                     for k, pix in enumerate(halves)
                 },
                 container_hash=f"c{p}-{t}",
+                **extra,
             )
     return work

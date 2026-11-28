@@ -203,3 +203,32 @@ def test_network_images_take_a_trial_warp(session, tmp_path):
     )
     np.testing.assert_allclose(a.images, b.images, equal_nan=True)
     assert np.isfinite(a.images).any()
+
+
+def test_write_atomic_gives_each_writer_its_own_file(tmp_path):
+    """A writer that starts while another is writing the same file does not
+    share its temporary file; both finish, and nothing is left behind. A
+    failed write leaves no file."""
+    from giant_python.spine.pipeline import _write_atomic
+
+    dest = tmp_path / "out" / "x.txt"
+
+    def outer(tmp):
+        """Write, with a second writer of the same file in between."""
+        tmp.write_text("outer")
+        _write_atomic(dest, lambda t: t.write_text("inner"))
+        assert tmp.read_text() == "outer"
+
+    _write_atomic(dest, outer)
+    assert dest.read_text() == "outer"
+    assert [p.name for p in dest.parent.iterdir()] == ["x.txt"]
+
+    def fail(tmp):
+        """A write that fails."""
+        tmp.write_text("partial")
+        raise RuntimeError("stop")
+
+    other = tmp_path / "out" / "y.txt"
+    with pytest.raises(RuntimeError):
+        _write_atomic(other, fail)
+    assert [p.name for p in dest.parent.iterdir()] == ["x.txt"]

@@ -31,7 +31,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .gains import gain_maps, plan_file, results_files
+from .gains import (
+    check_gain_baselines,
+    gain_maps,
+    plan_file,
+    results_files,
+)
 from .images import F0Stack, file_identity, network_f0_stack, stack_key
 from .product import FORMAT_VERSION, _code_version, write_product
 from .readout import common_valid, mask_mean, norm_log, project
@@ -72,6 +77,38 @@ def table_trials(table_path, path: int) -> tuple[list, np.ndarray]:
         m = _TRIAL_RE.search(str(x))
         acq.append(int(m.group(1)) if m else -1)
     return stems, np.asarray(acq, np.int64)
+
+
+def _write_atomic(dest, write) -> None:
+    """Write ``dest`` through a temporary file of its own in the same folder
+    (``write(tmp)``), then move it into place.
+
+    Concurrent writers of the same file each have their own temporary file.
+    If the move is refused because another writer's file is in place and
+    open (Windows), that file is kept: the same name means the same key and
+    so the same content.
+    """
+    import os
+    import tempfile
+
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f"{dest.name}.", suffix=".tmp", dir=dest.parent
+    )
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        write(tmp)
+        try:
+            os.replace(tmp, dest)
+        except PermissionError:
+            if not dest.is_file():
+                raise
+            tmp.unlink(missing_ok=True)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _f0_cache_key(stems, baseline_dir, moco_dir, tmap, shape, settings):
@@ -147,21 +184,23 @@ def cached_f0_stack(
         discard_initial_s=settings["discard_initial_s"],
         progress=progress,
     )
-    Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    tmp = cache.with_suffix(".tmp")
-    with h5py.File(tmp, "w") as f:
-        f.create_dataset(
-            "images",
-            data=st.images,
-            chunks=(1,) + st.images.shape[1:],
-            compression="gzip",
-            compression_opts=4,
-            shuffle=True,
-        )
-        f["n_frames"] = st.n_frames
-        f.attrs["inputs"] = json.dumps(st.inputs)
-        f.attrs["attrs"] = json.dumps(st.attrs, default=str)
-    tmp.replace(cache)
+
+    def write(tmp):
+        """Write the stack to ``tmp``."""
+        with h5py.File(tmp, "w") as f:
+            f.create_dataset(
+                "images",
+                data=st.images,
+                chunks=(1,) + st.images.shape[1:],
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
+            f["n_frames"] = st.n_frames
+            f.attrs["inputs"] = json.dumps(st.inputs)
+            f.attrs["attrs"] = json.dumps(st.attrs, default=str)
+
+    _write_atomic(cache, write)
     return st, key, False
 
 
@@ -210,7 +249,8 @@ def make_spine_summary(  # noqa: C901
     gain_work_dir : str or Path, optional
         Work folder of the run (a 'gain' baseline mode, N1): its results
         files' per-pixel gains give the ``f0_gain`` image, the network's F0
-        image rescaled as the solver rescaled it (needs ``baseline_dir``).
+        image rescaled as the solver rescaled it (needs ``baseline_dir``,
+        with the baseline files the run's gains were fitted against).
     affine_base : {0, 1, None}
         Index base of the run's affine trial maps (see
         :meth:`~giant_python.spine.summary_io.RunSummary.trial_map`).
@@ -287,6 +327,12 @@ def make_spine_summary(  # noqa: C901
             inputs["f0_keys"][n] = key
             report["paths"][n] = {"f0_key": key, "f0_reused": reused}
             if gain_work_dir is not None:
+                # the gains apply only to the baselines they were fitted to
+                check_gain_baselines(
+                    gain_work_dir,
+                    n,
+                    [None if i is None else i["baseline"] for i in st.inputs],
+                )
                 inputs["gain_results"][n] = {
                     "plan": file_identity(plan_file(gain_work_dir, n)),
                     "results": [
@@ -444,10 +490,9 @@ def make_spine_summary(  # noqa: C901
                 "rois": {k: len(v) for k, v in rois.items()},
             }
         )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp")
     say(f"writing {out}")
-    write_product(tmp, content, settings, inputs, run_dir)
-    tmp.replace(out)
+    _write_atomic(
+        out, lambda tmp: write_product(tmp, content, settings, inputs, run_dir)
+    )
     report["reused"] = False
     return report

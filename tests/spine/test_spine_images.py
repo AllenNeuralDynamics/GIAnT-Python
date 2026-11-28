@@ -8,6 +8,7 @@ import pytest
 
 from giant_python.spine.images import (
     baseline_trial_mean,
+    file_identity,
     kept_frames,
     network_f0_stack,
     stack_key,
@@ -141,3 +142,45 @@ def test_stack_key_changes_with_inputs():
     assert a == stack_key("x", {"trim_s": 1.0}, np.zeros(3))
     assert a != stack_key("x", {"trim_s": 0.5}, np.zeros(3))
     assert a != stack_key("x", {"trim_s": 1.0}, np.ones(3))
+
+
+def test_file_identity_keeps_folders_apart(tmp_path):
+    """Two files with the same name, size and modification time in
+    different folders have different identities."""
+    import os
+
+    a = tmp_path / "a" / "x.h5"
+    b = tmp_path / "b" / "x.h5"
+    for f in (a, b):
+        f.parent.mkdir()
+        f.write_bytes(b"same")
+        os.utime(f, ns=(10**18, 10**18))
+    ia, ib = file_identity(a), file_identity(b)
+    assert {k: ia[k] for k in ("name", "size", "mtime_ns")} == {
+        k: ib[k] for k in ("name", "size", "mtime_ns")
+    }
+    assert ia != ib
+
+
+def test_network_f0_stack_reads_the_aligned_flags_once(tmp_path):
+    """The aligned flags (a scan of every trial's map) are read once, not
+    per trial."""
+    s = syn.make_session(tmp_path)
+    calls = []
+
+    class CountingMap(TrialMap):
+        """A trial map that counts reads of its aligned flags."""
+
+        @property
+        def aligned(self):
+            """The flags, counting the read."""
+            calls.append(1)
+            return TrialMap.aligned.fget(self)
+
+    affine = np.zeros((syn.N_TRIALS, 2, 3))
+    affine[:, :, :2] = np.eye(2)
+    stems = [f"E1T{t + 1}DMD1" for t in range(syn.N_TRIALS)]
+    network_f0_stack(
+        s["baselines"], s["moco"], stems, CountingMap(affine), (syn.H, syn.W)
+    )
+    assert len(calls) == 1

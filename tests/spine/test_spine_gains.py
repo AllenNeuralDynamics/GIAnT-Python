@@ -57,7 +57,7 @@ def test_readout_adds_the_gain_image(tmp_path):
     """``f0_gain`` is the gain times the network's image, at the selected
     pixels."""
     s = syn.make_session(tmp_path)
-    work = syn.make_gain_work(tmp_path, lambda t: 1.0)
+    work = syn.make_gain_work(tmp_path, lambda t: 1.0, s["baselines"])
     rep = make_spine_summary(
         s["run"],
         s["table"],
@@ -158,7 +158,7 @@ def test_trial_gains_refuses_a_shared_time_course(tmp_path):
 def test_summary_key_follows_the_gain_plan(tmp_path):
     """A changed plan gives a new summary, not the old one reused."""
     s = syn.make_session(tmp_path)
-    work = syn.make_gain_work(tmp_path, lambda t: 1.0)
+    work = syn.make_gain_work(tmp_path, lambda t: 1.0, s["baselines"])
     kw = dict(
         baseline_dir=s["baselines"],
         moco_dir=s["moco"],
@@ -170,3 +170,30 @@ def test_summary_key_follows_the_gain_plan(tmp_path):
         f.attrs["note"] = "replanned"
     rep2 = make_spine_summary(s["run"], s["table"], tmp_path / "out", **kw)
     assert rep2["key"] != rep["key"] and not rep2["reused"]
+
+
+def test_gains_need_the_images_baseline_files(tmp_path):
+    """Gains are used only with the baseline files they were fitted
+    against: a baseline predicted again after the solve, or results that
+    record no network baseline, are refused."""
+    import os
+
+    s = syn.make_session(tmp_path)
+    work = syn.make_gain_work(tmp_path, lambda t: 1.0, s["baselines"])
+    kw = dict(
+        baseline_dir=s["baselines"],
+        moco_dir=s["moco"],
+        trim_s=0.1,
+        gain_work_dir=work,
+    )
+    make_spine_summary(s["run"], s["table"], tmp_path / "out", **kw)
+    b = s["baselines"] / "E1T2DMD1_BASELINE-80Hz.h5"
+    st = b.stat()
+    os.utime(b, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    with pytest.raises(ValueError, match="Path1 trial 2: the gains were"):
+        make_spine_summary(s["run"], s["table"], tmp_path / "out", **kw)
+    os.utime(b, ns=(st.st_atime_ns, st.st_mtime_ns))
+    plain = syn.make_gain_work(tmp_path / "plain", lambda t: 1.0)
+    kw["gain_work_dir"] = plain
+    with pytest.raises(ValueError, match="record no network baseline"):
+        make_spine_summary(s["run"], s["table"], tmp_path / "out", **kw)

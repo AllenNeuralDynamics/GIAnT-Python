@@ -159,11 +159,17 @@ def to_consensus(
 
 
 def file_identity(path) -> dict:
-    """Name, size and modification time of a file (its identity for
-    caching)."""
-    st = Path(path).stat()
+    """Resolved path, name, size and modification time of a file (its
+    identity for caching).
+
+    The path keeps files of other folders apart, such as copies that kept
+    their modification times.
+    """
+    path = Path(path)
+    st = path.stat()
     return {
-        "name": Path(path).name,
+        "path": str(path.resolve()),
+        "name": path.name,
         "size": int(st.st_size),
         "mtime_ns": int(st.st_mtime_ns),
     }
@@ -239,10 +245,11 @@ def network_f0_stack(
         "motion_thresh": float(motion_thresh),
         "discard_initial_s": float(discard_initial_s),
     }
+    aligned = np.asarray(trial_map.aligned, bool)  # scans every map
     for t, stem in enumerate(stems):
         if progress is not None:
             progress(t, n, stem)
-        if stem is None or not bool(trial_map.aligned[t]):
+        if stem is None or not aligned[t]:
             continue
         bpath = baseline_file(baseline_dir, stem)
         apath = Path(moco_dir) / f"{stem}{ALIGNMENT_SUFFIX}"

@@ -24,6 +24,10 @@ summaries do not record which solve they used.
 
 Only the gain modes whose baseline is ``g * b_net`` are read: 'gain' (N1),
 and 'gain_shared' (N2) subproblems whose shared time course stayed at 1.
+The gains apply only to the baseline files they were fitted against: each
+results file records that file's identity (``network_baseline``), and
+:func:`check_gain_baselines` compares it with the files of the network's F0
+images, as SILo's extraction compares the localization's baseline.
 """
 
 from __future__ import annotations
@@ -184,6 +188,66 @@ def results_files(work_dir, path: int, trial: int) -> list:
     if not files:
         return []
     return current_results(files, plan_hash(plan_file(work_dir, path)))
+
+
+_ID_KEYS = ("name", "size", "mtime_ns")
+"""The fields of a file identity that SILo records."""
+
+
+def recorded_baseline(files):
+    """The baseline file a trial-path's results files record as fitted
+    against (``network_baseline``: its name, size and modification time),
+    or None. The files are of one solve, so they record the same file."""
+    for path in files:
+        with h5py.File(path, "r") as f:
+            v = _attr(f, "network_baseline")
+        if v:
+            return json.loads(v).get("file")
+    return None
+
+
+def check_gain_baselines(work_dir, path: int, baselines) -> None:
+    """Check that every trial's gains were fitted against the baseline file
+    that its network F0 image is made from.
+
+    Parameters
+    ----------
+    work_dir : str or Path
+        The run's work folder.
+    path : int
+        Imaging path (one-based).
+    baselines : list of dict or None
+        Per trial, the identity of the network image's baseline file
+        (:func:`~giant_python.spine.images.file_identity`); None for a
+        trial without an image (nothing to check).
+
+    Raises
+    ------
+    ValueError
+        If a trial's results record no network baseline, or another file
+        (other name, size or modification time: for example a baseline
+        predicted again after the solve).
+    """
+    for t, ident in enumerate(baselines):
+        if ident is None:
+            continue
+        files = results_files(work_dir, path, t)
+        if not files:
+            continue
+        rec = recorded_baseline(files)
+        if rec is None:
+            raise ValueError(
+                f"Path{path} trial {t + 1}: the results record no network "
+                "baseline (not a run with the network's baseline)"
+            )
+        want = {k: ident.get(k) for k in _ID_KEYS}
+        got = {k: rec.get(k) for k in _ID_KEYS}
+        if got != want:
+            raise ValueError(
+                f"Path{path} trial {t + 1}: the gains were fitted against "
+                f"another baseline file ({got}) than the network image's "
+                f"({want}); give the baselines the run used, or solve again"
+            )
 
 
 def gain_maps(work_dir, path: int, n_trials: int):
