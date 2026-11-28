@@ -104,8 +104,9 @@ values, for the sources in ``ok`` that it covers:
     part of it is removed and the step test is run on what is left.
 
 The p-values come from ``--n-perm`` (20000) random orders of each source's
-trials (seeded per source with ``--seed``, so a source's p does not depend
-on which other sources are tested), counting a permuted statistic within a
+trials (seeded per source with ``--seed``, so a source's step and brief p
+do not depend on which other sources are tested; its beyond-trend p does,
+through the shared trend), counting a permuted statistic within a
 relative 1e-9 of the observed one as a tie: the step at the first or last
 split depends only on which trial stands alone, so ties are common there.
 q-values come from Benjamini-Hochberg across the tested sources of a path;

@@ -34,7 +34,9 @@ focus) is the first right singular vector ``v`` of the tested sources'
 normalized sizes, signed so that its last three trials sum to a positive
 number (:func:`shared_mode`). Each source's part of it, ``(L . v) v``, is
 removed and the step test is run again on what is left (``resid``), as in
-``spineTrendsResid.m``.
+``spineTrendsResid.m``. Since ``v`` comes from all tested sources, a
+source's beyond-trend statistic and p depend on which sources are tested;
+its step and brief statistics and p do not.
 
 Differences from the MATLAB scripts: the permutations come from numpy's
 generator seeded per source (``(seed, source)``), so p agrees with MATLAB's
@@ -369,8 +371,10 @@ _ORDER_CELLS = 1_000_000
 
 def trial_orders(seed: int, source: int, n_perm: int, n_trials: int):
     """The random trial orders of one source: ``(n_perm, n_trials)`` indices
-    from numpy's generator seeded with ``(seed, source)``, so that a
-    source's p-values do not depend on which other sources are tested."""
+    from numpy's generator seeded with ``(seed, source)``, so that the
+    orders, and the step and brief p-values, do not depend on which other
+    sources are tested (the beyond-trend p does, through the shared trend
+    estimated from all tested sources)."""
     return np.concatenate(
         list(_order_chunks(seed, source, n_perm, n_trials, n_perm))
     )

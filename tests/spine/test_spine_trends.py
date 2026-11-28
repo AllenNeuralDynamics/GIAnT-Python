@@ -289,20 +289,23 @@ def test_trend_tests_find_a_planted_step():
 
 
 def test_trend_tests_p_does_not_depend_on_the_others_or_threads():
-    """Each source has its own trial orders: p is the same whichever other
-    sources are tested and however many threads run."""
+    """Each source has its own trial orders: the step and brief p are the
+    same whichever other sources are tested, and no p depends on the
+    threads; the beyond-trend test depends on the tested set through the
+    shared trend."""
     rng = np.random.default_rng(8)
     x = _session(rng, n_src=6, T=12)
     acq = np.arange(12)
     a = trend_tests(x, np.ones(6, bool), acq, n_perm=500, workers=1)
     b = trend_tests(x, np.ones(6, bool), acq, n_perm=500, workers=4)
-    np.testing.assert_array_equal(a["brief_p"], b["brief_p"])
-    np.testing.assert_array_equal(a["step_p"], b["step_p"])
+    for key in ("step_p", "brief_p", "resid_p"):
+        np.testing.assert_array_equal(a[key], b[key])
     ok = np.zeros(6, bool)
     ok[[0, 2]] = True
     c = trend_tests(x, ok, acq, n_perm=500)
     np.testing.assert_array_equal(c["step_p"][[0, 2]], a["step_p"][[0, 2]])
     np.testing.assert_array_equal(c["brief_p"][[0, 2]], a["brief_p"][[0, 2]])
+    assert not np.allclose(c["shared_v"], a["shared_v"])
 
 
 def test_ties_at_the_edge_split_count():
