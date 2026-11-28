@@ -425,7 +425,8 @@ or small region below:
   lines (``P`` lines per cycle from the raw header, else ``3 dt``), leaving
   out SILo's discarded frames. The F0 network's training-data exporter
   (slap2-F0-network ``exportF0TrainingData.m``) uses the movie's own
-  ``dt``, ``ceil(mean(diff(DSframes)))`` (``--kernel exporter``). The
+  ``dt``, ``ceil(mean(diff(DSframes)))`` (``--kernel exporter``; the
+  current training targets were made with it). The
   200 Hz frames are themselves averages (``dt200 =
   ceil(mean(diff(lines)))``), so this smooths fast events twice: on
   noiseless injected GFP events it keeps 0.93-0.95 of an event's 80 Hz
