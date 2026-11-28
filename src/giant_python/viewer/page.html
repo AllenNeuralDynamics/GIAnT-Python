@@ -98,6 +98,7 @@ canvas.view { width: 100%; display: block; background: var(--well); border-radiu
 #srctable th { cursor: pointer; color: var(--text-muted); font-weight: 500; position: sticky; top: 0; background: var(--surface-1); }
 #srctable td:first-child, #srctable th:first-child { text-align: left; }
 #srctable tr:hover td { background: var(--surface-2); cursor: pointer; }
+#srctable .rowpick { padding: 0 6px; min-width: 36px; font-variant-numeric: tabular-nums; }
 details.defs { margin-top: 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; color: var(--text-secondary); }
 details.defs summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
 details.defs li { margin: 3px 0; }
@@ -551,7 +552,9 @@ function table() {
     const va = A.sortKey === "kind" ? order[a.kind] : a[A.sortKey], vb = A.sortKey === "kind" ? order[b.kind] : b[A.sortKey];
     const x = va ?? -1e9, y = vb ?? -1e9; return (x > y ? 1 : x < y ? -1 : 0) * A.sortDir;
   });
-  const tv = (r, k) => k === "kind" ? esc(kindText(r.m)) : k === "run" ? esc(r.run) : k === "id" ? r.id : fmt(r[k]);
+  // the ID is a button, so a source can be picked from the keyboard (its click bubbles to the row's handler)
+  const tv = (r, k) => k === "kind" ? esc(kindText(r.m)) : k === "run" ? esc(r.run)
+    : k === "id" ? `<button type="button" class="rowpick" title="Show ${esc(r.run)} ${r.m.kind === "rej" ? "rejected source" : "source"} ${r.id}">${r.id}</button>` : fmt(r[k]);
   $("srctable").innerHTML = "<thead><tr>" + sortCols.map(([k, t]) => `<th data-k="${k}">${t}${A.sortKey === k ? (A.sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") +
     "</tr></thead><tbody>" + rows.map((r, i) => `<tr data-i="${i}">` + sortCols.map(([k]) => `<td>${tv(r, k)}</td>`).join("") + "</tr>").join("") + "</tbody>";
   $("srctable").querySelectorAll("th").forEach((th) => th.onclick = () => { const k = th.dataset.k; A.sortDir = A.sortKey === k ? -A.sortDir : 1; A.sortKey = k; table(); });
