@@ -390,6 +390,11 @@ async function loadPath(n, near, view) {
     for (let k = 0; k < S.data.n; k++) { const d = (S.data.rows[k] - near.r) ** 2 + (S.data.cols[k] - near.c) ** 2; if (d < best) { best = d; s = k; } }
   } else if (S.src >= 0 && S.src < S.data.n && !near) s = S.src;
   if (EMB && !near) { const inc = exportedSources(n); if (inc.length && !inc.includes(s)) s = inc[0]; }
+  if (EMB) {
+    // crops in an image the export holds for this source
+    const imgs = pm.images.map(x => x.name).filter(x => EMB.crops[`${n}|${s}|${x}|image|`]);
+    if (imgs.length && !imgs.includes($("cimg").value)) $("cimg").value = imgs[0];
+  }
   buildTable();
   await drawField(true, view === null || view === undefined);
   if (g !== S.gen.path) return;
@@ -696,7 +701,7 @@ async function refreshOther() {
     S.otherData = { key, d: od };
     let best = Infinity, k = -1;
     for (let i = 0; i < od.n; i++) { const d = (od.rows[i] - S.data.rows[S.src]) ** 2 + (od.cols[i] - S.data.cols[S.src]) ** 2; if (d < best) { best = d; k = i; } }
-    if (k >= 0 && best <= 2.5 ** 2) return { name: S.meta.products[j].name, d: od, k };
+    if (k >= 0 && best <= 2.5 ** 2) return { name: S.meta.products[j].name, d: od, k, acq: om.acquisition };
   } catch (e) { /* the comparison is optional */ }
   return null;
 }
@@ -723,7 +728,7 @@ async function drawSize() {
   // the other summary's nearest source, in the same image or else in its own leading one
   let othY = null, othImg = null;
   if (oth) { othImg = oth.d.normalized[prim] ? prim : PREFER.find(x => oth.d.normalized[x]);
-    if (othImg) othY = oth.d.normalized[othImg].map(row => pct(row[oth.k])); }
+    if (othImg) othY = alignOther(oth.d.normalized[othImg].map(row => pct(row[oth.k])), oth.acq); }
   let lo = Infinity, hi = -Infinity;
   const upd = arr => { if (arr) for (const x of arr) if (Number.isFinite(x)) { lo = Math.min(lo, x); hi = Math.max(hi, x); } };
   ser.forEach(s => upd(s.y)); upd(band.map(b => b[0])); upd(band.map(b => b[1])); upd(shared); upd(othY);
@@ -772,11 +777,27 @@ async function drawSize() {
   if (tr && tr.tested[k]) {
     const q = tr.attrs.fdr_q; const b = (p, qq, txt) => num(qq) <= q ? `<b>${txt}</b>` : txt;
     tt += tr.step_after[k] >= 0 ? `; ${b(tr.step_p[k], tr.step_q[k], `step ${fmtPct(pct(tr.step_d[k]))}% after trial ${acqOf(tr.step_after[k])} (p ${fmtP(tr.step_p[k])}, q ${fmtP(tr.step_q[k])})`)}` : "; no step";
-    const bt = []; for (let i = 0; i < tr.brief_len[k]; i++) bt.push(tr.brief_first[k] + i);
+    const bt = briefTrials(tr, k);
     tt += bt.length ? `; ${b(tr.brief_p[k], tr.brief_q[k], `brief ${fmtPct(pct(tr.brief_d[k]))}% at ${trialList(bt)} (p ${fmtP(tr.brief_p[k])})`)}` : "; no brief change";
     tt += tr.resid_after[k] >= 0 ? `; ${b(tr.resid_p[k], tr.resid_q[k], `beyond trend ${fmtPct(pct(tr.resid_d[k]))}% after ${acqOf(tr.resid_after[k])} (p ${fmtP(tr.resid_p[k])})`)}` : "; no step beyond the trend";
   } else if (tr) tt += " (not tested: not in the reference set)";
   $("stitle").innerHTML = tt;
+}
+function alignOther(y, acqOther) {
+  // the other summary's series on this summary's trials, matched by acquisition
+  // number (by trial when neither has numbers); null when they cannot be matched
+  const acq = pmeta().acquisition;
+  const known = a => a.length && a.every(v => v >= 0);
+  if (known(acq) && known(acqOther)) {
+    const at = new Map(acqOther.map((a, i) => [a, i]));
+    return acq.map(a => (at.has(a) ? y[at.get(a)] : NaN));
+  }
+  return acq.length === acqOther.length && !known(acq) && !known(acqOther) ? y : null;
+}
+function briefTrials(tr, k) {
+  // the trials of a source's brief run: brief_len entries of the tested trials from brief_first
+  const i = tr.trials.indexOf(tr.brief_first[k]);
+  return i < 0 ? [] : tr.trials.slice(i, i + tr.brief_len[k]);
 }
 function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9)))); const m = x / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; }
 function eachBlock(nT, fn) { const bl = pmeta().blocks; let a = 0; for (let t = 1; t <= nT; t++) if (t === nT || bl[t] !== bl[t - 1]) { fn(a, t - 1); a = t; } }
@@ -860,7 +881,7 @@ function buildTable() {
       if (!tested) { r += cell("", "nt").repeat(4); continue; }
       const pass = num(tr[`${t}_q`][k]) <= q ? "pass" : "";
       let at;
-      if (t === "brief") { const bt = []; for (let i = 0; i < tr.brief_len[k]; i++) bt.push(tr.brief_first[k] + i); at = trialList(bt); }
+      if (t === "brief") at = trialList(briefTrials(tr, k));
       else at = acqOf(tr[`${t}_after`][k]);
       r += cell(fmtPct(pct(tr[`${t}_d`][k])), pass) + cell(at) + cell(fmtP(tr[`${t}_p`][k]), pass) + cell(fmtP(tr[`${t}_q`][k]), pass);
     }

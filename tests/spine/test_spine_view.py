@@ -533,3 +533,36 @@ def test_summary_without_rois_loads(product, tmp_path):
     store = SpineStore([(None, copy)])
     assert store.sources(0, 1)["n"] == 0
     assert store.meta()["products"][0]["paths"][1]["n_sources"] == 0
+
+
+def test_server_on_ipv6_loopback_and_port_80_names(product):
+    """The server binds an IPv6 literal, and at port 80 trusts the names
+    without a port, as browsers send them."""
+    import socket as so
+
+    from giant_python.spine.view.server import _bracket
+
+    from giant_python.spine.view.server import allowed_hosts
+
+    assert _bracket("::1") == "[::1]" and _bracket("localhost") == "localhost"
+    at80 = allowed_hosts("127.0.0.1", 80)
+    assert "127.0.0.1" in at80 and "localhost:80" in at80
+    assert "127.0.0.1" not in allowed_hosts("127.0.0.1", 8790)
+    assert allowed_hosts("0.0.0.0", 8790) == frozenset()
+    if not so.has_ipv6:
+        pytest.skip("no IPv6")
+    store = SpineStore([(None, product)])
+    try:
+        srv = make_server(store, host="::1", port=0)
+    except OSError:
+        pytest.skip("no IPv6 loopback")
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    port = srv.server_address[1]
+    try:
+        assert f"[::1]:{port}" in srv.RequestHandlerClass.allowed
+        with urllib.request.urlopen(f"http://[::1]:{port}/api/meta") as r:
+            assert r.status == 200
+    finally:
+        srv.shutdown()
+        srv.server_close()

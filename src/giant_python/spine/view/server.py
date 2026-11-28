@@ -20,6 +20,7 @@ API (used by the page): GET ``/api/meta``, ``/api/sources?prod=&path=``,
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -220,16 +221,36 @@ def make_server(store: SpineStore, host="127.0.0.1", port=DEFAULT_PORT):
     trusts every host name.
     """
     handler = make_handler(store)
-    srv = ThreadingHTTPServer((host, port), handler)
-    bound = srv.server_address[1]
-    if host not in ("0.0.0.0", "::", ""):
-        names = set(_LOOPBACK) | {host.lower()}
-        names = {
-            f"[{h}]" if ":" in h and not h.startswith("[") else h
-            for h in names
-        }
-        handler.allowed = frozenset(f"{h}:{bound}" for h in names)
+    cls = _Server6 if ":" in host else ThreadingHTTPServer
+    srv = cls((host.strip("[]"), port), handler)
+    handler.allowed = allowed_hosts(host, srv.server_address[1])
     return srv
+
+
+def allowed_hosts(host: str, port: int) -> frozenset:
+    """The ``Host`` values a server bound to ``host`` and ``port``
+    trusts: the loopback names and ``host``, with the port (and without
+    it at port 80, which browsers leave out); empty (every name) when
+    bound to all interfaces."""
+    if host in ("0.0.0.0", "::", "[::]", ""):
+        return frozenset()
+    names = {_bracket(h) for h in set(_LOOPBACK) | {host.lower()}}
+    allowed = {f"{h}:{port}" for h in names}
+    if port == 80:
+        allowed |= names
+    return frozenset(allowed)
+
+
+class _Server6(ThreadingHTTPServer):
+    """The threading server on an IPv6 address."""
+
+    address_family = socket.AF_INET6
+
+
+def _bracket(host: str) -> str:
+    """An IPv6 literal in brackets, as URLs and Host headers write it."""
+    host = host.strip("[]")
+    return f"[{host}]" if ":" in host else host
 
 
 def product_args(items) -> list:
@@ -278,7 +299,7 @@ def serve(args) -> int:
         product_args(args.products), args.marks, crop_half=args.crop_half
     )
     server = make_server(store, args.host, args.port)
-    url = f"http://{args.host}:{server.server_address[1]}/"
+    url = f"http://{_bracket(args.host)}:{server.server_address[1]}/"
     names = ", ".join(p.name for p in store.products)
     print(f"spine viewer: {names}; serving {url} (Ctrl+C to stop)", flush=True)
     if not args.no_browser:
