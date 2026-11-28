@@ -175,11 +175,17 @@ def test_loaded_passes_on_errors():
 
 
 def test_options_are_checked():
-    """Worker counts are positive integers, the limit positive."""
+    """Worker counts are positive integers, the limit positive; the loader
+    options come after the earlier fields, which keep their positions."""
     with pytest.raises(ValueError):
         SiloExecution(load_workers=0)
     with pytest.raises(ValueError):
         SiloExecution(load_memory_gb=0.0)
+    names = list(SiloExecution.__dataclass_fields__)
+    assert names[-2:] == ["load_workers", "load_memory_gb"]
+    assert names[-4:-2] == ["overwrite", "verbose"]
+    ex = SiloExecution(6, 3, 4, "cpu", "float64", None, "cpu", True, True)
+    assert ex.overwrite and ex.verbose and ex.load_workers == 1
 
 
 @pytest.mark.parametrize("memory", [None, 1e-9])

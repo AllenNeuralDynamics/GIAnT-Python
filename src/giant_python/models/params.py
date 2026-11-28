@@ -1346,6 +1346,11 @@ class SiloExecution:
         GPU only); None solves them one at a time.
     loader_device : str
         Torch device of the trial loader.
+    overwrite : bool
+        Redo units whose outputs exist and were made with the same
+        settings.
+    verbose : bool
+        Print progress messages.
     load_workers : int
         Trials the streamed run loads at once (threads of this process):
         1 loads each trial while the previous one is solved, as MATLAB's
@@ -1357,13 +1362,12 @@ class SiloExecution:
     load_memory_gb : float or None
         With ``load_workers`` above 1: load ahead only while the trials
         loaded and not yet handed to the solver are estimated below this
-        many GB (from the bytes per line of the trials loaded so far; at
-        least one trial is always loaded). None: no limit.
-    overwrite : bool
-        Redo units whose outputs exist and were made with the same
-        settings.
-    verbose : bool
-        Print progress messages.
+        many GB (from the bytes per line of the extracted trials loaded so
+        far; until one has been, and always when none waits, one trial
+        loads at a time). None: no limit.
+
+    The loader options come last, so that positional arguments keep
+    their earlier meaning.
     """
 
     workers: int = 6
@@ -1373,10 +1377,10 @@ class SiloExecution:
     dtype: str = "float64"
     batch_bytes: Optional[float] = None
     loader_device: str = "cpu"
-    load_workers: int = 1
-    load_memory_gb: Optional[float] = None
     overwrite: bool = False
     verbose: bool = False
+    load_workers: int = 1
+    load_memory_gb: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate the options."""
