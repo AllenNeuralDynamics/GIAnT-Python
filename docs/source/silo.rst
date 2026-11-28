@@ -342,6 +342,25 @@ container (:mod:`giant_python.extraction.raster.container`). A trial in
 which no selected pixel has a sample gets a ``.skip.json`` marker instead
 (MATLAB has no such case handled).
 
+By default each selected pixel of the consensus frame is read at its own
+position in the trial through the across-trial map. With an affine or
+patchwise map every pixel then has its own sub-pixel position, so every
+frame goes through the loader's general bilinear interpolation, and the
+interpolation's blur differs slightly from pixel to pixel.
+Solving each trial on its own pixel grid instead (the trial grid,
+``solve_grid='trial'``: each subproblem moved into the trial by one
+whole-pixel shift and read through the loader's fast path, its footprints
+mapped back to the consensus frame) was built
+and measured for GIAnT-Python#52, and removed: on 32 cores the loads took
+no less time (the interpolation runs in parallel within a load), sources
+and traces were the same, but the per-trial position jitter rose by 0.02
+to 0.14 px and the footprints mapped back were smoothed (7-8 % lower at
+the peak pixel). The footprint fit stays about half anchored to its
+source's whole pixel, so a sub-pixel position that the map changes from
+trial to trial moves the fitted position; on the consensus grid that
+position is the same in every trial. The code is in the history of pull
+request #57 (last in commit 36ed58f).
+
 **dispatch**: the session's subproblems, in path, trial and subproblem
 order, are cut into ``--machines`` contiguous parts of about equal
 estimated work (pixels x frames x (sources + 1)); each part is a job file
@@ -363,6 +382,15 @@ while the previous trial's subproblems are solved in a pool of
 ``--solver-workers`` processes of ``--solver-threads`` threads. It writes the
 same results files as the staged run (and containers only with
 ``--save-subproblems DIR``), and ends with the collect stage.
+
+Loading a trial usually takes longer than solving the previous one, so the
+loader sets the pace. ``--load-workers N`` (``SiloExecution.load_workers``,
+default 1) loads up to N trials of a path at once, in threads of the main
+process, ahead of the solver; ``--load-memory-gb`` caps the data of the
+trials loaded and not yet handed to the solver (estimated from the bytes
+per line of the trials loaded so far; a trial holds about
+``(channels + 1) * pixels * frames * 4`` bytes, twice while its subproblems
+are cut out). The loads and the results are the same as with one worker.
 
 File contracts
 --------------

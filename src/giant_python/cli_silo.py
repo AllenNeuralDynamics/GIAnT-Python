@@ -286,6 +286,22 @@ def _add_execution(
         help="Trial loader device (default cpu).",
     )
     g.add_argument(
+        "--load-workers",
+        type=int,
+        default=d.load_workers,
+        help="Trials the streamed run (giant silo) loads at once, ahead of "
+        "the solver (threads; default 1: each trial while the previous one "
+        "is solved).",
+    )
+    g.add_argument(
+        "--load-memory-gb",
+        type=float,
+        default=d.load_memory_gb,
+        help="With --load-workers above 1: load ahead only while the loaded "
+        "trials waiting for the solver are estimated below this many GB "
+        "(default: no limit).",
+    )
+    g.add_argument(
         "--overwrite",
         action="store_true",
         help="Redo units made with the same settings.",
@@ -469,6 +485,9 @@ def execution_from_args(args: argparse.Namespace) -> SiloExecution:
     values = {"workers": args.workers, "overwrite": args.overwrite}
     values["verbose"] = args.verbose
     values["loader_device"] = args.loader_device
+    for name in ("load_workers", "load_memory_gb"):
+        if hasattr(args, name):
+            values[name] = getattr(args, name)
     for name in (
         "solver_workers",
         "solver_threads",
