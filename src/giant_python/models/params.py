@@ -632,12 +632,13 @@ class SiloParams:
         another peak (default 1.5, which keeps a source between pixels
         from being seeded two or three times; 0 is MATLAB's rule only).
         None takes the plan stage's default.
-    seed_acceptance : {'image', 'null'}
+    seed_acceptance : {'image', 'null', 'null_sd'}
         How the plan's seed threshold is set: ``peak_th`` robust SDs of the
-        combined activity image ('image', MATLAB's), or from the null of
-        the combined image so that ``seed_false_per_field`` false seeds are
-        expected per path ('null'; needs ``localization_null='bootstrap'``;
-        ``peak_th`` then sets only the per-trial peaks). Not a MATLAB
+        combined activity image ('image', MATLAB's); from the null of the
+        combined image so that ``seed_false_per_field`` false seeds are
+        expected per path ('null'; ``peak_th`` then sets only the per-trial
+        peaks); or ``peak_th`` robust SDs of that null ('null_sd'). Both
+        null modes need ``localization_null='bootstrap'``. Not a MATLAB
         option.
     seed_false_per_field : float
         Expected false seeds per path with ``seed_acceptance='null'``.
@@ -845,26 +846,32 @@ class SiloParams:
                 object.__setattr__(self, name, getattr(PlanParams, name))
         _choice("seed_fit", self.seed_fit, ("matlab", "local"))
         _nonnegative("seed_merge_px", self.seed_merge_px)
-        _choice("seed_acceptance", self.seed_acceptance, ("image", "null"))
+        _choice(
+            "seed_acceptance",
+            self.seed_acceptance,
+            ("image", "null", "null_sd"),
+        )
         _positive("seed_false_per_field", self.seed_false_per_field)
         if self.localization_keep_null is None:
             object.__setattr__(
                 self,
                 "localization_keep_null",
-                self.seed_acceptance == "null",
+                self.seed_acceptance != "image",
             )
         if not isinstance(self.localization_keep_null, bool):
             raise ValueError("localization_keep_null must be a bool")
+        null_seeding = self.seed_acceptance != "image"
         if (
-            self.localization_keep_null or self.seed_acceptance == "null"
+            self.localization_keep_null or null_seeding
         ) and self.localization_null != "bootstrap":
             raise ValueError(
-                "seed_acceptance='null' and localization_keep_null need "
-                "localization_null='bootstrap'"
+                "seed_acceptance 'null' or 'null_sd' and "
+                "localization_keep_null need localization_null='bootstrap'"
             )
-        if self.seed_acceptance == "null" and not self.localization_keep_null:
+        if null_seeding and not self.localization_keep_null:
             raise ValueError(
-                "seed_acceptance='null' needs localization_keep_null"
+                f"seed_acceptance={self.seed_acceptance!r} needs "
+                "localization_keep_null"
             )
 
     def _solver_defaults(self) -> None:

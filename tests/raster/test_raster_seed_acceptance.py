@@ -16,6 +16,7 @@ from giant_python.extraction.raster.plan import (
 )
 from giant_python.extraction.raster.seeding import (
     candidate_statistic,
+    null_background,
     null_threshold,
     seed_sources,
 )
@@ -262,3 +263,37 @@ def test_silo_params_evidence_test():
     for bad in (dict(min_source_snr=-1.0), dict(min_source_events=1.5)):
         with pytest.raises(ValueError):
             SiloParams(**bad)
+
+
+def test_null_sd_acceptance():
+    """acceptance='null_sd' counts peak_th in robust SDs of the null; the
+    plan and SiloParams accept it with the null images."""
+    rng = np.random.default_rng(7)
+    im = _noise_field(rng, (80, 80))
+    g = np.exp(-np.add.outer(np.arange(-3, 4) ** 2, np.arange(-3, 4) ** 2) / 4)
+    im[37:44, 37:44] += 3.0 * g
+    null = 2.0 * _noise_field(rng, (80, 80))[None]
+    info = {}
+    seeds = seed_sources(
+        im, 4.0, fit="local", acceptance="null_sd", null_im=null, info=info
+    )
+    bg = null_background(null)
+    np.testing.assert_allclose(
+        seeds, get_act_im_peaks(im, 4.0, fit="local", background=bg)
+    )
+    assert info["background"] == pytest.approx(bg)
+    with pytest.raises(ValueError):
+        seed_sources(im, 4.0, acceptance="null_sd")
+    det = {}
+    plan_path(
+        _trials(np.random.default_rng(8)),
+        params=PlanParams(
+            seed_acceptance="null_sd", inter_trial_alignment="rigid"
+        ),
+        details=det,
+    )
+    assert det["null_im"].shape[0] == 1 and det["seed_info"]["background"]
+    p = SiloParams(baseline_source="network", seed_acceptance="null_sd")
+    assert p.localization_keep_null and p.plan_params().seed_acceptance == (
+        "null_sd"
+    )

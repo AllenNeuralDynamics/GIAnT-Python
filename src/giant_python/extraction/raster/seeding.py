@@ -34,8 +34,9 @@ from .peaks import _MAD_SCALE, get_act_im_peaks, ordfilt3x3
 
 SEEDING_METHODS = ("getactimpeaks", "wmf")
 #: How a seed's threshold is set: robust SDs of the image (``"image"``,
-#: MATLAB's) or false seeds per field under the image's null (``"null"``).
-SEED_ACCEPTANCE = ("image", "null")
+#: MATLAB's), false seeds per field under the image's null (``"null"``), or
+#: robust SDs of the image's null (``"null_sd"``).
+SEED_ACCEPTANCE = ("image", "null", "null_sd")
 # largest candidates of the null (per field) that its exponential tail is
 # fitted to
 _TAIL_K = 50
@@ -147,6 +148,20 @@ def candidate_statistic(
     return rc, second[is_max]
 
 
+def null_background(null_ims: np.ndarray) -> tuple[float, float]:
+    """Median and robust SD (MATLAB's MAD scale) of null images' finite
+    pixels."""
+    vals = np.asarray(null_ims, dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 10:
+        raise ValueError("the null image has too few pixels")
+    mu = float(np.median(vals))
+    sigma = float(np.median(np.abs(vals - mu))) / _MAD_SCALE
+    if not sigma > 0:
+        raise ValueError("the null image has no spread")
+    return mu, sigma
+
+
 def null_threshold(
     null_ims: np.ndarray,
     false_per_field: float,
@@ -193,13 +208,7 @@ def null_threshold(
     null = np.asarray(null_ims, dtype=np.float64)
     if null.ndim == 2:
         null = null[None]
-    vals = null[np.isfinite(null)]
-    if vals.size < 10:
-        raise ValueError("the null image has too few pixels")
-    mu = float(np.median(vals))
-    sigma = float(np.median(np.abs(vals - mu))) / _MAD_SCALE
-    if not sigma > 0:
-        raise ValueError("the null image has no spread")
+    mu, sigma = null_background(null)
     z = np.concatenate(
         [(candidate_statistic(im, exclusion)[1] - mu) / sigma for im in null]
     )
@@ -262,11 +271,13 @@ def seed_sources(
     merge_px : float
         Reject a residual peak that ends closer than this to another peak
         (0: MATLAB's rule only).
-    acceptance : {'image', 'null'}
+    acceptance : {'image', 'null', 'null_sd'}
         ``'image'``: ``peak_th`` robust SDs above the image's median
         (MATLAB's). ``'null'``: the threshold that ``null_im`` crosses
         ``false_per_field`` times per field (:func:`null_threshold`);
-        ``peak_th`` is then not used.
+        ``peak_th`` is then not used. ``'null_sd'``: ``peak_th`` robust SDs
+        above the median of ``null_im`` (a scale that does not grow with
+        the density of real sources; no tail is extrapolated).
     null_im : ndarray of shape (draws, rows, cols), optional
         The combined image's null (needed with ``acceptance='null'``).
     false_per_field : float
@@ -287,13 +298,7 @@ def seed_sources(
         raise ValueError(
             f"method must be one of {SEEDING_METHODS}, not {method!r}"
         )
-    if acceptance not in SEED_ACCEPTANCE:
-        raise ValueError(
-            f"acceptance must be one of {SEED_ACCEPTANCE}, "
-            f"not {acceptance!r}"
-        )
-    if acceptance == "null" and null_im is None:
-        raise ValueError("acceptance='null' needs the null image (null_im)")
+    _check_acceptance(acceptance, null_im)
     if method == "wmf":
         raise NotImplementedError(
             "WMF seeding (findSourcesWMF) is not ported yet"
@@ -305,6 +310,30 @@ def seed_sources(
     usable = ~np.isnan(act_im) if mask is None else ~np.isnan(act_im) & ~mask
     if not usable.any():  # SILo.m: no sources without a pixel to seed in
         return np.zeros((0, 4))
+    background, peak_th = _threshold(
+        acceptance, peak_th, null_im, false_per_field, mask, info
+    )
+    return get_act_im_peaks(
+        act_im, peak_th, mask, min_peak_distance, fit, merge_px, background
+    )
+
+
+def _check_acceptance(acceptance: str, null_im) -> None:
+    """Reject an unknown acceptance, or a null one without the null."""
+    if acceptance not in SEED_ACCEPTANCE:
+        raise ValueError(
+            f"acceptance must be one of {SEED_ACCEPTANCE}, "
+            f"not {acceptance!r}"
+        )
+    if acceptance != "image" and null_im is None:
+        raise ValueError(
+            f"acceptance={acceptance!r} needs the null image (null_im)"
+        )
+
+
+def _threshold(acceptance, peak_th, null_im, false_per_field, mask, info):
+    """The background (None: the image's own) and threshold of a seeding;
+    recorded in ``info`` when given."""
     background = None
     if acceptance == "null":
         background, peak_th, tail = null_threshold(
@@ -312,11 +341,11 @@ def seed_sources(
         )
         if info is not None:
             info.update(tail)
+    elif acceptance == "null_sd":
+        background = null_background(null_im)
     if info is not None:
         info.update(peak_th=float(peak_th), background=background)
-    return get_act_im_peaks(
-        act_im, peak_th, mask, min_peak_distance, fit, merge_px, background
-    )
+    return background, peak_th
 
 
 def sources_from_seeds(

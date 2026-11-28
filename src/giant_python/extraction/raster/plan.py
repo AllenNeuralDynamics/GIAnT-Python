@@ -111,6 +111,7 @@ class PlanParams:
         seeds are expected per path (needs every valid trial's null images,
         :attr:`TrialImages.null_im`; ``peak_th`` is then not used). See
         :func:`~giant_python.extraction.raster.seeding.null_threshold`.
+        ``"null_sd"``: ``peak_th`` counts in robust SDs of that null.
     seed_false_per_field : float
         Expected false seeds per path with ``seed_acceptance="null"``.
     min_peak_distance : int
@@ -971,7 +972,7 @@ def plan_path(  # noqa: C901
     seed_info: dict = {}
     if seeds is None:
         null_im = None
-        if p.seed_acceptance == "null":
+        if p.seed_acceptance != "image":
             null_im = combined_null_image(
                 _aligned_nulls(trials, valid, warp, shape, refined),
                 act_aligned[valid],
