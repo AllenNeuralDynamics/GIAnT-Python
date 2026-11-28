@@ -44,7 +44,7 @@ import os
 import threading
 import time
 import warnings
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePath
 from typing import Iterable, Optional, Sequence
 
@@ -201,6 +201,16 @@ def check_plan_support(what: str, plan, params: SiloParams) -> None:
     )
 
 
+def trial_null_seed(base: int, d: int, t: int) -> int:
+    """The first null seed of trial-path ``(d, t)`` (zero-based) when the
+    run keeps its null images: ``base`` plus a trial-path offset, so that
+    the trials' null movies are independent draws (with one seed for all
+    trials the same random stream recurs in every trial, and the combined
+    null keeps much of one trial's spread). Offsets are 1000 apart, more
+    than the draws of a trial."""
+    return int(base) + 1000 * (1 + int(t) + 100000 * int(d))
+
+
 def _localize_job(job: dict) -> dict:
     """Localize one trial-path and write its file (a pool task)."""
     from ..extraction.raster.peaks import get_act_im_peaks
@@ -209,11 +219,14 @@ def _localize_job(job: dict) -> dict:
 
     t0 = time.perf_counter()
     p = SiloParams(**job["params"])
+    lp = p.localization_params(job["align_hz"])
+    if p.localization_keep_null:
+        lp = replace(lp, null_seed=trial_null_seed(lp.null_seed, *job["unit"]))
     loc, trial = localize_trial(
         job["moco_dir"],
         job["movie"],
         job["num_channels"],
-        p.localization_params(job["align_hz"]),
+        lp,
         baseline_dir=job["baseline_dir"],
         activity_channel=p.activity_channel,
         motion_thresh=p.motion_thresh,

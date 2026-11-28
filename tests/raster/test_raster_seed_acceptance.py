@@ -351,3 +351,16 @@ def test_null_images_from_localization_and_empty_plans():
         ),
     )
     assert plan.valid_trials.size == 0 and plan.seeds.shape == (0, 4)
+
+
+def test_trial_null_seeds_are_independent():
+    """With kept null images every trial-path draws its own null movies
+    (distinct seeds, apart by more than a trial's draws); the default
+    calibration's seed is not used for them."""
+    from giant_python.pipeline.silo import trial_null_seed
+
+    seeds = {trial_null_seed(0, d, t) for d in range(3) for t in range(200)}
+    assert len(seeds) == 600
+    s = sorted(seeds)
+    assert min(np.diff(s)) >= 1000 and min(s) > 0
+    assert trial_null_seed(7, 0, 0) == trial_null_seed(0, 0, 0) + 7

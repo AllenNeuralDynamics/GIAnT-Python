@@ -600,9 +600,13 @@ class SiloParams:
         Threshold of the per-trial peaks; None uses ``peak_th``.
     localization_keep_null : bool or None
         Keep each trial's calibrated null images (the bootstrap null's
-        activity images) in its localization file, for
-        ``seed_acceptance='null'``. None: kept exactly when
-        ``seed_acceptance`` is 'null'. Not a MATLAB option.
+        activity images) in its localization file, for the null seed
+        thresholds. Each trial-path's null movies are then drawn with its
+        own seed (``localization_null_seed`` plus a trial-path offset,
+        :func:`~giant_python.pipeline.silo.trial_null_seed`), so that the
+        trials' nulls are independent; the calibration differs from a run
+        without kept nulls only by that random draw. None: kept exactly when
+        ``seed_acceptance`` is not 'image'. Not a MATLAB option.
     trial_peaks : bool
         Fit each trial's peaks (Gaussians at the per-trial activity image's
         maxima). They feed only the per-trial summary's
