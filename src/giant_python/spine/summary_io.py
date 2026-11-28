@@ -58,6 +58,27 @@ def read_array(ds: h5py.Dataset, row_major: bool, index=()) -> np.ndarray:
     return np.asarray(np.transpose(data))
 
 
+def _per_trial(read, edges, n_sources: int, mean: bool) -> np.ndarray:
+    """Per-trial mean (``mean``) or number of positive frames of a
+    ``(sources, frames)`` trace, reading each trial's frames with
+    ``read(start, stop)``; ``(trials, sources)``, NaN for a trial without
+    frames and for a source without any value in a trial."""
+    res = np.full((len(edges) - 1, n_sources), np.nan)
+    for t in range(len(edges) - 1):
+        if edges[t + 1] == edges[t]:
+            continue
+        seg = np.asarray(read(int(edges[t]), int(edges[t + 1])), np.float64)
+        ok = np.isfinite(seg)
+        has = ok.any(axis=1)
+        if mean:
+            total = np.where(ok, seg, 0.0).sum(axis=1)
+            cnt = np.maximum(ok.sum(axis=1), 1)
+            res[t] = np.where(has, total / cnt, np.nan)
+        else:
+            res[t] = np.where(has, (seg > 0).sum(axis=1), np.nan)
+    return res
+
+
 def _strings(ds: h5py.Dataset) -> list:
     """A cell array or array of strings as a list of str."""
     data = np.asarray(ds[()]).ravel()
@@ -325,19 +346,16 @@ class RunSummary:
         ):
             if not self.has(path, key):
                 continue
-            x = self.array(path, key, (slice(None), ch))  # sources x frames
-            x = np.asarray(x, dtype=np.float64)
-            res = np.full((n.size, x.shape[0]), np.nan)
-            for t in range(n.size):
-                if n[t] == 0:
-                    continue
-                seg = x[:, edges[t] : edges[t + 1]]
-                has = np.isfinite(seg).any(axis=1)
-                if name == "mean_dF":
-                    total = np.where(np.isfinite(seg), seg, 0.0).sum(axis=1)
-                    cnt = np.isfinite(seg).sum(axis=1)
-                    res[t] = np.where(has, total / np.maximum(cnt, 1), np.nan)
-                else:
-                    res[t] = np.where(has, (seg > 0).sum(axis=1), np.nan)
-            out[name] = res
+            with self._exp() as f:
+                ds = f[f"Path{path}/{key}"]
+                n_src = ds.shape[0] if self._row_major else ds.shape[-1]
+                # one trial at a time: a session's traces can take GBs
+                out[name] = _per_trial(
+                    lambda a, b: read_array(
+                        ds, self._row_major, (slice(None), ch, slice(a, b))
+                    ),
+                    edges,
+                    n_src,
+                    name == "mean_dF",
+                )
         return out
