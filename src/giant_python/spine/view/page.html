@@ -309,7 +309,7 @@ async function init() {
   S.meta.products.forEach((p, i) => ps.add(new Option(p.name, i)));
   ps.disabled = S.meta.products.length < 2;
   ps.onchange = () => switchProduct(+ps.value);
-  $("path").onchange = () => loadPath(+$("path").value);
+  $("path").onchange = () => loadPath(+$("path").value, null, null, viewedTrial());
   for (const id of ["fimg", "fview", "vs", "sqrt"]) $(id).onchange = () => drawField(true);
   $("range").onchange = () => { drawField(true); drawCrops(); };
   for (const id of ["cimg", "cview"]) $(id).onchange = () => { syncControls(); loadCrops(); };
@@ -324,6 +324,7 @@ async function init() {
     const dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     r.dataset.theme = dark ? "light" : "dark"; redrawAll(); };
   document.querySelectorAll(".marks button").forEach(b => b.onclick = () => setMark(b.dataset.l));
+  $("note").oninput = () => { S.noteDirty = true; };
   $("note").onchange = () => { const m = markOf(S.src); setMark(m ? m.label : "Unsure"); };
   document.addEventListener("keydown", onKey);
   setupField();
@@ -336,6 +337,7 @@ async function switchProduct(i, first) {
   // keep path, trial, views and the nearest source
   const prev = S.data && S.src >= 0 ? { r: S.data.rows[S.src], c: S.data.cols[S.src] } : null;
   const keepView = !first && S.field;
+  const was = first ? null : viewedTrial();
   const view = { ...S.view };
   S.prod = i; $("prod").value = i;
   const prod = S.meta.products[i];
@@ -344,7 +346,7 @@ async function switchProduct(i, first) {
   const n = prod.paths[cur] ? cur : +Object.keys(prod.paths)[0];
   ps.value = n;
   $("notes").textContent = prod.notes && prod.notes.length ? "Readout notes: " + prod.notes.join("; ") : "";
-  await loadPath(+n, prev, keepView ? view : null);
+  await loadPath(+n, prev, keepView ? view : null, was);
 }
 
 function fillSelect(sel, items, keep) {
@@ -353,7 +355,11 @@ function fillSelect(sel, items, keep) {
   if (keep && items.some(([v]) => v === cur)) sel.value = cur;
 }
 
-async function loadPath(n, near, view) {
+function viewedTrial() {
+  // the trial being viewed, by acquisition number (by index without numbers); null for the mean
+  return S.path !== null && S.trial >= 0 ? { acq: pmeta().acquisition[S.trial], idx: S.trial } : null;
+}
+async function loadPath(n, near, view, was) {
   const g = ++S.gen.path;
   // until this path's sources and selection are in place, the old source's
   // marks and selection must not reach the new path
@@ -375,7 +381,14 @@ async function loadPath(n, near, view) {
   }
   $("fview").querySelector('option[value="activity"]').disabled = !pm.has_activity_image;
   const sl = $("tslider"); sl.max = pm.acquisition.length - 1;
-  S.trial = Math.min(S.trial, pm.acquisition.length - 1);
+  let missing = null;
+  if (was === undefined) S.trial = Math.min(S.trial, pm.acquisition.length - 1);
+  else if (was === null) S.trial = -1;
+  else {
+    const i = was.acq >= 0 ? pm.acquisition.indexOf(was.acq) : (was.idx < pm.acquisition.length ? was.idx : -1);
+    if (i < 0) missing = was.acq >= 0 ? was.acq : was.idx + 1;
+    S.trial = i;
+  }
   let data;
   try {
     data = await api.sources(S.prod, n);
@@ -400,6 +413,7 @@ async function loadPath(n, near, view) {
   if (g !== S.gen.path) return;
   if (view) { S.view = view; drawOverlay(); }
   setTrial(S.trial, true);
+  if (missing !== null) status(`trial ${missing} is not in this summary: showing the mean of trials`);
   if (S.data.n) await selectSource(s, true, true); else { clearSource(); status("no sources on this path"); }
   if (g === S.gen.path) { S.loading = false; showMark(); }
 }
@@ -581,8 +595,9 @@ async function selectSource(k, keepTable, fromLoad) {
   // pan only if the source is outside the view
   const [w, h] = fieldSize(); const x = (S.data.cols[k] + 0.5) * S.view.s + S.view.ox, y = (S.data.rows[k] + 0.5) * S.view.s + S.view.oy;
   if (x < 20 || y < 20 || x > w - 20 || y > h - 20) { S.view.ox += w / 2 - x; S.view.oy += h / 2 - y; }
-  status(`source ${S.data.ids[k] + 1}`);
+  if (!fromLoad || !/not in this summary/.test($("status").textContent)) status(`source ${S.data.ids[k] + 1}`);
   showMark(); highlightRow(keepTable);
+  S.gen.crops++; // pending crops belong to the previous selection
   const g = ++S.gen.roi; const data = S.data;
   let roi = null, err = null;
   try { roi = await api.roi(S.prod, S.path, k); } catch (e) { err = e; }
@@ -599,7 +614,8 @@ async function loadCrops() {
     const g = ++S.gen.crops;
     let c = null, err = null;
     try { c = await api.crops(S.prod, S.path, S.src, image, view, vs); } catch (e) { err = e; }
-    if (g !== S.gen.crops) return; // superseded by a newer crop request
+    const now = [S.prod, S.path, S.src, $("cimg").value, $("cview").value, $("vs").value].join("|");
+    if (g !== S.gen.crops || key !== now) return; // superseded, or the selection or controls changed
     S.crops = c; S.cropsKey = key;
     if (err) status(`crops: ${err.message}`, true);
   }
@@ -788,11 +804,13 @@ function alignOther(y, acqOther) {
   // number (by trial when neither has numbers); null when they cannot be matched
   const acq = pmeta().acquisition;
   const known = a => a.length && a.every(v => v >= 0);
+  const none = a => a.every(v => v < 0);
   if (known(acq) && known(acqOther)) {
     const at = new Map(acqOther.map((a, i) => [a, i]));
     return acq.map(a => (at.has(a) ? y[at.get(a)] : NaN));
   }
-  return acq.length === acqOther.length && !known(acq) && !known(acqOther) ? y : null;
+  // partly numbered trials cannot be matched either way
+  return acq.length === acqOther.length && none(acq) && none(acqOther) ? y : null;
 }
 function briefTrials(tr, k) {
   // the trials of a source's brief run: brief_len entries of the tested trials from brief_first
@@ -915,7 +933,9 @@ function markOf(k) { const by = S.data && S.data.marks ? S.data.marks.by_source 
 function showMark() {
   const m = markOf(S.src); const st = $("markstate");
   if (m && m.label) { st.textContent = m.label; st.style.color = MARK_VAR[m.label] ? css(MARK_VAR[m.label]) : ""; } else { st.textContent = "not marked"; st.style.color = css("--text-muted"); }
-  $("note").value = m ? m.note || "" : "";
+  // the saved note replaces the input only for another source, or when nothing unsaved is typed
+  const key = `${S.prod}|${S.path}|${S.src}`;
+  if (S.noteFor !== key || !S.noteDirty) { $("note").value = m ? m.note || "" : ""; S.noteFor = key; S.noteDirty = false; }
   $("mtitle").innerHTML = S.src >= 0 && S.data && !S.loading ? `Mark <b>source ${S.data.ids[S.src] + 1}</b> (saved at once; attaches to its position)` : "Mark";
   document.querySelectorAll(".marks button, #note").forEach(b => b.disabled = !S.meta.marks_file || !!S.loading || S.src < 0);
 }
@@ -929,6 +949,7 @@ function setMark(label) {
     try {
       const marks = await api.mark(req.prod, req.path, req.src, req.label, req.note);
       req.data.marks = marks;
+      if (`${req.prod}|${req.path}|${req.src}` === S.noteFor && $("note").value === req.note) S.noteDirty = false;
       if (req.data === S.data) { showMark(); drawOverlay(); buildTable(); }
       status(req.label ? `marked ${req.label}` : "mark cleared");
     } catch (e) { status(e.message, true); }
