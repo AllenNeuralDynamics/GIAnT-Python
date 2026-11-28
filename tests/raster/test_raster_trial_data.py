@@ -891,6 +891,45 @@ def test_load_trial_reads_selected_pixels_beyond_the_frame(
     np.testing.assert_allclose(general.finv, td.finv, rtol=1e-8)
 
 
+def test_load_trial_at_trial_points(recording, monkeypatch):
+    """Points of the trial's frame are read as the same pixels selected in
+    a map without an across-trial map (bit for bit), in the points' order;
+    a point above or left of the frame is filled in as a pixel off the
+    raster. Points need the identity map, whole pixels and no map."""
+    layout, _, truth = recording
+    monkeypatch.setattr(trial_data, "raster_layout", lambda path: layout)
+    alignment, sel, mean, rois, discard, _ = loader_inputs(layout, truth)
+    rest = (discard, mean, rois, TrialLoadParams(baseline_window_s=0.2))
+    args = (layout.files[0], 10.0, 3000.0, alignment)
+    ref = load_trial(*args, sel, RigidShift(), *rest, dtype=np.float64)
+    got = load_trial(
+        *args, None, RigidShift(), *rest, dtype=np.float64,
+        points=ref.pixel_rc,
+    )  # fmt: skip
+    for name in ("y", "finv", "pixel_rc", "trial_rc", "global_f", "roi_f"):
+        np.testing.assert_array_equal(getattr(got, name), getattr(ref, name))
+    # another order, and two points outside the frame
+    order = np.random.default_rng(0).permutation(ref.pixel_rc.shape[0])
+    pts = np.concatenate([ref.pixel_rc[order], [[-1, 5], [4, -2]]])
+    got = load_trial(
+        *args, None, RigidShift(), *rest, dtype=np.float64, points=pts
+    )
+    np.testing.assert_array_equal(got.pixel_rc, pts)
+    np.testing.assert_array_equal(got.trial_rc, pts.astype(float))
+    np.testing.assert_allclose(got.y[:, :-2], ref.y[:, order], rtol=1e-12)
+    np.testing.assert_allclose(got.finv[:-2], ref.finv[order], rtol=1e-12)
+    never = np.flatnonzero((ref.pixel_rc == [1, 2]).all(1))[0]  # margin
+    for k in (-2, -1):
+        np.testing.assert_array_equal(got.y[:, k], ref.y[:, never])
+        np.testing.assert_allclose(got.finv[k], ref.finv[never], rtol=1e-12)
+    with pytest.raises(ValueError, match="not both"):
+        load_trial(*args, sel, RigidShift(), *rest, points=pts)
+    with pytest.raises(ValueError, match="across-trial map"):
+        load_trial(*args, None, RigidShift(0.5, 0.0), *rest, points=pts)
+    with pytest.raises(ValueError, match="whole pixels"):
+        load_trial(*args, None, RigidShift(), *rest, points=pts + 0.5)
+
+
 def test_load_trial_without_selected_pixels(recording, monkeypatch):
     """No selected pixel, no ROI and no labeled pixel: empty data, and the
     traces are missing. A selection that is never sampled is an error."""

@@ -709,18 +709,65 @@ def plan(
 # ---------------------------------------------------------------- prepare
 
 
+def trial_grid_for(params: SiloParams, plan, t):
+    """Trial ``t``'s layout on its own pixel grid with ``solve_grid``
+    'trial' (:func:`~giant_python.extraction.raster.trial_grid.trial_grid`),
+    None on the consensus grid."""
+    if params.solve_grid != "trial":
+        return None
+    from ..extraction.raster.trial_grid import trial_grid
+
+    return trial_grid(plan, t)
+
+
+def unit_layout(plan, grid=None) -> tuple:
+    """A trial's subproblems and source positions: the plan's (consensus
+    grid), or those of its trial grid."""
+    if grid is None:
+        rc = np.column_stack([plan.source_rows, plan.source_cols])
+        return plan.groups, rc
+    return grid.groups, grid.sources_rc
+
+
 def load_trial_for(
-    session: SiloSession, params: SiloParams, plan, d, t, rois, device="cpu"
+    session: SiloSession,
+    params: SiloParams,
+    plan,
+    d,
+    t,
+    rois,
+    device="cpu",
+    grid=None,
 ):
-    """Trial ``t`` of path ``d`` at the plan's selected pixels.
+    """Trial ``t`` of path ``d`` at the plan's selected pixels, or with
+    ``grid`` (a :class:`~giant_python.extraction.raster.trial_grid.TrialGrid`)
+    at the grid's pixels of the trial's registered frame (the user ROIs
+    moved into that frame, the trial's own mean image).
 
     Returns
     -------
     TrialData
     """
     from ..extraction.raster.plan import loader_warp
-    from ..extraction.raster.trial_data import load_trial
+    from ..extraction.raster.trial_data import RigidShift, load_trial
 
+    if grid is not None:
+        from ..extraction.raster.trial_grid import masks_to_trial
+
+        return load_trial(
+            session.raw(d, t),
+            session.first_line[d, t],
+            session.last_line[d, t],
+            session.alignment(d, t),
+            None,
+            RigidShift(),
+            plan.trial_discard[t],
+            plan.mean_ims[t],
+            roi_masks=masks_to_trial(rois, plan.warp, t, plan.shape),
+            params=params.load_params(),
+            device=device,
+            points=grid.points,
+        )
     return load_trial(
         session.raw(d, t),
         session.first_line[d, t],
@@ -845,7 +892,9 @@ def load_trial_baseline(
     return tb
 
 
-def trial_subproblems(plan, trial, solver_params, baseline=None) -> list:
+def trial_subproblems(
+    plan, trial, solver_params, baseline=None, groups=None
+) -> list:
     """The plan's subproblems on a loaded trial.
 
     With a solver mode that uses an external baseline, each gets the
@@ -853,11 +902,13 @@ def trial_subproblems(plan, trial, solver_params, baseline=None) -> list:
     :class:`~giant_python.extraction.raster.baseline_map.TrialBaseline`):
     the same arrays as a container of the trial gives
     (:meth:`~giant_python.extraction.raster.container.Container.subproblem`).
+    ``groups`` replaces the plan's groups (a trial grid's).
     """
     from ..extraction.raster.baseline_map import subproblem_baseline
 
+    groups = plan.groups if groups is None else groups
     if solver_params.baseline_mode == "fit":
-        return [g.subproblem(trial.y, trial.finv) for g in plan.groups]
+        return [g.subproblem(trial.y, trial.finv) for g in groups]
     if baseline is None:
         raise ValueError(
             f"the solver's baseline mode {solver_params.baseline_mode!r} "
@@ -876,7 +927,7 @@ def trial_subproblems(plan, trial, solver_params, baseline=None) -> list:
                 solver_params,
             ),
         )
-        for g in plan.groups
+        for g in groups
     ]
 
 
@@ -942,9 +993,10 @@ def prepare(
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
         t0 = time.perf_counter()
+        grid = trial_grid_for(params, p, t)
         try:
             trial = load_trial_for(
-                session, params, p, d, t, rois, ex.loader_device
+                session, params, p, d, t, rois, ex.loader_device, grid
             )
         except ValueError as exc:
             if NO_DATA not in str(exc):
@@ -958,12 +1010,13 @@ def prepare(
             if base is None
             else load_trial_baseline(session, params, trial, base, d, t)
         )
+        groups, sources_rc = unit_layout(p, grid)
         write_container(
             out,
             trial,
-            np.column_stack([p.source_rows, p.source_cols]),
-            [g.pixels for g in p.groups],
-            [g.sources for g in p.groups],
+            sources_rc,
+            [g.pixels for g in groups],
+            [g.sources for g in groups],
             p.shape,
             params=_container_params(params, ph, d, t, tb),
             source={
@@ -1015,6 +1068,9 @@ def _container_params(
     if params.valid_kernel != 3:
         # the plan's zones were made for it; the solve stage checks it
         out["valid_kernel"] = params.valid_kernel
+    if params.solve_grid != "consensus":
+        # the subproblems' pixels are the trial's: the solve stage checks it
+        out["solve_grid"] = params.solve_grid
     if baseline is not None:
         out["baseline"] = baseline.identity
     return out
@@ -1167,7 +1223,17 @@ def _submit(subs, sp, options, pool, done: Optional[_Done] = None):
 
 
 def _save_container(
-    folder, session, params, plan, ph, chash, trial, d, t, baseline=None
+    folder,
+    session,
+    params,
+    plan,
+    ph,
+    chash,
+    trial,
+    d,
+    t,
+    baseline=None,
+    grid=None,
 ):
     """Write a loaded trial's container (``--save-subproblems``)."""
     from ..extraction.raster.container import write_container
@@ -1175,12 +1241,13 @@ def _save_container(
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / session.container_file(d, t).name
+    groups, sources_rc = unit_layout(plan, grid)
     write_container(
         path,
         trial,
-        np.column_stack([plan.source_rows, plan.source_cols]),
-        [g.pixels for g in plan.groups],
-        [g.sources for g in plan.groups],
+        sources_rc,
+        [g.pixels for g in groups],
+        [g.sources for g in groups],
         plan.shape,
         params=_container_params(params, ph, d, t, baseline),
         source={"raw": session.raw(d, t).name, "path": d + 1, "trial": t + 1},
@@ -1262,7 +1329,6 @@ def stream(  # noqa: C901
         )
         check_plan_support(f"the plan {pf.name}", plan, params)
         check_plan_alignment(f"the plan {pf.name}", plan, params)
-        placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
         for t in (int(x) for x in plan.valid_trials):
             base = _extraction_baseline(session, params, d, t, baseline_dir)
@@ -1277,9 +1343,19 @@ def stream(  # noqa: C901
                 report.append({"unit": (d, t), "skipped": "up to date"})
                 continue
             t0 = time.perf_counter()
+            grid = trial_grid_for(params, plan, t)
+            groups = unit_layout(plan, grid)[0]
+            placements = [(g.pixels, g.sources) for g in groups]
             try:
                 trial = load_trial_for(
-                    session, params, plan, d, t, rois, execution.loader_device
+                    session,
+                    params,
+                    plan,
+                    d,
+                    t,
+                    rois,
+                    execution.loader_device,
+                    grid,
                 )
             except ValueError as exc:
                 if NO_DATA not in str(exc):
@@ -1308,9 +1384,14 @@ def stream(  # noqa: C901
                     d,
                     t,
                     tb,
+                    grid,
                 )
             extracted = trial.frame_lines.size >= params.min_frames
-            subs = trial_subproblems(plan, trial, sp, tb) if extracted else []
+            subs = (
+                trial_subproblems(plan, trial, sp, tb, groups)
+                if extracted
+                else []
+            )
             attrs = results_attrs(
                 _ContainerView(
                     trial,

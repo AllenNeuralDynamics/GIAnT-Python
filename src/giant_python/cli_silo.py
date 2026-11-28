@@ -149,6 +149,18 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         "alignPatchPx; default 1500).",
     )
     g.add_argument(
+        "--solve-grid",
+        dest="solve_grid",
+        choices=("consensus", "trial"),
+        default=None,
+        help="Pixel grid each trial's subproblems are solved on: the "
+        "consensus frame's selected pixels read through the across-trial "
+        "map (default, MATLAB's), or whole pixels of the trial's own "
+        "registered frame, each subproblem moved by one whole-pixel shift "
+        "and its footprints mapped back (faster with an affine or "
+        "patchwise map). Give prepare, solve and collect the same value.",
+    )
+    g.add_argument(
         "--localization-baseline",
         choices=("median", "network"),
         default=None,
@@ -446,6 +458,7 @@ def params_from_args(args: argparse.Namespace) -> SiloParams:
         "localization_baseline",
         "inter_trial_alignment",
         "align_patch_px",
+        "solve_grid",
     ):
         v = getattr(args, name, None)
         if v is not None:

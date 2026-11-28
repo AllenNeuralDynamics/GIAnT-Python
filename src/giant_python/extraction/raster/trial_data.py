@@ -1380,6 +1380,32 @@ def _points(need, alignment: TrialAlignment, warp):
     return r_d, c_d, (0.0, 0.0), centre, qpos
 
 
+def _trial_points(points, sel_pix, warp, shape):
+    """The wanted pixels of :func:`load_trial` given as trial-frame points.
+
+    Returns their rows and columns, the points that can be read (those
+    neither above nor left of the frame; ``slice(None)`` when all can) and
+    the map of the readable ones on a canvas that holds them and the
+    registered frame.
+    """
+    if sel_pix is not None:
+        raise ValueError("give sel_pix or points, not both")
+    if not (isinstance(warp, RigidShift) and warp.row == 0 and warp.col == 0):
+        raise ValueError("points are read without an across-trial map")
+    pts = np.asarray(points)
+    if pts.size and not np.array_equal(pts, np.round(pts)):
+        raise ValueError("points must be whole pixels")
+    pts = pts.astype(np.int64).reshape(-1, 2)
+    rows, cols = pts[:, 0].copy(), pts[:, 1].copy()
+    inside = (rows >= 0) & (cols >= 0)
+    hi = pts[inside].max(0) + 1 if inside.any() else np.zeros(2, np.int64)
+    canvas = (max(shape[0], int(hi[0])), max(shape[1], int(hi[1])))
+    need = np.zeros(canvas, dtype=bool)
+    need[rows[inside], cols[inside]] = True
+    read = slice(None) if inside.all() else np.flatnonzero(inside)
+    return rows, cols, read, need
+
+
 def _check_layout(layout: RasterLayout) -> None:
     """Reject recordings that the loader does not support."""
     if layout.fast_zs.size != 1:
@@ -1399,6 +1425,7 @@ def load_trial(  # noqa: C901
     params: Optional[TrialLoadParams] = None,
     device="cpu",
     dtype=np.float32,
+    points: Optional[np.ndarray] = None,
 ) -> TrialData:
     """Read one SLAP2 trial at the selected pixels (``loadTrial``).
 
@@ -1411,11 +1438,12 @@ def load_trial(  # noqa: C901
         ``last_line``; may be fractional).
     alignment : TrialAlignment, str or Path
         The trial's alignment, or its ``*_ALIGNMENTDATA.h5``.
-    sel_pix : ndarray of bool
+    sel_pix : ndarray of bool or None
         ``(rows, cols)`` selected pixels of the path, in the consensus
         frame. The trial's registered frame shares its top left corner; a
         selected pixel beyond it is read where the warp puts it (and is
         without samples, hence filled in, if that is off the raster).
+        None with ``points``.
     warp : RigidShift or callable
         The trial's warp: ``warp(rows, cols)`` gives the zero-based position
         in the trial's registered frame of zero-based consensus points.
@@ -1434,10 +1462,19 @@ def load_trial(  # noqa: C901
     dtype : numpy dtype
         Precision of ``y`` and ``finv`` (float64 reproduces MATLAB to
         rounding error; float32 halves the memory).
+    points : ndarray of int, shape (pixels, 2), optional
+        Read these zero-based whole pixels ``(row, col)`` of the trial's
+        registered frame, in this order, instead of ``sel_pix`` (which must
+        then be None; ``warp`` must be ``RigidShift()``, and
+        ``mean_image`` and ``roi_masks`` must be in the trial's registered
+        frame too). Every point shares the frame's interpolation weights
+        (the loader's fast path). A point above or left of the frame has no
+        samples: it is filled in, as a pixel off the raster.
 
     Returns
     -------
     TrialData
+        With ``points``: ``pixel_rc`` and ``trial_rc`` are the points.
 
     Raises
     ------
@@ -1445,7 +1482,9 @@ def load_trial(  # noqa: C901
         For recordings with several fast-z planes, an activity channel
         outside the recording's, or a mean image without all channels; if
         none of the selected pixels has a sample in this trial; or if the
-        baseline window is too short to fill the missing samples.
+        baseline window is too short to fill the missing samples; for
+        ``points`` with ``sel_pix`` or with a warp that is not the
+        identity.
     """
     p = params or TrialLoadParams()
     dev = torch.device(device)
@@ -1478,19 +1517,23 @@ def load_trial(  # noqa: C901
     # the mean image and the ROI masks are cropped to the trial's registered
     # frame, as in MATLAB; selected pixels beyond it stay (see _points)
     shape = alignment.view_shape
-    sel = np.asarray(sel_pix, dtype=bool)
     mean_view = _fit(mean_image, shape, np.nan)[:, :, order]
     masks = [_fit(np.asarray(m, dtype=bool), shape, False) for m in roi_masks]
     labeled = labeled_pixels(mean_view[:, :, 0])
-    canvas = (max(shape[0], sel.shape[0]), max(shape[1], sel.shape[1]))
-    need = _fit(sel, canvas, False)
+    if points is None:
+        sel = np.asarray(sel_pix, dtype=bool)
+        canvas = (max(shape[0], sel.shape[0]), max(shape[1], sel.shape[1]))
+        need = _fit(sel, canvas, False)
+        cols_s, rows_s = np.nonzero(sel.T)  # column-major order of the map
+        read = slice(None)
+    else:
+        rows_s, cols_s, read, need = _trial_points(points, sel_pix, warp, shape)
     for m in [labeled] + masks:
         need[: shape[0], : shape[1]] |= m
     r_d, c_d, shift, centre, qpos = _points(need, alignment, warp)
     motion_r = upsample_motion(ds, mot_r, lines) + shift[0]
     motion_c = upsample_motion(ds, mot_c, lines) + shift[1]
 
-    cols_s, rows_s = np.nonzero(sel.T)  # column-major order of the map
     y = np.full((n_ch, rows_s.size, n_f), np.nan, dtype=dtype)
     finv = np.full((rows_s.size, n_f), np.nan, dtype=dtype)
     traces = _Traces(
@@ -1502,7 +1545,7 @@ def load_trial(  # noqa: C901
         qpos[: shape[0], : shape[1]],
         dev,
     )
-    q_sel = torch.from_numpy(qpos[rows_s, cols_s]).to(dev)
+    q_sel = torch.from_numpy(qpos[rows_s[read], cols_s[read]]).to(dev)
     as_stored = torch.from_numpy(np.empty(0, dtype)).dtype
     timings["setup"] = time.perf_counter() - t0
 
@@ -1526,8 +1569,12 @@ def load_trial(  # noqa: C901
             device,
         ):
             fr = slice(fb[part][0], fb[part][-1] + 1)
-            y[:, :, fr] = yq.index_select(1, q_sel).to(as_stored).cpu().numpy()
-            finv[:, fr] = fq.index_select(0, q_sel).to(as_stored).cpu().numpy()
+            y[:, read, fr] = (
+                yq.index_select(1, q_sel).to(as_stored).cpu().numpy()
+            )
+            finv[read, fr] = (
+                fq.index_select(0, q_sel).to(as_stored).cpu().numpy()
+            )
             traces.add(fr, yq)
     timings["frames"] = time.perf_counter() - t0
 

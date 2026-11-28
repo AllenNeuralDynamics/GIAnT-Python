@@ -23,6 +23,7 @@ import json
 import os
 import time
 import warnings
+from pathlib import Path
 from typing import Optional
 
 import h5py
@@ -104,16 +105,45 @@ def _current(
     return keep
 
 
-def _outcome_loader(files: list, solver_params):
-    """A function that assembles a trial from its results files."""
+def _outcome_loader(files: list, solver_params, plan=None, t=None):
+    """A function that assembles a trial from its results files.
+
+    With ``plan`` and ``t``, the files hold footprints on the trial's own
+    grid (``solve_grid`` 'trial'), which are mapped back to the consensus
+    frame (:func:`~giant_python.extraction.raster.trial_grid.
+    footprints_to_consensus`).
+    """
 
     def load():
         """Read the files and assemble the trial."""
         from ..extraction.raster.results import read_results, trial_outcome
 
-        return trial_outcome([read_results(f) for f in files], solver_params)
+        out = trial_outcome([read_results(f) for f in files], solver_params)
+        if plan is not None and out.activity is not None:
+            from ..extraction.raster.trial_grid import (
+                footprints_to_consensus,
+                trial_grid,
+            )
+
+            act = out.activity
+            act.footprints = footprints_to_consensus(
+                act.footprints, trial_grid(plan, t), plan
+            )
+        return out
 
     return load
+
+
+def _check_grid(files: list, solve_grid: str) -> None:
+    """Refuse results files solved on another grid than ``solve_grid``
+    (the solve settings' hash already tells them apart; this names it)."""
+    for f in files:
+        used = attr(f, "solve_grid") or "consensus"
+        if used != solve_grid:
+            raise ValueError(
+                f"{Path(f).name} was solved with solve_grid={used!r}, these "
+                f"settings have {solve_grid!r}"
+            )
 
 
 def path_result(
@@ -197,7 +227,12 @@ def path_result(
                 f"the current plan with the current solve settings in "
                 f"{session.results_dir}"
             )
-        trials[t] = _outcome_loader(files, sp)
+        _check_grid(files, params.solve_grid)
+        trials[t] = (
+            _outcome_loader(files, sp, plan, t)
+            if params.solve_grid == "trial"
+            else _outcome_loader(files, sp)
+        )
         if provenance is not None:
             used = _baseline_identity(files)
             if used is not None:
