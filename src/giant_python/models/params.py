@@ -1352,10 +1352,12 @@ class SiloExecution:
     verbose : bool
         Print progress messages.
     load_workers : int
-        Trials the streamed run loads at once (threads of this process):
-        1 loads each trial while the previous one is solved, as MATLAB's
-        ``processAllTrials_Async``; more load later trials ahead, so that
-        loading no longer sets the pace while the solver keeps up. Each
+        Trials the streamed run loads at once (threads of this process;
+        default 4): 1 loads each trial while the previous one is solved, as
+        MATLAB's ``processAllTrials_Async``; more load later trials ahead,
+        so that loading no longer sets the pace while the solver keeps up
+        (on 32 cores 4 shortened extraction 1.8-2.3x; 8 gained nothing
+        more, GIAnT-Python#52). Each
         loaded trial waiting for the solver holds its data (about
         ``(channels + 1) * pixels * frames * 4`` bytes, twice while its
         subproblems are cut out). The prepare stage loads one at a time.
@@ -1379,7 +1381,7 @@ class SiloExecution:
     loader_device: str = "cpu"
     overwrite: bool = False
     verbose: bool = False
-    load_workers: int = 1
+    load_workers: int = 4
     load_memory_gb: Optional[float] = None
 
     def __post_init__(self) -> None:

@@ -385,7 +385,8 @@ same results files as the staged run (and containers only with
 
 Loading a trial usually takes longer than solving the previous one, so the
 loader sets the pace. ``--load-workers N`` (``SiloExecution.load_workers``,
-default 1) loads up to N trials of a path at once, in threads of the main
+default 4; 1 loads each trial while the previous one is solved, as MATLAB)
+loads up to N trials of a path at once, in threads of the main
 process, ahead of the solver; ``--load-memory-gb`` caps the data of the
 trials loaded and not yet handed to the solver (estimated from the bytes
 per line of the trials loaded so far; a trial holds about

@@ -290,8 +290,8 @@ def _add_execution(
         type=int,
         default=d.load_workers,
         help="Trials the streamed run (giant silo) loads at once, ahead of "
-        "the solver (threads; default 1: each trial while the previous one "
-        "is solved).",
+        "the solver (threads; default 4; 1: each trial while the previous "
+        "one is solved).",
     )
     g.add_argument(
         "--load-memory-gb",
