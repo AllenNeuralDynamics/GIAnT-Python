@@ -144,7 +144,7 @@ GIAnT-Python now processes SLAP2 raster (multi-ROI) recordings from raw data to 
 1. **Registration** corrects brain motion within each trial and writes one movie per trial and imaging path.
 2. **Baseline** (optional) predicts, for every pixel and frame, the fluorescence expected if no glutamate were being released.
 3. **Source finding** builds an image of where activity occurred in each trial, aligns the trials to each other, and places a candidate source on each spot of activity.
-4. **Extraction** fits each source's shape (its *footprint*) and its activity over time, separating the activity of neighbours. A test of each trace's time course then rejects candidates whose transients do not rise and decay as the indicator does.
+4. **Extraction** fits each source's shape (its *footprint*) and its activity over time, separating the activity of neighbours. A test of each trace's time course then rejects candidates whose transients decay faster than the indicator can; candidates with too few transients to judge are kept.
 5. **Inspection**: `giant view` shows the sources on the activity images and, for each trial, the movie, the fitted activity and what the fit left unexplained.
 
 The output files have GIAnT-MATLAB's layout, so code that reads `experiment_summary.h5` works unchanged. Without the baseline of step 2, GIAnT-Python follows GIAnT-MATLAB's method. It differs in seeding, footprints and alignment, which can each be set to GIAnT-MATLAB's behaviour, and in running its fits until they have settled where GIAnT-MATLAB stops after a fixed number of steps. Matched settings therefore give closely agreeing results, not identical ones.
