@@ -138,6 +138,23 @@ def test_layout_refuses_a_map_that_stretches_a_subproblem(bent_plan):
         trial_grid(plan, 0)
 
 
+def test_trial_grid_needs_a_support_of_three(bent_plan):
+    """A footprint support of one pixel cannot absorb a source's sub-pixel
+    offset: the trial grid refuses it (and the settings do); a 3 x 3
+    support allows 1 px."""
+    from giant_python.extraction.raster.trial_grid import max_source_offset
+
+    assert max_source_offset(3) == 1.0 and max_source_offset(5) == 1.0
+    with pytest.raises(ValueError, match="3 x 3"):
+        max_source_offset(1)
+    one = replace(bent_plan, params=replace(bent_plan.params, valid_kernel=1))
+    with pytest.raises(ValueError, match="3 x 3"):
+        trial_grid(one, 0)
+    with pytest.raises(ValueError, match="valid_kernel"):
+        SiloParams(solve_grid="trial", valid_kernel=1)
+    SiloParams(solve_grid="consensus", valid_kernel=1)
+
+
 def _trial_footprints(plan, grid, offset=(0.0, 0.0), sigma=1.3):
     """A Gaussian per source on its subproblem's pixels of the trial's
     grid, centred ``offset`` from the source's pixel within its 5 x 5

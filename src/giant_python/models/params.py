@@ -794,6 +794,12 @@ class SiloParams:
             ("rigid", "affine", "patchwise"),
         )
         _choice("solve_grid", self.solve_grid, ("consensus", "trial"))
+        if self.solve_grid == "trial" and self.valid_kernel < 3:
+            # a footprint confined to its source's pixel cannot follow a
+            # source off that pixel (trial_grid.max_source_offset)
+            raise ValueError(
+                "solve_grid 'trial' needs valid_kernel of at least 3"
+            )
         if self.peak_method != "getactimpeaks":
             raise NotImplementedError(
                 f"peakMethod {self.peak_method!r} is not ported yet; only "

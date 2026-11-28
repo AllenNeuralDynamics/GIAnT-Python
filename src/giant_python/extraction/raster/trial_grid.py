@@ -43,13 +43,37 @@ SOLVE_GRIDS = ("consensus", "trial")
 """Grids the subproblems can be solved on (``SiloParams.solve_grid``)."""
 
 MAX_SOURCE_OFFSET_PX = 1.0
-"""Farthest a source may lie from its pixel in the moved subproblem (px).
+"""Farthest a source may lie from its pixel in the moved subproblem (px),
+with a footprint support of 3 x 3 or more.
 
 A footprint is fitted within ``(valid_kernel - 1) / 2`` pixels of its
 source's pixel; a source off its pixel by more than a pixel would lose
-part of its footprint to the support's edge. One shift per subproblem
-leaves a single source within half a pixel per axis (0.71 px); more only
-where the map stretches or bends across a subproblem."""
+part of its footprint to the support's edge (with a 3 x 3 support the
+limit is that radius, 1 px). One shift per subproblem leaves a single
+source within half a pixel per axis (0.71 px); more only where the map
+stretches or bends across a subproblem. A 1 x 1 support cannot follow a
+source off its pixel at all, so the trial grid needs at least 3 x 3."""
+
+
+def max_source_offset(valid_kernel: int) -> float:
+    """The offset :func:`trial_grid` allows with this footprint support:
+    :data:`MAX_SOURCE_OFFSET_PX`, at most the support's radius.
+
+    Raises
+    ------
+    ValueError
+        For a support of one pixel (``valid_kernel`` 1), which cannot
+        absorb a source's sub-pixel offset.
+    """
+    radius = (int(valid_kernel) - 1) / 2
+    if radius < 1:
+        raise ValueError(
+            "the trial grid needs a footprint support of at least 3 x 3 "
+            f"(valid_kernel {valid_kernel}): a footprint confined to its "
+            "source's pixel cannot follow the source off that pixel; solve "
+            "on the consensus grid"
+        )
+    return min(MAX_SOURCE_OFFSET_PX, radius)
 
 
 @dataclass
@@ -130,12 +154,14 @@ def trial_grid(plan: ExtractionPlan, trial: int) -> TrialGrid:
     Raises
     ------
     ValueError
-        If the trial was not aligned across trials, or if the map puts a
-        source more than :data:`MAX_SOURCE_OFFSET_PX` from its pixel in the
-        moved subproblem (the map stretches or bends too much across a
-        subproblem for one shift; solve on the consensus grid instead).
+        If the trial was not aligned across trials, if the plan's footprint
+        support is one pixel, or if the map puts a source farther than
+        :func:`max_source_offset` from its pixel in the moved subproblem
+        (the map stretches or bends too much across a subproblem for one
+        shift; solve on the consensus grid instead).
     """
     warp: TrialWarp = plan.warp
+    limit = max_source_offset(plan.params.valid_kernel)
     if not warp.aligned[trial]:
         raise ValueError(f"trial {trial} was not aligned across trials")
     rows, cols = plan.selected_pixels()
@@ -161,13 +187,13 @@ def trial_grid(plan: ExtractionPlan, trial: int) -> TrialGrid:
         shifts[g] = s
         off = np.sqrt((s_r[src] - s[0]) ** 2 + (s_c[src] - s[1]) ** 2)
         residual[g] = float(off.max())
-        if residual[g] > MAX_SOURCE_OFFSET_PX:
+        if residual[g] > limit:
             k = int(src[np.argmax(off)])
             raise ValueError(
                 f"trial {trial}: the across-trial map puts source {k} "
                 f"{residual[g]:.2f} px from its pixel in its subproblem "
                 f"(group {g}) moved by one whole-pixel shift; more than "
-                f"{MAX_SOURCE_OFFSET_PX:g} px: the map stretches or bends "
+                f"{limit:g} px: the map stretches or bends "
                 "too much across the subproblem for the trial grid; solve "
                 "on the consensus grid (solve_grid='consensus')"
             )

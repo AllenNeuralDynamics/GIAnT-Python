@@ -310,8 +310,16 @@ each consensus pixel, each footprint's sum kept), so the summaries and
 ``giant view`` are in the consensus frame as before. The plan is the same
 on both grids; the prepare and solve settings hashes include the grid when
 it is ``'trial'`` (containers and results files record ``solve_grid``),
-and solve and collect refuse files of the other grid. Measured times and
-the comparison with the consensus grid are in GIAnT-Python#52.
+and solve and collect refuse files of the other grid. Measured against
+the consensus grid (GIAnT-Python#52, 780125 and 885233 on Code Ocean, 32
+cores): the same sources, matched traces r 0.99, equal amplitudes and F0,
+SNR about 1 % lower; no shorter loads (the interpolation it saves runs in
+parallel within a load); and 0.03 to 0.14 px more per-trial position
+jitter, because the footprint fit stays partly anchored to its source's
+pixel, so a source's sub-pixel position in the trial, which the map changes
+from trial to trial, moves its fitted position (about half of the map's
+sub-pixel fraction). The consensus grid keeps that fraction the same in
+every trial.
 
 **dispatch**: the session's subproblems, in path, trial and subproblem
 order, are cut into ``--machines`` contiguous parts of about equal
