@@ -77,6 +77,36 @@ def test_movmean_omitnan():
     assert np.isnan(movmean_omitnan(np.full((1, 4), np.nan), 3)).all()
 
 
+def test_source_minutes(ref):
+    """Minutes of each source's frames that were not discarded, over the
+    trials with traces; the rate the evidence test compares."""
+    from giant_python.extraction.raster.kinetics import (
+        source_minutes,
+        weak_sources,
+    )
+
+    np.testing.assert_allclose(
+        source_minutes([np.zeros((2, 1200)), None], 2, 200.0), [0.1, 0.1]
+    )
+    traces = [np.array(t, dtype=np.float64) for t in ref["LS"]]
+    n = traces[0].shape[0]
+    expect = source_minutes(traces, n, 200.0)
+    lost = np.isfinite(traces[0][2, :100]).sum()
+    traces[0][2, :100] = np.nan  # source 2 loses frames of trial 1
+    expect[2] -= lost / 200.0 / 60.0
+    minutes = source_minutes(traces + [None, np.zeros((0, 0))], n, 200.0)
+    np.testing.assert_allclose(minutes, expect)
+    _, n_events = source_kinetics(traces, 0.024, 200.0)
+    rate = n_events / minutes
+    cut = float(np.median(rate))
+    np.testing.assert_array_equal(
+        weak_sources(np.ones(n), rate, min_event_rate=cut), rate < cut
+    )
+    # a recording twice as long with the same events has half the rate
+    twice = source_minutes(traces + traces, n, 200.0)
+    np.testing.assert_allclose(twice, 2 * minutes)
+
+
 def test_kinetics_edge_cases():
     """No traces, a short time constant and threshold 0 keep everything."""
     score, n = source_kinetics([None], 0.024, 200.0)
@@ -104,15 +134,22 @@ def test_weak_sources_and_mean_snr():
     np.testing.assert_allclose(snr, [2.0, np.nan, 4.0])
     # only NaN is left out, as the summary's mean SNR
     assert mean_snr([np.array([1.0]), np.array([np.inf])], 1)[0] == np.inf
-    events = np.array([0, 9, 2])
+    rates = np.array([0.0, 9.0, 2.0])
     np.testing.assert_array_equal(
-        weak_sources(snr, events), [False, False, False]
+        weak_sources(snr, rates), [False, False, False]
     )
     np.testing.assert_array_equal(
-        weak_sources(snr, events, min_snr=3.0), [True, False, False]
+        weak_sources(snr, rates, min_snr=3.0), [True, False, False]
     )
     np.testing.assert_array_equal(
-        weak_sources(snr, events, min_events=3), [True, False, True]
+        weak_sources(snr, rates, min_event_rate=3.0), [True, False, True]
+    )
+    # a source without a rate (no valid frame) is not judged by it
+    np.testing.assert_array_equal(
+        weak_sources(snr, [np.nan, 9.0, 2.0], min_event_rate=3.0),
+        [False, False, True],
     )
     with pytest.raises(ValueError):
-        weak_sources(snr, events, min_snr=-1.0)
+        weak_sources(snr, rates, min_event_rate=-1.0)
+    with pytest.raises(ValueError):
+        weak_sources(snr, rates, min_snr=-1.0)

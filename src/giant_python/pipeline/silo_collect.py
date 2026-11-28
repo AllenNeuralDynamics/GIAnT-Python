@@ -286,7 +286,7 @@ def collect(
             params.analyze_hz,
             params.min_kinetic_score,
             params.min_source_snr,
-            params.min_source_events,
+            params.min_source_event_rate,
         )
         kept[d + 1] = (int(kin.keep.sum()), int(kin.keep.size))
     t1 = time.perf_counter()

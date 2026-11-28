@@ -250,6 +250,7 @@ class SiloRun:
             "interTrialAlignment",
             "validKernel",
             "peakth",
+            "minSourceEventRate",
             "footprintVariance",
             "seedFit",
             "seedMergePx",
