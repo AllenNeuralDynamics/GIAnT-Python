@@ -86,8 +86,16 @@ class Session:
         return PurePath(str(value).replace("\\", "/")).name
 
     def movie_file(self, d: int, t: int) -> Path:
-        """The registered movie of path ``d``, trial ``t`` (zero-based)."""
-        return self.moco_dir / self._name(self.fn_reg_ds[d, t])
+        """The registered movie of path ``d``, trial ``t`` (zero-based):
+        found by its stem as ``.tif`` or ``.h5``, as SILo finds it
+        (:meth:`SiloSession.movie`); the table's name if neither exists."""
+        name = self._name(self.fn_reg_ds[d, t])
+        stem = PurePath(name).stem
+        for ext in (".tif", ".h5"):
+            p = self.moco_dir / (stem + ext)
+            if p.exists():
+                return p
+        return self.moco_dir / name
 
     def alignment_file(self, d: int, t: int) -> Path:
         """The alignment file of path ``d``, trial ``t`` (zero-based)."""
@@ -182,6 +190,9 @@ class RunLayer:
         the movie's frames, ``(sources, frames)``.
     kept_rc, rejected_rc, seeds_rc : ndarray (n, 2)
         Marker positions in the trial's registered frame.
+    kernels : dict
+        Time kernel to its ``(dt, reach)`` in lines, from this run's own
+        200 Hz frame lines (:func:`render_dt`).
     rendered : bool
         False when the run has no footprints or no map for the trial.
     """
@@ -193,6 +204,7 @@ class RunLayer:
     rejected_rc: np.ndarray
     seeds_rc: np.ndarray
     rendered: bool = True
+    kernels: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -334,9 +346,10 @@ def _marker_rc(tmap, rc: np.ndarray) -> np.ndarray:
 def run_layer(run: SiloRun, session: Session, d: int, t: int, ctx: dict):
     """One run's activity in trial ``t`` of path ``d`` (one-based path,
     zero-based trial). ``ctx`` holds the trial's ``shape``, valid flat
-    pixel indices ``flat``, ``ds_lines``, ``kernels`` (name to ``(dt,
-    reach)``) and ``blur``; the run's 80 Hz discard share under the
-    exporter's kernel is added to it."""
+    pixel indices ``flat``, ``ds_lines``, the movie's kernel ``dt``, the
+    lines per cycle ``lpc`` and ``blur``; the time kernels come from the
+    run's own 200 Hz frame lines (:func:`render_dt`), and the run's 80 Hz
+    discard share under the exporter's kernel is added to ``ctx``."""
     p = run.path(d)
     n = p.sources.n
     tmap = p.maps[t] if t < len(p.maps) else None
@@ -346,11 +359,15 @@ def run_layer(run: SiloRun, session: Session, d: int, t: int, ctx: dict):
     lines200 = p.lines[span]
     rendered = bool(tmap is not None and fp is not None and lines200.size)
     T = ctx["ds_lines"].size
-    x80 = {k: np.zeros((n, T), np.float32) for k in ctx["kernels"]}
+    kernels = {}
+    for k in KERNELS:
+        dtr = render_dt(k, ctx["dt"], lines200)
+        kernels[k] = (dtr, max(3 * dtr, ctx["lpc"]))
+    x80 = {k: np.zeros((n, T), np.float32) for k in kernels}
     h = None
     if rendered:
         x200 = np.nan_to_num(run.traces(d)["dF_denoised"][span])  # (n200, n)
-        for k, (dtr, reach) in ctx["kernels"].items():
+        for k, (dtr, reach) in kernels.items():
             w, share = frame_weights(
                 lines200, p.discard[span], ctx["ds_lines"], dtr, reach
             )
@@ -371,6 +388,7 @@ def run_layer(run: SiloRun, session: Session, d: int, t: int, ctx: dict):
         rejected_rc=_marker_rc(tmap, p.sources.rejected_rc),
         seeds_rc=_marker_rc(tmap, seeds if seeds is not None else []),
         rendered=rendered,
+        kernels=kernels,
     )
 
 
@@ -456,17 +474,13 @@ def load_trial(
     ds = session.ds_lines(d - 1, t)[:T]
     lines0 = runs[0].path(d).lines
     dt = kernel_dt(ds, lines0, st["ratio"])
-    seg = lines0[runs[0].path(d).trial_span(t)]
     lpc = session.lines_per_cycle(d - 1, t)
-    kernels = {}
-    for k in KERNELS:
-        dtr = render_dt(k, dt, seg)
-        kernels[k] = (dtr, max(3 * dtr, lpc))
     ctx = {
         "shape": (R, C),
         "flat": flat,
         "ds_lines": ds,
-        "kernels": kernels,
+        "dt": dt,
+        "lpc": lpc,
         "blur": float(blur),
     }
     layers = [run_layer(r, session, d, t, ctx) for r in runs]
@@ -482,8 +496,14 @@ def load_trial(
         mean = np.nanmean(mov, 0)
     info = {
         "dt_lines": dt,
-        "render_dt_lines": {k: round(v[0], 2) for k, v in kernels.items()},
-        "reach_lines": {k: round(v[1], 1) for k, v in kernels.items()},
+        "render_dt_lines": {
+            r.name: {k: round(v[0], 2) for k, v in r.kernels.items()}
+            for r in layers
+        },
+        "reach_lines": {
+            r.name: {k: round(v[1], 1) for k, v in r.kernels.items()}
+            for r in layers
+        },
         "lines_per_cycle": lpc,
         "blur_px": float(blur),
         "align_hz": hz,

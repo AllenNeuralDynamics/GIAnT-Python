@@ -210,3 +210,37 @@ def test_run_reader(tmp_path):
     assert patch.shape == (15, 15)
     w = footprint_width(gaussian((H, W), CENTRES[0]), *CENTRES[0])
     assert 1.2 < w < 1.4  # a truncated Gaussian of sigma 1.33
+
+
+def test_movie_found_by_stem(tmp_path):
+    """A table naming a TIFF finds the HDF5 movie, as SILo does."""
+    import h5py
+
+    syn = write_session(tmp_path, "rigid")
+    table = syn["run"] / "trial_table.h5"
+    with h5py.File(table, "r+") as f:
+        names = f["motion_correction/fn_reg_ds"][()].astype(str)
+        del f["motion_correction/fn_reg_ds"]
+        f["motion_correction/fn_reg_ds"] = (
+            np.char.replace(names, ".h5", ".tif")
+            .astype(object)
+            .astype(h5py.string_dtype())
+        )
+    session = Session(table, syn["moco"], syn["base"])
+    assert session.has_movie(0, 0)
+    assert session.movie_file(0, 0).suffix == ".h5"
+
+
+def test_kernels_follow_each_runs_frame_lines(tmp_path):
+    """Each run's matched kernel comes from its own 200 Hz frame lines."""
+    syn = write_session(tmp_path, "rigid")
+    session = Session(syn["run"] / "trial_table.h5", syn["moco"], syn["base"])
+    a, b = SiloRun(syn["run"], "a"), SiloRun(syn["run"], "b")
+    b.path(1).lines = (
+        b.path(1).lines * 0 + np.arange(b.path(1).lines.size) * 30.0 + 1
+    )  # another analysis rate: dt200 30 lines
+    tr = load_trial([a, b], session, 1, 0)
+    ka, kb = tr.runs[0].kernels["matched"][0], tr.runs[1].kernels["matched"][0]
+    assert ka == pytest.approx(np.sqrt(134**2 - 54**2))
+    assert kb == pytest.approx(np.sqrt(134**2 - 30**2))
+    assert set(tr.info["render_dt_lines"]) == {"a", "b"}

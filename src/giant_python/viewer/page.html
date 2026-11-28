@@ -79,7 +79,7 @@ main { padding: 10px 16px 24px; }
   font-variant-numeric: tabular-nums; }
 #tip .r { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
 #tip .r span:last-child { margin-left: 14px; }
-.agrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px; gap: 10px; }
+.agrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px; gap: 10px; align-items: start; }
 @media (max-width: 1150px) { .agrid { grid-template-columns: minmax(0, 1fr); } }
 .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px; min-width: 0; }
 .panel .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; }
@@ -227,7 +227,7 @@ details.defs li { margin: 3px 0; }
 const $ = (id) => document.getElementById(id);
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const S = { meta: null, view: "A", path: null };
-const A = { src: null, images: {}, view: { z: 1, cx: 0, cy: 0 }, sel: null, marks: [], flick: false, flickTimer: null,
+const A = { src: null, images: {}, view: { z: 1, cx: 0, cy: 0 }, sel: null, marks: [], flick: false, flickTimer: null, srcSeq: 0,
   detail: null, traces: null, xr: [0, 1], hoverT: null, sortKey: "kind", sortDir: 1, seq: 0 };
 const B = { st: null, layers: [], N: 0, R: 0, C: 0, T: 0, fr: 80, t: 0, avg: 4, playing: false, frame: null,
   inflight: false, pending: false, view: { z: 1, cx: 0, cy: 0 }, sel: null, rad: 1, lo: 0, hi: 1, ahi: 1, rr: 1,
@@ -299,7 +299,9 @@ function resetMovie() {  // the movie view's trial-path state: none loaded, noth
 }
 async function setPath(d) {
   S.path = d; $("path").value = d;
-  A.images = {}; A.sel = null; A.detail = null; A.traces = null; A.view = { z: 1, cx: 0, cy: 0 };
+  A.seq++; A.images = {}; A.sel = null; A.detail = null; A.traces = null; A.view = { z: 1, cx: 0, cy: 0 };
+  A.src = null; A.marks = []; $("srctable").innerHTML = ""; showDetail(); drawACharts();  // nothing of the old path stays clickable
+  for (const id of ["cL", "cR"]) { const c = $(id); c.getContext("2d").clearRect(0, 0, c.width, c.height); }
   resetMovie();
   fillTrialSelect();
   await loadSources();
@@ -308,12 +310,12 @@ async function setPath(d) {
 
 // ---------- view A: sources ----------
 async function loadSources() {
-  const seq = ++A.seq;
+  const seq = ++A.srcSeq;
   setStatus(`reading path ${S.path}…`);
   let src;
   try { src = await getJSON(`/api/sources?path=${S.path}`); }
   catch (e) { setStatus(e.message, true); return; }
-  if (seq !== A.seq) return;
+  if (seq !== A.srcSeq) return;
   A.src = src;
   const [h, w] = src.shape; A.h = h; A.w = w;
   A.view = { z: 1, cx: w / 2, cy: h / 2 };
@@ -385,9 +387,9 @@ function computeMarks() {
   const add = (run, kind, i, p, other) => out.push({ run, kind, i, p, other });
   const K = (r) => A.src.runs[r].kept;
   if (L !== R) {
-    const m = match(K(L), K(R)), mb = new Set(m.values());
+    const m = match(K(L), K(R)), back = new Map([...m].map(([i, j]) => [j, i]));
     K(L).forEach((p, i) => add(L, m.has(i) ? "both" : "onlyL", i, p, m.has(i) ? { run: R, i: m.get(i), p: K(R)[m.get(i)] } : null));
-    K(R).forEach((p, j) => { if (!mb.has(j)) add(R, "onlyR", j, p, null); });
+    K(R).forEach((p, j) => add(R, back.has(j) ? "both" : "onlyR", j, p, back.has(j) ? { run: L, i: back.get(j), p: K(L)[back.get(j)] } : null));
   } else K(L).forEach((p, i) => add(L, "both", i, p, null));
   for (const r of L === R ? [L] : [L, R]) {
     A.src.runs[r].rejected.forEach((p, i) => add(r, "rej", i, p, null));
@@ -401,7 +403,7 @@ function shown(m) {
   return $("mkept").checked;
 }
 function axf(c) { const W = c.width, H = c.height, s = Math.min(W / A.w, H / A.h) * A.view.z; return { s, ox: W / 2 - A.view.cx * s, oy: H / 2 - A.view.cy * s }; }
-function drawPanel(cid, e) {
+function drawPanel(cid, e, run) {
   const c = $(cid), dpr = window.devicePixelRatio || 1;
   const W = c.clientWidth || 400, H = Math.max(80, Math.round(W * A.h / A.w));
   if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.height = H + "px"; }
@@ -414,7 +416,7 @@ function drawPanel(cid, e) {
   const col = { both: css("--both"), onlyL: css("--onlyL"), onlyR: css("--onlyR"), rej: css("--rej"), seed: css("--seed") };
   const r = Math.max(4 * dpr, 1.6 * s);
   for (const m of A.marks) {
-    if (!shown(m)) continue;
+    if (!shown(m) || m.run !== run) continue;
     const X = ox + (m.p[1] + 0.5) * s, Y = oy + (m.p[0] + 0.5) * s;
     if (X < -10 || Y < -10 || X > c.width + 10 || Y > c.height + 10) continue;
     const isSel = A.sel && A.sel.run === m.run && A.sel.kind === m.kind && A.sel.i === m.i;
@@ -435,9 +437,10 @@ async function renderA() {
   let el, er;
   try { [el, er] = await Promise.all([getImage(kl), getImage(kr)]); }
   catch (e) { setStatus(e.message, true); return; }
-  if (!el || !er || src !== A.src) return;  // stale: another path or run list
+  // stale: another path, run list, image or trial was picked meanwhile
+  if (!el || !er || src !== A.src || kl.key !== imgKey("selL").key || kr.key !== imgKey("selR").key) return;
   A.marks = computeMarks();
-  drawPanel("cL", A.flick ? er : el); drawPanel("cR", er);
+  drawPanel("cL", A.flick ? er : el, A.flick ? kr.run : kl.run); drawPanel("cR", er, kr.run);
 }
 function legendA() {
   const [L, R] = panelRuns();
@@ -453,12 +456,14 @@ function legendA() {
     ? `${sym("both")} in both runs (1:1 within 1.5 px) · ${sym("onlyL")} only ${esc(L)} · ${sym("onlyR")} only ${esc(R)}`
     : `${sym("both")} kept sources of ${esc(L)}`) + ` · ${sym("rej")} kinetics-rejected · ${sym("seed")} seed without a source`;
 }
+function panelRun(cid) { const [L, R] = panelRuns(); return cid === "cL" && !A.flick ? L : R; }
 function nearestMark(c, ev) {
+  const run = panelRun(c.id);
   const b = c.getBoundingClientRect(), dpr = c.width / b.width, { s, ox, oy } = axf(c);
   const x = (ev.clientX - b.left) * dpr, y = (ev.clientY - b.top) * dpr;
   let best = null, bd = 9 * dpr;
   for (const m of A.marks) {
-    if (!shown(m)) continue;
+    if (!shown(m) || m.run !== run) continue;
     const X = ox + (m.p[1] + 0.5) * s, Y = oy + (m.p[0] + 0.5) * s, d = Math.hypot(X - x, Y - y);
     if (d < bd) { bd = d; best = m; }
   }
@@ -535,7 +540,8 @@ function eventList() {
 let sortCols = [["kind", "category"], ["run", "run"], ["id", "#"], ["snr", "SNR"], ["kin", "kinetic score"], ["nev", "kinetic events"], ["width", "width (px)"], ["dist", "distance to the other run (px)"]];
 function table() {
   if (!A.src) return;
-  const rows = A.marks.filter((m) => m.kind !== "seed").map((m) => ({ m, kind: m.kind, run: m.run, id: m.i + 1,
+  const [L, R] = panelRuns();
+  const rows = A.marks.filter((m) => m.kind !== "seed" && !(L !== R && m.run === R && m.kind === "both")).map((m) => ({ m, kind: m.kind, run: m.run, id: m.i + 1,
     snr: m.kind === "rej" ? null : m.p[2], kin: m.kind === "rej" ? m.p[2] : m.p[3], nev: m.kind === "rej" ? m.p[3] : m.p[4],
     width: m.kind === "rej" ? null : m.p[5], dist: m.other ? Math.hypot(m.p[0] - m.other.p[0], m.p[1] - m.other.p[1]) : null }));
   const order = { both: 0, onlyL: 1, onlyR: 2, rej: 3 };
@@ -650,7 +656,7 @@ async function loadTrial(t, jump) {
   B.mean = Float32Array.from(st.mean, (v) => (v === null ? NaN : v));
   B.discard = new Set(st.discard);
   const inf = st.info;
-  $("binfo").textContent = `${B.T} frames (${(B.T / B.fr).toFixed(1)} s) · ${B.R} × ${B.C} px, ${B.N} shown · ${B.discard.size} frames blank · movie dt ${inf.dt_lines} lines; activity dt ${inf.render_dt_lines.exporter} (exporter's) or ${inf.render_dt_lines.matched} (matched), reach ${inf.reach_lines.exporter} / ${inf.reach_lines.matched}${inf.lines_per_cycle ? ` (P ${inf.lines_per_cycle})` : " (3 dt; no raw header)"}` +
+  $("binfo").textContent = `${B.T} frames (${(B.T / B.fr).toFixed(1)} s) · ${B.R} × ${B.C} px, ${B.N} shown · ${B.discard.size} frames blank · movie dt ${inf.dt_lines} lines; activity dt (exporter's / matched) ${Object.entries(inf.render_dt_lines).map(([n, k]) => `${esc(n)} ${k.exporter} / ${k.matched}`).join(", ")}${inf.lines_per_cycle ? ` (P ${inf.lines_per_cycle})` : " (reach 3 dt; no raw header)"}` +
     `${inf.blur_px ? ` · blur ${inf.blur_px} px` : ""} · ${inf.movie}${inf.baseline ? " · " + inf.baseline : ""}` +
     Object.entries(st.markers).filter(([, m]) => !m.rendered).map(([n]) => ` · ${n}: no activity in this trial`).join("");
   $("tslider").max = B.T - 1;
@@ -677,10 +683,11 @@ async function requestFrame() {
   if (B.st === null || S.view !== "B") return;
   if (B.inflight) { B.pending = true; return; }
   B.inflight = true;
-  const t = B.t, avg = B.avg, seq = B.seq;
+  const t = B.t, avg = B.avg, seq = B.seq, kernel = B.kernel;
   try {
-    const { buf } = await getBin(`/api/frame?path=${S.path}&trial=${B.trial}&t=${t}&avg=${avg}&kernel=${B.kernel}`);
+    const { buf } = await getBin(`/api/frame?path=${S.path}&trial=${B.trial}&t=${t}&avg=${avg}&kernel=${kernel}`);
     if (seq !== B.seq) throw null;
+    if (t !== B.t || avg !== B.avg || kernel !== B.kernel) { B.pending = true; throw null; }  // outdated: ask again
     const all = new Float32Array(buf);
     B.frame = {}; B.layers.forEach((name, i) => { B.frame[name] = all.subarray(i * B.N, (i + 1) * B.N); });
     if (B.autoNext) { autoRange(); B.autoNext = false; }
@@ -761,8 +768,8 @@ function drawMarkers(ctx, s, ox, oy, dpr) {
   const names = S.meta.runs.map((r) => r.name);
   names.forEach((run, ri) => {
     const m = B.st.markers[run]; if (!m) return;
-    const r = Math.max(3.5 * dpr, 1.5 * s);
-    ctx.lineWidth = 1.25 * dpr; ctx.strokeStyle = css(ri === 0 ? "--both" : "--onlyR");
+    const r = Math.max(2.5 * dpr, 1.4 * s);  // about a footprint's size when zoomed in
+    ctx.lineWidth = (s > 4 ? 1.25 : 0.9) * dpr; ctx.strokeStyle = css(ri === 0 ? "--both" : "--onlyR");
     for (const p of m.kept) {
       if (p[0] === null) continue;
       const X = ox + (p[1] + 0.5) * s, Y = oy + (p[0] + 0.5) * s; ctx.beginPath();
@@ -941,9 +948,13 @@ function drawChart(cv, series, zero, cfg) {
       ctx.stroke(); continue;
     }
     ctx.beginPath(); let pen = false;
-    for (let i = i0; i < i1; i += stride) {
-      const v = s.y[i]; if (!Number.isFinite(v)) { pen = false; continue; }
-      const x = X(i + 0.5), y = Y(v); if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; }
+    for (let b = i0; b < i1; b += stride) {  // each display bin as its min and max, so no event is skipped
+      let mn = Infinity, mx = -Infinity;
+      for (let i = b, e = Math.min(i1, b + stride); i < e; i++) { const v = s.y[i]; if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; } }
+      if (mn === Infinity) { pen = false; continue; }
+      const x = X(b + (stride > 1 ? stride / 2 : 0.5));
+      if (pen) ctx.lineTo(x, Y(mn)); else { ctx.moveTo(x, Y(mn)); pen = true; }
+      if (mx !== mn) ctx.lineTo(x, Y(mx));
     }
     ctx.stroke();
   }
