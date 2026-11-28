@@ -7,9 +7,11 @@ GIAnT-Python is a Python package for processing glutamate imaging data, with adv
 
 Currently implemented: **SLAP2 raster registration** (a port of GIAnT-MATLAB's MultiRoiRegistration, on the CPU or a CUDA GPU), **SILo source extraction for SLAP2 raster (multi-ROI) recordings** (a port of GIAnT-MATLAB's SILo, on one machine or as stages to scatter), and **SLAP2 Band Scan processing**: **BandSILo source extraction and Band Scan ROI annotation** from pre-registered recordings. Additional functionality is available in [GIAnT-MATLAB](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB), and efforts are underway to port it into GIAnT-Python.
 
+New in this release: SILo source extraction for SLAP2 raster recordings, with an optional baseline from the F0 network. For what changed relative to GIAnT-MATLAB, how the results compare and what is still open, see the [release notes](#release-notes-slap2-source-extraction-in-python-november-2026).
+
 ## Requirements and scope
 
-Provide a trial table (SLAP2 trial tables can be built in Python, below), raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered and source-extracted in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. SILo for recordings other than SLAP2 raster, its affine and patchwise across-trial alignment and WMF seeding, standalone deconvolution, general trial-table writing and config-file loading are not supported.
+Provide a trial table (SLAP2 trial tables can be built in Python, below), raw recordings with sidecars, reference TIFFs, alignment files, and the band registration lookup table. Python does not organize recordings. Raster recordings can be registered and source-extracted in Python (below); band registration and its lookup table still come from GIAnT-MATLAB. SILo for recordings other than SLAP2 raster, WMF seeding, standalone deconvolution, general trial-table writing and config-file loading are not supported.
 
 Analysis trials come from the supplied table; Python does not split or merge them.
 
@@ -132,6 +134,84 @@ The returned `ExperimentSummary` is also saved to disk. Access imaging paths thr
 - ROI `Fsvd` is written as NaN unless supplied explicitly; BandSILo does not compute it. Disabled or empty annotations produce zero-ROI datasets.
 - Acquisition line indices are one-based; spatial coordinates are zero-based `[z, y, x]`. Saved offline shifts follow the MATLAB SILo alignment-displacement sign.
 - **Use a fresh output location for each analysis.** Updating an existing summary preserves unrelated paths and existing root parameters/layout flags; writes are not atomic replacement or resume.
+
+## Release notes: SLAP2 source extraction in Python (November 2026)
+
+GIAnT-Python now processes SLAP2 raster (multi-ROI) recordings from raw data to activity traces without MATLAB. It builds the trial table, corrects motion, finds the sources and extracts the activity of each one. A *source* is a small spot that brightens when glutamate is released there, in most recordings a single synapse. This section describes what changed relative to GIAnT-MATLAB, how the results compare, how long processing takes, and what we know to be imperfect. The commands are in the sections above and in [SILo for SLAP2 raster recordings](docs/source/silo.rst).
+
+### What the pipeline does
+
+1. **Registration** corrects brain motion within each trial and writes one movie per trial and imaging path.
+2. **Baseline** (optional) predicts, for every pixel and frame, the fluorescence expected if no glutamate were being released.
+3. **Source finding** builds an image of where activity occurred in each trial, aligns the trials to each other, and places a candidate source on each spot of activity.
+4. **Extraction** fits each source's shape (its *footprint*) and its activity over time, separating the activity of neighbours. A test of each trace's time course then rejects candidates whose transients do not rise and decay as the indicator does.
+5. **Inspection**: `giant view` shows the sources on the activity images and, for each trial, the movie, the fitted activity and what the fit left unexplained.
+
+The output files have GIAnT-MATLAB's layout, so code that reads `experiment_summary.h5` works unchanged. Without the baseline of step 2, GIAnT-Python follows GIAnT-MATLAB's method except for the changes to seeding, footprints, alignment and details of the fits described below, each of which can be switched back.
+
+### What changed relative to GIAnT-MATLAB
+
+**A learned baseline.** Every value this pipeline reports is a change relative to a baseline (F0): the fluorescence a pixel would show without glutamate release. The baseline drifts with bleaching, with residual motion and with slow changes in the tissue. GIAnT-MATLAB estimates it twice: with a running median of each pixel when it looks for sources, and with a slowly varying curve fitted together with the activity when it extracts traces. Both estimates are influenced by the activity they are meant to exclude. Where a synapse is active often, part of its signal is taken into the baseline, and a fitted baseline can also be lowered so that noise is explained as small events. On a control recording of GFP, which shows no glutamate signals, the fitted baseline came out about 13% too low where we had added artificial events.
+
+GIAnT-Python can instead take the baseline from a neural network, the [F0 network](https://github.com/AllenNeuralDynamics/slap2-F0-network), which reads the registered movie and predicts the baseline of every pixel and frame. On the same control recording its baseline was 2 to 3% too low. The network is used when baselines are supplied (`giant silo TABLE --baseline-dir DIR`) or a model file is given (`--f0-ckpt PATH`).
+
+**A simpler fit.** With the network's baseline, extraction no longer estimates a time-varying baseline of its own. The fit keeps the network's baseline and adjusts a single scale factor per pixel, which stays close to 1 in practice. Fewer quantities are estimated from the same data, the baseline and the activity can no longer trade against each other, and extraction runs faster.
+
+**Source finding against measured chance.** With the network's baseline, the image of activity is computed relative to that baseline directly; GIAnT-MATLAB subtracts each pixel's surroundings at this step to remove slow background changes, which also removes part of the signal. The threshold for accepting a spot is set for each trial from simulated movies with the trial's baseline and noise but no activity, so it reflects how often noise alone produces such a spot.
+
+**Seeding.** Each spot in the activity image is fitted with a small bell-shaped profile to place a candidate source. GIAnT-MATLAB fits all spots of an imaging path together and stops after a fixed number of steps, which takes minutes per path and often seeds a source lying between pixels two or three times. GIAnT-Python fits each spot on its own until the fit has settled, which takes seconds, and discards a candidate that ends within 1.5 pixels of another. In tests with artificial sources at known positions this removed nearly all duplicates, while pairs 2 pixels or more apart were still separated.
+
+**Wider footprints and local alignment.** A footprint may now extend over 5 x 5 pixels instead of 3 x 3; on real recordings a third to two thirds of the footprints were wider than the smaller window could represent. Trials are aligned to each other with a smooth map of local displacements instead of one shift for the whole field, which matters when the tissue deforms between trials.
+
+**Running at scale.** The many small fitting problems of a recording can be solved on separate machines or one after another on a single machine, with identical results. In the cloud, registration, the network's prediction and extraction run as separate steps, so a later step can be repeated without redoing the earlier ones.
+
+### How the results compare with GIAnT-MATLAB
+
+With GIAnT-MATLAB's settings the two implementations agree closely: on sparse recordings the traces of matched sources correlate at 1.00 and amplitudes agree within 1%. The defaults differ, and the number of sources differs with them. The table counts the sources kept in the first three minutes of three recordings, both imaging paths together.
+
+| recording | GIAnT-MATLAB | GIAnT-Python, fitted baseline | GIAnT-Python, network baseline |
+|---|---|---|---|
+| sparse (878030) | 73 | 73 | 43 |
+| intermediate (885233) | 143 | 135 | 72 |
+| dense (780125) | 440 | 355 | 269 |
+
+- **Fitted baseline.** GIAnT-Python finds as many sources as GIAnT-MATLAB on the sparse recording and about 20% fewer on the dense one. About three quarters of the sources missing there lie within 2 pixels of a source that GIAnT-Python kept. Without the merging of close candidates a single source is often seeded twice, so some of these pairs were duplicates; others are probably real neighbours, and we could not determine the proportions.
+- **Network baseline.** GIAnT-Python keeps 40 to 50% fewer sources than GIAnT-MATLAB. More than eight in ten of them are also found with the fitted baseline; the difference is candidates that drop out under the stricter threshold applied with the network baseline. On the dense recording most of these are candidates that the time-course test rejects in any case: with the fitted baseline it rejects a quarter to more than half of the candidates there, with the network baseline almost none. On the sparser recordings the sources that drop out had passed the test, and we cannot tell from real recordings how many of them are real.
+- **Control recording.** On GFP, where every source found is false, the fitted baseline gave three false sources per path and the network baseline none. Of artificial sources added to that recording, 99% were found with the fitted baseline and 97% with the network baseline.
+
+Values read from the outputs also shift. With the network baseline, the baseline of matched sources is 10 to 20% higher and their events are 10 to 15% smaller than with the fitted baseline, so dF/F is about two thirds of the earlier value. The wider footprints lower dF/F by a further 5 to 15%, because the baseline is now taken over a larger area around each source while the events at its centre are unchanged. Comparisons of dF/F across pipeline versions therefore need the same settings on both sides.
+
+### Processing time
+
+Times are minutes of processing per minute of recording with two imaging paths, measured on three-minute excerpts.
+
+| step | machine | minutes per recorded minute |
+|---|---|---|
+| registration | one cloud GPU (48 GB) | 2 to 7 |
+| network baseline | the same GPU | 7 to 10 |
+| source finding and extraction | 32 processor cores | 4 to 5 |
+| all steps | | 15 to 20 |
+
+Source finding and extraction take about as long as in GIAnT-MATLAB on sparse recordings (5 minutes per recorded minute there) and about a fifth as long on the dense one (25 minutes there). On a workstation the dense recording took 7 minutes per recorded minute against 17 with GIAnT-MATLAB. The network's prediction is now the slowest step, and it takes several times longer on a desktop GPU with 8 GB of memory, so baselines are better computed in the cloud.
+
+### Known limitations and biases
+
+- **The baseline is slightly low**, by 2 to 3% on the control recording. The network was trained on targets derived from GIAnT-MATLAB's fits, which carry that method's errors, and the way those targets were made left 5 to 7% of the peak of each fast event in the baseline the network was asked to predict.
+- **Small events are overestimated.** Events well above the noise are found in more than nine cases in ten and sized within a few percent. Events near the noise level are found about half the time, and those that are found appear about a quarter too large, because noise helps them over the threshold.
+- **Event sizes with the two baselines differ.** On real recordings events come out 10 to 15% smaller with the network baseline than with the fitted one, more than the 3 to 6% seen for artificial events. The cause is not established, and we do not yet know which is closer to the truth for real events.
+- **Two effects of the settings**, described above: dF/F depends on the footprint size, and sources closer than 1.5 pixels are treated as one.
+- **Source positions vary more between trials** with the network baseline (about 0.2 pixels against 0.12 to 0.19), for reasons we have not identified.
+- **Trial edges.** Baselines are least certain in the first and last two seconds of a trial, where less of the surrounding recording is available.
+- **Scope.** Recordings other than SLAP2 raster and Band Scan, registration of Band Scan recordings, drawing of regions of interest, and a few raster registration options (`refStackTemplate`, `isReVolt`, integration ROIs) still require GIAnT-MATLAB.
+
+### Open directions
+
+1. **Retrain the F0 network on cleaner data.** We will extract the training recordings again with the network's own baseline and a corrected rendering of events, retrain, and re-examine the biases listed above. Registration already saves the per-pixel statistics that the next version of the network will take as input.
+2. **Spine size.** The baseline fluorescence at a synapse scales with the amount of indicator, and so with the amount of membrane, in its footprint. We are building a readout of spine size, and of its change over a session, from the network's baseline.
+3. **Event sizes and dF/F.** Measure the accuracy of event sizes in dense activity against ground truth, and settle on a definition of dF/F that does not depend on the footprint size.
+4. **Dim sources.** Establish, on recordings with ground truth, how many real sources the stricter detection loses.
+5. **Speed and memory.** Shorten the network's prediction and the loading of trials, which now set the pace, and reduce the memory needed per worker.
+6. **Coverage.** Port the remaining recording types and registration options, and provide a single cloud pipeline that runs all steps for a session.
 
 ## Reference
 
