@@ -337,9 +337,15 @@ def masks_to_trial(masks, warp: TrialWarp, trial: int, shape: tuple) -> list:
             moved[r[ok], c[ok]] = True
             out.append(moved)
             continue
-        # the mask's pixels' positions in the trial bound the window
+        # the trial pixels that round back into the mask lie in the images
+        # of the mask's pixel squares: the mapped corners bound the window
+        half = np.array([-0.5, 0.5])
+        cr = (rr[:, None, None] + half[None, :, None]).repeat(2, axis=2)
+        ccn = (cc[:, None, None] + half[None, None, :]).repeat(2, axis=1)
         r_t, c_t = warp.coords(
-            trial, rr.astype(np.float64), cc.astype(np.float64)
+            trial,
+            cr.ravel().astype(np.float64),
+            ccn.ravel().astype(np.float64),
         )
         lo_r = max(0, int(np.floor(np.min(r_t))) - 1)
         lo_c = max(0, int(np.floor(np.min(c_t))) - 1)

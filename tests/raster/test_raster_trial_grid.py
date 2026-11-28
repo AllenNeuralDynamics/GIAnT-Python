@@ -248,6 +248,33 @@ def test_masks_into_the_trial(bent_plan):
     )
 
 
+def test_masks_into_the_trial_under_expansion():
+    """The window that a mask is moved through holds every trial pixel
+    whose consensus position rounds into the mask, also where the map
+    expands: a single pixel at (10, 10) under a 4x scaling covers trial
+    rows and columns 38-41, as the inverse over the whole frame gives."""
+    shape = (60, 60)
+    scale = TrialWarp(np.array([[[4.0, 0.0, 0.0], [0.0, 4.0, 0.0]]]))
+    mask = np.zeros(shape, bool)
+    mask[10, 10] = True
+    got = masks_to_trial([mask], scale, 0, shape)[0]
+    rows, cols = np.nonzero(got)
+    assert set(rows) == set(cols) == {38, 39, 40, 41} and got.sum() == 16
+    bent = _bent(1, shape, scale=1.5)
+    blob = np.zeros(shape, bool)
+    blob[20:26, 31:34] = True
+    rr, cc = np.meshgrid(np.arange(60.0), np.arange(60.0), indexing="ij")
+    x_r, x_c = bent.inverse(0, rr, cc)
+    x_r = np.floor(x_r + 0.5).astype(int)
+    x_c = np.floor(x_c + 0.5).astype(int)
+    ok = (x_r >= 0) & (x_r < 60) & (x_c >= 0) & (x_c < 60)
+    want = np.zeros(shape, bool)
+    want[ok] = blob[x_r[ok], x_c[ok]]
+    np.testing.assert_array_equal(
+        masks_to_trial([blob], bent, 0, shape)[0], want
+    )
+
+
 def test_stage_settings_record_the_grid():
     """The consensus grid leaves every stage's settings as they were (files
     made before the option stay current); the trial grid enters the
