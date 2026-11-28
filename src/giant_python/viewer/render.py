@@ -259,9 +259,9 @@ def kernel_weights(
     if kernel not in KERNELS:
         raise ValueError(f"kernel must be one of {KERNELS}, not {kernel!r}")
     dt200 = frame_dt200(lines200, dt80)
-    if kernel == "matched":
+    if kernel == "matched" and np.size(lines200) >= 2:
         dt = math.sqrt(max(float(dt80) ** 2 - dt200**2, 1.0))
-    else:
+    else:  # (with fewer than 2 frames the movie's dt, as render_dt)
         dt = float(dt80)
     reach = max(3 * dt, float(lines_per_cycle))
     info = {"dt": dt, "reach": reach, "dt200": dt200, "r": 0.0}

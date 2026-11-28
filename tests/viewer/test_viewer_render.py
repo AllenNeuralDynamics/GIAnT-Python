@@ -364,3 +364,13 @@ def test_cubic_placement_keeps_the_shape(mode):
                 )
         assert max(err[3]) < 0.02
         assert max(err[3]) < max(err[1])
+
+
+def test_matched_kernel_with_one_frame():
+    """With one 200 Hz frame the matched kernel keeps the movie's dt (as
+    render_dt) and still renders the frame."""
+    w, _, info = kernel_weights(
+        "matched", np.array([100.0]), np.zeros(1, bool), np.array([90.0]), 134
+    )
+    assert info["dt"] == 134 and render_dt("matched", 134, [100.0]) == 134
+    assert w.toarray()[0, 0] == pytest.approx(1.0)

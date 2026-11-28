@@ -54,7 +54,7 @@ dataset                        shape, type               content
                                col) float32              not imaged
 ``activity``                   same                      SILo's footprints times ``dF_denoised`` at the
                                                          movie's frames; zero outside the footprints
-``mean_image``                 (channel, row, col)       mean over all frames of every channel of the movie
+``mean_image``                 (channel, row, col)       mean over all frames of each written channel
 ``mask/valid``                 (row, col) uint8          missing in less than ``nanThresh`` of the frames,
                                                          motion discards counted
 ``mask/labeled``               (row, col) uint8          3 x 3 median-filtered mean image above 3 x its 25th
@@ -140,5 +140,9 @@ Differences from the MATLAB exporter
   5-7% of every fast event).
 * No per-trial shape-matching blur; ``blurShapeRatio`` still reports the core
   / ring slope ratio.
+* ``mean_image`` holds the written channels (the MATLAB exporter wrote every
+  channel of the movie, which the reader indexes like ``movie``).
+* A trial that fails on a rerun loses its earlier file (the reader finds
+  files, not summaries).
 * The labeled mask's median filter treats unimaged (NaN) pixels as the
   largest values; MATLAB's ``medfilt2`` behaviour with NaN is not documented.

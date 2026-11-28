@@ -15,7 +15,8 @@ in the crop, MATLAB's row and column orientation):
     SILo's fitted activity on the same grid and timing; the training target
     is ``movie - activity``. Zero outside the footprints.
 ``mean_image`` (channel, row, col) float32
-    Mean over all frames of every channel of the movie file.
+    Mean over all frames of each written channel (the MATLAB exporter wrote
+    every channel of the file, which the reader indexes like ``movie``).
 ``mask/valid``, ``mask/labeled``, ``mask/footprint_support`` (row, col) uint8
     Pixels missing in less than ``nanThresh`` of the frames (motion discards
     counted); pixels brighter than 3 x the 25th percentile of the 3 x 3
@@ -600,7 +601,9 @@ def _arrays(job, stack, Y, H, x80, valid, crop, disc, pk) -> dict:
     out = {
         "movie": movie,
         "activity": _activity(H, x80, chans, crop, (R, C), T),
-        "mean_image": mean_all[:, r0:r1, c0:c1].astype(np.float32),
+        "mean_image": mean_all[[ch - 1 for ch in chans], r0:r1, c0:c1].astype(
+            np.float32
+        ),
         "mask/valid": valid[r0:r1, c0:c1].astype(np.uint8),
         "mask/labeled": lab[r0:r1, c0:c1].astype(np.uint8),
         "mask/footprint_support": _support(H, (R, C))[r0:r1, c0:c1].astype(
@@ -700,7 +703,12 @@ def export_trial(job: TrialJob) -> dict:
     try:
         q = _export_trial(job)
     except (TrialSkipped, OSError, ValueError, KeyError) as exc:
-        return {"path": job.path, "trial": job.trial, "error": str(exc)}
+        q = {"path": job.path, "trial": job.trial, "error": str(exc)}
+        out = Path(job.out_file)
+        if out.exists():  # the reader finds files, not summaries
+            out.unlink()
+            q["error"] += "; the earlier file was removed"
+        return q
     q["seconds"] = round(time.time() - t0, 1)
     return q
 
@@ -736,9 +744,9 @@ def _path_jobs(run, session, d, out_dir, options, prov) -> list:
         n = 0
     if options.trials:
         trials = [t - 1 for t in options.trials]
-    elif n:
+    elif (p.n_frames > 0).any():  # the trials SILo analysed
         trials = [t for t in range(p.n_frames.size) if p.n_frames[t] > 0]
-    else:
+    else:  # no frame counts (a path without sources): registered movies
         trials = [
             t
             for t in range(session.fn_reg_ds.shape[1])

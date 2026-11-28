@@ -130,16 +130,19 @@ def test_summary_and_skipped_trial(tmp_path):
     """export_summary.json holds every trial (NaN as null); a trial
     without an across-trial map is reported, not written."""
     syn = write_session(tmp_path / "syn", "rigid", n80=200)
+    out = tmp_path / "out"
+    _export(syn, out)  # a first export writes both trials
+    assert (out / "Path1" / "trial_002.h5").exists()
     es = syn["run"] / "source_extraction" / "experiment_summary.h5"
     with h5py.File(es, "r+") as f:
         a = f["Path1/frame_info/trial_alignment_affine"][()]
         a[..., 1] = np.nan  # MATLAB orientation: trials last
         f["Path1/frame_info/trial_alignment_affine"][...] = a
-    out = tmp_path / "out"
     s = _export(syn, out)
     by_trial = {q["trial"]: q for q in s["trials"]}
     assert "error" not in by_trial[1]
     assert "map" in by_trial[2]["error"]
+    assert "removed" in by_trial[2]["error"]  # no stale file is left
     assert not (out / "Path1" / "trial_002.h5").exists()
     text = (out / "export_summary.json").read_text()
     assert "NaN" not in text
@@ -218,3 +221,35 @@ def test_event_residual_and_peaks():
     assert frac0 == pytest.approx(0.5)  # half of the doubled movie left
     sl, r = f0_qc.peak_fit(H, x, Y, pk)
     assert sl[0] == pytest.approx(1.0) and r[0] == pytest.approx(1.0)
+
+
+def _two_channels(syn) -> None:
+    """Rewrite the synthetic movies with a second channel (2 x the first
+    + 5), interleaved by frame, and set ``numChannels`` 2."""
+    for mf in sorted(syn["moco"].glob("*_REGISTERED_DOWNSAMPLED-80Hz.h5")):
+        with h5py.File(mf, "r+") as f:
+            a = f["mov"][()]  # (pages, cols, rows)
+            del f["mov"]
+            st = np.empty((2 * a.shape[0],) + a.shape[1:], a.dtype)
+            st[0::2], st[1::2] = a, 2 * a + 5
+            f["mov"] = st
+    es = syn["run"] / "source_extraction" / "experiment_summary.h5"
+    with h5py.File(es, "r+") as f:
+        f["params/numChannels"][...] = 2
+
+
+def test_written_channels_and_mean_image(tmp_path):
+    """The mean image follows the written channels, as movie and
+    activity do (the reader indexes all three alike)."""
+    syn = write_session(tmp_path / "syn", "rigid", n80=200)
+    _two_channels(syn)
+    s = _export(syn, tmp_path / "c2", channels=(2,))
+    with h5py.File(s["trials"][0]["file"], "r") as f:
+        m, mi = f["movie"][()], f["mean_image"][()]
+        assert m.shape[0] == 1 and mi.shape[0] == 1
+        np.testing.assert_allclose(mi[0], np.nanmean(m[0], 0), rtol=1e-4)
+        assert int(f.attrs["activityChannel"]) == 1
+    s = _export(syn, tmp_path / "c21", channels=(2, 1))
+    with h5py.File(s["trials"][0]["file"], "r") as f:
+        mi = f["mean_image"][()]
+        np.testing.assert_allclose(mi[0], 2 * mi[1] + 5, rtol=1e-4)
