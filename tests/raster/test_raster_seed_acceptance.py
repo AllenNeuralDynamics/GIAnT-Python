@@ -316,6 +316,11 @@ def test_silo_params_evidence_margin():
     assert every.stage_settings("collect") != net.stage_settings("collect")
     with pytest.raises(ValueError):
         SiloParams(evidence_margin=-1.0)
+    # the null seed thresholds do not count in the image's robust SDs
+    # above peak_th: the evidence test then judges every source
+    for mode in ("null", "null_sd"):
+        p = SiloParams(baseline_source="network", seed_acceptance=mode)
+        assert p.evidence_test and p.evidence_judge_below is None
 
 
 def test_null_sd_acceptance():

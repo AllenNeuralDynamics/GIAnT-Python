@@ -706,8 +706,10 @@ class SiloParams:
         + ``evidence_margin`` robust SDs (their seed height,
         :func:`~giant_python.extraction.raster.seeding.seed_heights`):
         stronger seeds are kept whatever their evidence. Default 2; None
-        judges every source. Matters only when the evidence test is on.
-        Not a MATLAB option.
+        judges every source, as do the null seed thresholds
+        (``seed_acceptance`` 'null' or 'null_sd', which do not count in
+        the combined image's robust SDs above ``peak_th``). Matters only
+        when the evidence test is on. Not a MATLAB option.
     min_frames : int
         Trials with fewer frames are loaded but not source-extracted
         (MATLAB's ``minFrames``).
@@ -954,8 +956,10 @@ class SiloParams:
     @property
     def evidence_judge_below(self) -> Optional[float]:
         """Seed height below which the evidence test judges a source
-        (``peak_th + evidence_margin``); None judges every source."""
-        if self.evidence_margin is None:
+        (``peak_th + evidence_margin``); None judges every source: without
+        a margin, and with the null seed thresholds (their threshold and
+        scale are not the combined image's ``peak_th`` and robust SD)."""
+        if self.evidence_margin is None or self.seed_acceptance != "image":
             return None
         return float(self.peak_th) + float(self.evidence_margin)
 

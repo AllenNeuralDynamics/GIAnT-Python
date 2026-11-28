@@ -150,7 +150,8 @@ are off with either baseline:
   3 x 3 neighbourhood of its pixel in the combined image, in the robust
   SDs the threshold counts
   (:func:`~giant_python.extraction.raster.seeding.seed_heights`); stronger
-  seeds are kept whatever their evidence. ``min_source_event_rate`` is 2
+  seeds are kept whatever their evidence. The null seed thresholds do not
+  count in those units: with them the test judges every source. ``min_source_event_rate`` is 2
   by default with the network baseline (0, off, with the moving median);
   ``min_source_snr`` is off with both.
 
