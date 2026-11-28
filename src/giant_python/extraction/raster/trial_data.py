@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -1247,7 +1248,9 @@ class TrialData:
     photon_scale : float
         Counts per unit of ``y``.
     timings : dict
-        Wall time in seconds of each phase.
+        Wall time in seconds of each phase (``setup``, ``frames``,
+        ``roi_svd``, ``finish``; ``layout``, the part of ``setup`` spent
+        reading the recording's layout).
     """
 
     y: np.ndarray
@@ -1380,6 +1383,45 @@ def _points(need, alignment: TrialAlignment, warp):
     return r_d, c_d, (0.0, 0.0), centre, qpos
 
 
+_LAYOUTS: dict = {}
+_LAYOUTS_LOCK = threading.Lock()
+_LAYOUTS_KEPT = 4
+"""Recording layouts read by :func:`recording_layout` (the last few)."""
+
+
+def recording_layout(dat_path) -> RasterLayout:
+    """:func:`~giant_python.io.slap2_raster.raster_layout` of a recording,
+    read once per file.
+
+    The trials of a continuous (CYCLE-split) recording are line ranges of
+    the same ``.dat`` file, and reading its layout opens every file of the
+    recording and parses its metadata: tens of seconds per trial on a
+    network mount, the same for every trial. The layout is kept for the
+    last few files (keyed by the resolved path, size and modification time,
+    so a changed file is read again); one reader at a time, so concurrent
+    loads of one recording read it once. A file that cannot be stat'ed is
+    read every time.
+    """
+    try:
+        st = os.stat(dat_path)
+    except OSError:
+        return raster_layout(dat_path)
+    key = (
+        raster_layout,  # the reader (tests replace it)
+        str(Path(dat_path).resolve()),
+        st.st_size,
+        st.st_mtime_ns,
+    )
+    with _LAYOUTS_LOCK:
+        layout = _LAYOUTS.get(key)
+        if layout is None:
+            layout = raster_layout(dat_path)
+            _LAYOUTS[key] = layout
+            while len(_LAYOUTS) > _LAYOUTS_KEPT:
+                _LAYOUTS.pop(next(iter(_LAYOUTS)))
+        return layout
+
+
 def _check_layout(layout: RasterLayout) -> None:
     """Reject recordings that the loader does not support."""
     if layout.fast_zs.size != 1:
@@ -1451,7 +1493,8 @@ def load_trial(  # noqa: C901
     dev = torch.device(device)
     t0 = time.perf_counter()
     timings = {}
-    layout = raster_layout(dat_path)
+    layout = recording_layout(dat_path)
+    timings["layout"] = time.perf_counter() - t0
     _check_layout(layout)
     if not isinstance(alignment, TrialAlignment):
         alignment = read_alignment(Path(alignment))

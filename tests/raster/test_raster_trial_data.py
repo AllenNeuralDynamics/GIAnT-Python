@@ -891,6 +891,66 @@ def test_load_trial_reads_selected_pixels_beyond_the_frame(
     np.testing.assert_allclose(general.finv, td.finv, rtol=1e-8)
 
 
+def test_recording_layout_is_read_once_per_file(
+    recording, monkeypatch, tmp_path
+):
+    """Trials of one recording file (a continuous recording's line
+    ranges) read its layout once, also when loaded at the same time; a
+    changed file, another file or a missing one is read again; the loads
+    are the same as with a layout read every time."""
+    import os
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    layout, _, truth = recording
+    calls = []
+    lock = threading.Lock()
+
+    def counted(path):
+        """The fake layout, counting reads."""
+        with lock:
+            calls.append(str(path))
+        return layout
+
+    monkeypatch.setattr(trial_data, "raster_layout", counted)
+    alignment, sel, mean, rois, discard, _ = loader_inputs(layout, truth)
+    rest = (discard, mean, rois, TrialLoadParams(baseline_window_s=0.2))
+    path = layout.files[0]
+
+    def load(first, last):
+        """One line range of the recording."""
+        return load_trial(path, first, last, alignment, sel, RigidShift(),
+                          *rest, dtype=np.float64)  # fmt: skip
+
+    a = load(10.0, 2000.0)
+    b = load(1500.0, 3000.0)
+    assert calls == [str(path)]
+    assert a.timings["layout"] <= a.timings["setup"]
+    # concurrent loads of a new key read it once
+    other = tmp_path / "copy_DMD1-TRIAL000001.dat"
+    other.write_bytes(Path(path).read_bytes())
+    calls.clear()
+    with ThreadPoolExecutor(3) as pool:
+        got = list(pool.map(lambda k: trial_data.recording_layout(other),
+                            range(3)))  # fmt: skip
+    assert calls == [str(other)] and all(g is layout for g in got)
+    # a changed file is read again; a missing one every time
+    stat = other.stat()
+    os.utime(other, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    trial_data.recording_layout(other)
+    assert calls == [str(other)] * 2
+    calls.clear()
+    for _ in range(2):
+        trial_data.recording_layout(tmp_path / "missing.dat")
+    assert len(calls) == 2
+    # the same loads as reading the layout every time
+    monkeypatch.setattr(trial_data, "recording_layout", lambda p: layout)
+    for got, first, last in ((a, 10.0, 2000.0), (b, 1500.0, 3000.0)):
+        ref = load(first, last)
+        np.testing.assert_array_equal(got.y, ref.y)
+        np.testing.assert_array_equal(got.finv, ref.finv)
+
+
 def test_load_trial_without_selected_pixels(recording, monkeypatch):
     """No selected pixel, no ROI and no labeled pixel: empty data, and the
     traces are missing. A selection that is never sampled is an error."""

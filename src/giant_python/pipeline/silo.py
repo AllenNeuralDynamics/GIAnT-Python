@@ -1371,7 +1371,8 @@ def stream(  # noqa: C901
         Per trial: ``unit``, ``load`` and ``wait`` seconds (the wait is
         for the previous trial's solve), ``load_phases`` (the loader's
         wall seconds per phase: ``setup``, ``frames``, ``roi_svd``,
-        ``finish``), ``submitted`` and ``solved``
+        ``finish``, and ``layout``, the part of ``setup`` spent reading the
+        recording's layout), ``submitted`` and ``solved``
         (seconds since ``clock0`` when its subproblems went to the solver
         and when the last was solved; a trial solved in this process, with
         one solver process or batches, is solved when that returns), or
