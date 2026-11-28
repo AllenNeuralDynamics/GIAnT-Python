@@ -215,10 +215,12 @@ class SiloRun:
         self.per_trial = self.summaries / "per_trial_summary.h5"
         self.name = name or self.run_dir.name
         with h5py.File(self.experiment, "r") as f:
+            # scalars and short vectors; validKernel is the kernel itself
+            # (a width x width matrix), kept whatever its size
             self.params = {
                 k: _scalar(f["params"][k][()])
                 for k in f.get("params", {})
-                if f["params"][k].size <= 64
+                if f["params"][k].size <= 64 or k == "validKernel"
             }
             self.attrs = {k: _scalar(v) for k, v in f.attrs.items()}
             self.paths = sorted(
