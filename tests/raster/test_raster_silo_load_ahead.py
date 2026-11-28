@@ -108,11 +108,33 @@ def test_loaded_waits_for_a_measured_load_and_takes_units_lazily():
     assert taken == [0]
 
 
+def test_loaded_hands_on_earlier_units_before_a_failed_check():
+    """With several loaders, an error raised while taking a unit (its
+    check) reaches the caller after the units taken before it."""
+
+    def units():
+        """Two units, then a failing check."""
+        yield from _units(2)
+        raise FileNotFoundError("no baseline")
+
+    gen = silo._loaded(
+        units(), lambda u: {"t": u.t}, SiloExecution(load_workers=3)
+    )
+    got = []
+    with pytest.raises(FileNotFoundError, match="no baseline"):
+        for u, item in gen:
+            got.append(item["t"])
+    assert got == [0, 1]
+
+
+@pytest.mark.parametrize("load_workers", [1, 3])
 def test_streamed_run_checks_later_trials_when_it_reaches_them(
-    tmp_path, fake, monkeypatch  # noqa: F811
+    tmp_path, fake, monkeypatch, load_workers  # noqa: F811
 ):
     """A later trial whose check fails (here its baseline) does not stop
-    the earlier trials from being extracted and written."""
+    the earlier trials from being extracted and written, with one loader
+    or several (the trial waiting for its results is written before the
+    error is raised)."""
     s = make_session(tmp_path / "s")
     real = silo._extraction_baseline
     calls = []
@@ -126,14 +148,14 @@ def test_streamed_run_checks_later_trials_when_it_reaches_them(
 
     monkeypatch.setattr(silo, "_extraction_baseline", failing)
     with pytest.raises(FileNotFoundError, match="no baseline"):
-        silo.run_silo(s, PARAMS, EX)
+        silo.run_silo(s, PARAMS, replace(EX, load_workers=load_workers))
     session = SiloSession.open(s)
     written = [
         t
-        for t in range(session.n_trials - 2)
+        for t in range(session.n_trials)
         if session.results_file(0, t).exists()
     ]
-    assert written == list(range(session.n_trials - 2))
+    assert written == list(range(session.n_trials - 1))
 
 
 def test_loaded_passes_on_errors():
