@@ -307,7 +307,28 @@ def build_parser() -> argparse.ArgumentParser:
     add_silo_commands(subparsers)
     add_spine_commands(subparsers)
     _add_view_command(subparsers)
+    _add_export_f0_command(subparsers)
     return parser
+
+
+def _add_export_f0_command(subparsers) -> None:
+    """``giant export-f0``: F0 network training data from a SILo run."""
+    from .export.f0_training import add_arguments
+
+    export = subparsers.add_parser(
+        "export-f0",
+        help="Write training data for the SLAP2 F0 network (movie and "
+        "SILo's fitted activity per trial, slap2-f0's format) from a "
+        "giant silo run.",
+    )
+    add_arguments(export)
+
+
+def _cmd_export_f0(args: argparse.Namespace) -> int:
+    """Handle ``giant export-f0``."""
+    from .export.f0_training import run_command
+
+    return run_command(args)
 
 
 def _add_view_command(subparsers) -> None:
@@ -545,6 +566,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
         "view": _cmd_view,
+        "export-f0": _cmd_export_f0,
     }
     handlers.update({name: run_silo_command for name in SILO_COMMANDS})
     handlers.update({name: run_spine_command for name in SPINE_COMMANDS})

@@ -4,9 +4,13 @@ import numpy as np
 import pytest
 
 from giant_python.viewer.render import (
+    KERNELS,
     TrialMap,
+    exact_weights,
     frame_weights,
+    interp_weights,
     kernel_dt,
+    kernel_weights,
     place_footprints,
 )
 from giant_python.viewer.run import SiloRun, footprint_width
@@ -244,3 +248,129 @@ def test_kernels_follow_each_runs_frame_lines(tmp_path):
     assert ka == pytest.approx(np.sqrt(134**2 - 54**2))
     assert kb == pytest.approx(np.sqrt(134**2 - 30**2))
     assert set(tr.info["render_dt_lines"]) == {"a", "b"}
+
+
+def _formed(x: np.ndarray, at: np.ndarray, dt: float, reach: float):
+    """Frames formed from a densely sampled signal (one sample per line,
+    line ``i + 1`` holds ``x[i]``) as weighted means with
+    ``exp(-|dline| / dt)`` within ``reach`` lines of each frame's line."""
+    lines = np.arange(1, x.size + 1, dtype=float)
+    out = np.empty(at.size)
+    for j, a in enumerate(at):
+        sel = np.abs(lines - a) <= reach
+        w = np.exp(-np.abs(lines[sel] - a) / dt)
+        out[j] = (w * x[sel]).sum() / w.sum()
+    return out
+
+
+def test_exact_kernel_undoes_the_double_smoothing():
+    """On densely sampled data (kernels not truncated) the exact kernel
+    turns 200 Hz frames into the movie's 80 Hz frames to about 1%; the
+    exporter's kernel loses ~10% of a fast event's peak, the matched one
+    ~5%."""
+    n = 60000
+    x = np.zeros(n)
+    k = np.exp(-np.arange(1200) / 150.0)  # ~14 ms decay at 10.7 kHz lines
+    for onset in range(4000, n - 5000, 7919):
+        x[onset : onset + k.size] += 100 * k
+    dt80, dt200, reach = 134, 54, 12
+    lines200 = np.arange(1, n, dt200, dtype=float)
+    ds = np.arange(1, n, dt80, dtype=float) + 17
+    f200 = _formed(x, lines200, dt200, reach * dt200)
+    f80 = _formed(x, ds, dt80, reach * dt80)
+    none = np.zeros(lines200.size, bool)
+    ok = (ds > 3000) & (ds < n - 3000)
+    peak, rms = {}, {}
+    for kern in KERNELS:
+        w, share, info = kernel_weights(
+            kern, lines200, none, ds, dt80, reach * dt80
+        )
+        assert np.allclose(share, 0)
+        via = w.T @ f200
+        peak[kern] = via[ok].max() / f80[ok].max()
+        rms[kern] = np.sqrt(np.mean((via[ok] - f80[ok]) ** 2)) / np.sqrt(
+            np.mean(f80[ok] ** 2)
+        )
+        if kern == "exact":
+            assert info["r"] == pytest.approx((54 / 134) ** 2)
+    assert peak["exact"] == pytest.approx(1.0, abs=0.01)
+    assert rms["exact"] < 0.015
+    assert peak["exporter"] < 0.95
+    assert peak["exporter"] < peak["matched"] < peak["exact"]
+    assert rms["exact"] < rms["matched"] < rms["exporter"]
+
+
+def test_interp_weights_skip_discarded_frames():
+    """Interpolation uses kept neighbours only, holds at the ends."""
+    lines = np.array([10.0, 20, 30, 40, 50])
+    keep = np.array([True, True, False, True, True])
+    w = interp_weights(lines, keep, np.array([5.0, 25, 35, 45, 60])).toarray()
+    np.testing.assert_allclose(w.sum(0), 1.0)
+    assert w[0, 0] == 1 and w[4, 4] == 1  # nearest kept beyond the ends
+    np.testing.assert_allclose(w[[1, 3], 1], [0.75, 0.25])  # 20..40
+    np.testing.assert_allclose(w[[1, 3], 2], [0.25, 0.75])
+    assert not w[2].any()
+    assert interp_weights(lines, np.zeros(5, bool), lines).nnz == 0
+    one = interp_weights(lines, keep & (lines == 40), lines).toarray()
+    assert (one[3] == 1).all()
+
+
+def test_exact_weights_with_discarded_frames():
+    """Columns sum to 1; discarded frames get no weight; a frame with no
+    kept 200 Hz frame within reach stays empty, as the exporter's."""
+    rng = np.random.default_rng(4)
+    lines200 = np.ceil(1 + 53.4 * np.arange(400))
+    disc = rng.random(400) < 0.1
+    disc[200:240] = True  # a long gap: frames in it have nothing in reach
+    ds = 1.0 + 134 * np.arange(150) + 7
+    w, share, r = exact_weights(lines200, disc, ds, 134, 54, 402)
+    ref, ref_share = frame_weights(lines200, disc, ds, 134, 402)
+    np.testing.assert_allclose(share, ref_share)
+    tot = np.asarray(w.sum(0)).ravel()
+    empty = np.asarray(ref.sum(0)).ravel() == 0
+    assert empty.any() and np.allclose(tot[empty], 0)
+    np.testing.assert_allclose(tot[~empty], 1.0)
+    assert not w.toarray()[disc].any()
+    assert r == pytest.approx((54 / 134) ** 2)
+
+
+@pytest.mark.parametrize("mode", ["rigid", "patchwise"])
+def test_cubic_placement_keeps_the_shape(mode):
+    """Moved by a fraction of a pixel, a footprint keeps its flux with
+    either interpolation; the cubic spline also keeps its peak, where
+    bilinear interpolation blurs it."""
+    warp = make_warp(mode)
+    for t in range(N_TRIALS):
+        field = None
+        if mode == "patchwise":
+            rt, ct = warp.grid_coords(t, (H, W))
+            rr, cc = np.mgrid[:H, :W]
+            field = np.stack([rt - rr, ct - cc])
+        m = TrialMap(warp.affine[t], field)
+        qr, qc = np.mgrid[:H, :W].astype(float)
+        at = warp.inverse(t, qr, qc)
+        err = {}
+        for order in (1, 3):
+            for s, centre in enumerate(CENTRES):
+                fp = gaussian((H, W), centre)
+                r, c = np.nonzero(fp)
+                fps = (r, c, np.zeros(r.size, int), fp[r, c])
+                h = place_footprints(fps, 1, m, (H, W), interp_order=order)
+                img = h.toarray()[:, 0].reshape(H, W)
+                want = gaussian((H, W), centre, at=at)
+                assert img.sum() == pytest.approx(want.sum(), rel=0.01)
+                err.setdefault(order, []).append(
+                    np.abs(img - want).max() / want.max()
+                )
+        assert max(err[3]) < 0.02
+        assert max(err[3]) < max(err[1])
+
+
+def test_matched_kernel_with_one_frame():
+    """With one 200 Hz frame the matched kernel keeps the movie's dt (as
+    render_dt) and still renders the frame."""
+    w, _, info = kernel_weights(
+        "matched", np.array([100.0]), np.zeros(1, bool), np.array([90.0]), 134
+    )
+    assert info["dt"] == 134 and render_dt("matched", 134, [100.0]) == 134
+    assert w.toarray()[0, 0] == pytest.approx(1.0)

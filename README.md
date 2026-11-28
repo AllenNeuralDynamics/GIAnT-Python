@@ -104,6 +104,8 @@ With the F0 network's baselines (slap2-F0-network) the run localizes and extract
 
 To inspect runs by eye, `giant view RUN [RUN ...]` serves a local page (http://127.0.0.1:8766): the activity images with the runs' sources overlaid (two runs compared source by source), and, trial by trial, the aligned 80 Hz movie, the fitted activity rendered into it and the residual movie - activity (with `--baseline-dir`, also the network's baseline). See "Viewing a run" in [SILo for SLAP2 raster recordings](docs/source/silo.rst).
 
+`giant export-f0 RUN OUT` writes training data for the F0 network from a run: per trial and path, the registered movie and the fitted activity on the same grid (the training target is movie - activity), with QC values, in the layout slap2-F0-network's reader takes. It replaces slap2-F0-network's MATLAB exporter for GIAnT-Python runs, renders the 200 Hz traces into the 80 Hz frames without smoothing them twice (`--kernel exact`) and moves the footprints through SILo's own across-trial maps. See [Training data for the F0 network](docs/source/f0_export.rst).
+
 Two seeding settings are not MATLAB's and are on by default: `seed_fit='local'` runs the Gaussian seed fits locally and to convergence, which takes seconds per path instead of minutes; `seed_merge_px=1.5` rejects a residual peak that ends within 1.5 pixels of another one, so a source that falls between pixels is not seeded two or three times. `--set seed_fit=matlab --set seed_merge_px=0` gives MATLAB's seeding.
 
 ## Raster SILo localization (multi-ROI)

@@ -78,6 +78,8 @@ def test_api(server):
     assert np.frombuffer(fr, np.float32).size == n_layers * n
     fm, _ = _get(base + "/api/frame?path=1&trial=0&t=40&avg=4&kernel=matched")
     assert np.frombuffer(fm, np.float32).size == n_layers * n
+    fx, _ = _get(base + "/api/frame?path=1&trial=0&t=40&avg=4&kernel=exact")
+    assert np.frombuffer(fx, np.float32).size == n_layers * n
     tc, hd = _get(base + "/api/trace?path=1&trial=0&r=20&c=30&rad=1")
     assert int(hd["X-Pixels"]) == 9
     assert np.frombuffer(tc, np.float32).size == n_layers * st["shape"][0]

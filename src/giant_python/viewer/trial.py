@@ -26,7 +26,13 @@ import numpy as np
 
 from ..extraction.raster.trial import discard_frames
 from ..pipeline.silo_session import _grid, _read
-from .render import frame_weights, kernel_dt, place_footprints
+from .render import (
+    KERNELS,
+    frame_dt200,
+    kernel_dt,
+    kernel_weights,
+    place_footprints,
+)
 from .run import SiloRun
 
 
@@ -367,9 +373,14 @@ def run_layer(run: SiloRun, session: Session, d: int, t: int, ctx: dict):
     h = None
     if rendered:
         x200 = np.nan_to_num(run.traces(d)["dF_denoised"][span])  # (n200, n)
-        for k, (dtr, reach) in kernels.items():
-            w, share = frame_weights(
-                lines200, p.discard[span], ctx["ds_lines"], dtr, reach
+        for k in kernels:
+            w, share, _ = kernel_weights(
+                k,
+                lines200,
+                p.discard[span],
+                ctx["ds_lines"],
+                ctx["dt"],
+                ctx["lpc"],
             )
             if k == "exporter":
                 ctx.setdefault("shares", []).append(share)
@@ -413,9 +424,6 @@ def _read_alignment(path: Path, n_frames: int):
     return hz, rne
 
 
-KERNELS = ("exporter", "matched")
-
-
 def render_dt(kernel: str, dt80: int, lines200: np.ndarray) -> float:
     """The time constant (lines) the 200 Hz traces are averaged with.
 
@@ -423,16 +431,18 @@ def render_dt(kernel: str, dt80: int, lines200: np.ndarray) -> float:
     frames are already averaged with their own kernel (``dt200 =
     ceil(mean(diff(lines)))``), so this smooths fast events twice;
     ``matched`` uses ``sqrt(dt80**2 - dt200**2)``, the kernel whose
-    variance added to the 200 Hz frames' gives the movie's.
+    variance added to the 200 Hz frames' gives the movie's; ``exact``
+    averages with the movie's ``dt`` and adds the interpolated 200 Hz
+    frames (:func:`~giant_python.viewer.render.exact_weights`).
     """
-    if kernel == "exporter":
+    if kernel in ("exporter", "exact"):
         return float(dt80)
     if kernel != "matched":
         raise ValueError(f"kernel must be one of {KERNELS}, not {kernel!r}")
     lines200 = np.asarray(lines200, dtype=np.float64)
     if lines200.size < 2:
         return float(dt80)
-    dt200 = math.ceil(float(np.mean(np.diff(lines200))))
+    dt200 = frame_dt200(lines200, dt80)
     return math.sqrt(max(dt80**2 - dt200**2, 1.0))
 
 
