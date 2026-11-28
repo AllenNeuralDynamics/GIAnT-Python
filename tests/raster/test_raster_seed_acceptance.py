@@ -318,3 +318,36 @@ def test_amplitude_rule_pixel_keeps_sharp_peaks():
     assert p.plan_params().seed_amplitude_rule == "pixel"
     assert "seed_amplitude_rule" in p.stage_settings("plan")
     assert "seed_amplitude_rule" not in SiloParams().stage_settings("plan")
+
+
+def test_null_images_from_localization_and_empty_plans():
+    """The in-memory adapter carries the localization's null images; a
+    plan without valid trials has no seeds in the null modes too."""
+    from types import SimpleNamespace
+
+    rng = np.random.default_rng(9)
+    null = rng.random((1, 6, 7))
+    loc = SimpleNamespace(
+        act_im=rng.random((6, 7)), peaks=None, info={"null": {"null_im": null}}
+    )
+    trial = SimpleNamespace(
+        mean_im=rng.random((6, 7, 1)), discard=np.zeros(4, bool), half_ims=None
+    )
+    np.testing.assert_array_equal(
+        TrialImages.from_localization(loc, trial).null_im, null
+    )
+    loc.info = {}
+    assert TrialImages.from_localization(loc, trial).null_im is None
+    blank = [
+        TrialImages(
+            t.mean_im, np.full(t.act_im.shape, np.nan), null_im=t.null_im
+        )
+        for t in _trials(np.random.default_rng(10))
+    ]
+    plan = plan_path(
+        blank,
+        params=PlanParams(
+            seed_acceptance="null", inter_trial_alignment="rigid"
+        ),
+    )
+    assert plan.valid_trials.size == 0 and plan.seeds.shape == (0, 4)

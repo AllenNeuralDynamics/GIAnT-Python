@@ -416,3 +416,18 @@ def test_evidence_test_removes_weak_sources(tmp_path):
     np.testing.assert_allclose(rej["SNR"].ravel(), [1.5, 3.0])
     off = kinetics_test(result, 0.024, 200.0, 0.0)
     assert off.weak is None and off.keep.all()
+
+
+def test_evidence_events_skipped_without_counts():
+    """The event criterion judges nothing when the kinetics test cannot
+    count events (decay under 3 frames); the SNR criterion still does."""
+    plan = make_plan()
+    result = PathResult(
+        plan=plan,
+        trials=[None, outcome(1, plan.n_pixels), outcome(2, plan.n_pixels)],
+        alignment=[None, alignment(1), alignment(2)],
+    )
+    kin = kinetics_test(result, 0.005, 200.0, 0.0, min_events=3)
+    assert not kin.weak.any() and kin.keep.all()
+    kin = kinetics_test(result, 0.005, 200.0, 0.0, 3.5, 3)
+    np.testing.assert_array_equal(kin.weak, [True, True, False, False])

@@ -307,7 +307,8 @@ def mean_snr(
 
     ``snrs`` holds each trial's per-source SNR (the solver's: the SD of the
     denoised activity over its noise, ``TrialActivity.snr``), or None for a
-    trial without sources; NaN where no trial has one.
+    trial without sources; NaN where no trial has one. Only NaN is left
+    out, as in the summary's ``SNR`` (an infinite SNR stays infinite).
     """
     total = np.zeros(n_sources)
     count = np.zeros(n_sources)
@@ -315,7 +316,7 @@ def mean_snr(
         if s is None or np.size(s) != n_sources:
             continue
         s = np.asarray(s, dtype=np.float64)
-        ok = np.isfinite(s)
+        ok = ~np.isnan(s)
         total[ok] += s[ok]
         count[ok] += 1
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -334,7 +335,9 @@ def weak_sources(
     below ``min_snr`` or when the kinetics test found fewer than
     ``min_events`` events in its trace (:func:`source_kinetics`); 0 turns
     either criterion off. A source without an SNR (no extracted trial) is
-    not judged by it.
+    not judged by it; the caller turns the event criterion off where the
+    kinetics test could not count events (see
+    :func:`~giant_python.extraction.raster.summary.kinetics_test`).
 
     Returns
     -------

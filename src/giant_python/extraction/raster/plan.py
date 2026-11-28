@@ -242,13 +242,15 @@ class TrialImages:
     @classmethod
     def from_localization(cls, localization, trial) -> "TrialImages":
         """From the two results of
-        :func:`~giant_python.extraction.raster.trial.localize_trial`."""
+        :func:`~giant_python.extraction.raster.trial.localize_trial` (with
+        the bootstrap null's images, when the localization drew them)."""
         return cls(
             trial.mean_im,
             localization.act_im,
             localization.peaks,
             trial.discard,
             trial.half_ims,
+            localization.info.get("null", {}).get("null_im"),
         )
 
 
@@ -981,6 +983,10 @@ def plan_path(  # noqa: C901
     )
     soma = _soma_canvas(soma_mask, shape, warp, soma_mask_trial)
     seed_info: dict = {}
+    if seeds is None and valid.size == 0:
+        # no valid trial: the combined image is empty, so are the seeds
+        # (the image threshold's result, without a null to combine)
+        seeds = np.zeros((0, 4))
     if seeds is None:
         null_im = None
         if p.seed_acceptance != "image":

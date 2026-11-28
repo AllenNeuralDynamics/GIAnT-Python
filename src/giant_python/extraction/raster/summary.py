@@ -162,7 +162,9 @@ def kinetics_test(
     are scored; the result is stored in ``result.kinetics``. With
     ``min_snr`` or ``min_events`` above 0 the evidence test
     (:func:`~giant_python.extraction.raster.kinetics.weak_sources`, not in
-    MATLAB) removes the weak sources too.
+    MATLAB) removes the weak sources too. The event criterion is skipped
+    when the kinetics test counts no events at all: no trial has traces,
+    or the sensor's decay is under 3 frames.
     """
     traces, snrs = [], []
     for t in range(len(result.trials)):
@@ -173,8 +175,13 @@ def kinetics_test(
     n = result.plan.n_sources
     kin = reject_fast_sources(traces, n, tau_s, analyze_hz, min_score)
     if min_snr > 0 or min_events > 0:
+        counted = any(np.size(t) for t in traces) and (
+            int(np.floor(tau_s * analyze_hz + 0.5)) >= 3
+        )
         kin.snr = mean_snr(snrs, n)
-        kin.weak = weak_sources(kin.snr, kin.n_events, min_snr, min_events)
+        kin.weak = weak_sources(
+            kin.snr, kin.n_events, min_snr, min_events if counted else 0
+        )
         kin.keep = kin.keep & ~kin.weak
     result.kinetics = kin
     return result.kinetics

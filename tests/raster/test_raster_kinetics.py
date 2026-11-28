@@ -102,6 +102,8 @@ def test_weak_sources_and_mean_snr():
         [np.array([1.0, np.nan, 3.0]), None, np.array([3.0, np.nan, 5.0])], 3
     )
     np.testing.assert_allclose(snr, [2.0, np.nan, 4.0])
+    # only NaN is left out, as the summary's mean SNR
+    assert mean_snr([np.array([1.0]), np.array([np.inf])], 1)[0] == np.inf
     events = np.array([0, 9, 2])
     np.testing.assert_array_equal(
         weak_sources(snr, events), [False, False, False]
