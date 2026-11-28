@@ -131,8 +131,13 @@ The F0 network's baseline
 extracts with the baselines of the F0 network (slap2-F0-network,
 ``slap2-f0 predict-registered``: one ``<trial>_BASELINE-80Hz.h5`` per
 registered trial-path, on its registered 80 Hz frame, in movie counts)
-instead of MATLAB's moving median and baseline fit. It is the default when
-the baselines are given:
+instead of MATLAB's moving median and baseline fit. The released checkpoint
+(``s6_ft``) is built for SLAP2 multi-ROI recordings of iGluSnFR4f at 80 Hz
+with a blind window of 8 frames on each side (``gap`` 8: the baseline at
+frame t never sees frames t - 8 to t + 8, 212.5 ms, at the pixel and at
+the pixels within 4 rows and columns, ``box_radius`` 4); with a slower
+indicator the events outlast the window and leak into the baseline
+(slap2-F0-network#32). It is the default when the baselines are given:
 
 .. code-block:: bash
 
