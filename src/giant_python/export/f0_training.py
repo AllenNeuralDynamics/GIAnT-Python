@@ -842,6 +842,7 @@ def export_run(
     if options.interp not in INTERP_ORDER:
         raise ValueError(f"unknown interpolation {options.interp!r}")
     run = SiloRun(run_dir)
+    _check_channels(options.channels, _settings(run)["num_channels"])
     session = Session(
         table or find_table(Path(run_dir)), moco_dir, baseline_dir, data_dir
     )
@@ -871,6 +872,16 @@ def export_run(
     summary["trials"].sort(key=lambda q: (q["path"], q["trial"]))
     write_summary(out_dir, summary)
     return summary
+
+
+def _check_channels(channels, num_channels: int) -> None:
+    """Refuse channels outside the movie's one-based ``1..numChannels``."""
+    bad = [c for c in channels or () if not 1 <= int(c) <= num_channels]
+    if bad:
+        raise ValueError(
+            f"channels {bad} are not among the movie's channels "
+            f"1..{num_channels}"
+        )
 
 
 def _run_jobs(jobs: list, workers: int):

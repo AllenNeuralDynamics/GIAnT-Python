@@ -253,3 +253,26 @@ def test_written_channels_and_mean_image(tmp_path):
     with h5py.File(s["trials"][0]["file"], "r") as f:
         mi = f["mean_image"][()]
         np.testing.assert_allclose(mi[0], 2 * mi[1] + 5, rtol=1e-4)
+
+
+@pytest.mark.parametrize("channels", [(0,), (3,), (1, 2)])
+def test_channels_outside_the_movie_are_refused(tmp_path, channels):
+    """Channels are one-based and within numChannels (1 here)."""
+    syn = write_session(tmp_path / "syn", "rigid", n80=200)
+    with pytest.raises(ValueError, match="channels"):
+        _export(syn, tmp_path / "out", channels=channels)
+    with pytest.raises(SystemExit) as e:  # the CLI reports it as a usage error
+        main(
+            [
+                "export-f0",
+                str(syn["run"]),
+                str(tmp_path / "o2"),
+                "--table",
+                str(syn["run"] / "trial_table.h5"),
+                "--moco-dir",
+                str(syn["moco"]),
+                "--channels",
+                *[str(c) for c in channels],
+            ]
+        )
+    assert e.value.code == 2
