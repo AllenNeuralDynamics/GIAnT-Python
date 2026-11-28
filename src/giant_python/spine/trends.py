@@ -96,6 +96,34 @@ def trial_blocks(acquisition, unknown_consecutive: bool = True) -> np.ndarray:
     return np.cumsum(new).astype(np.int64)
 
 
+def image_blocks(path_blocks, rows) -> np.ndarray:
+    """Blocks of a subset of a path's trials (an image's trials with
+    values): a new block starts where the path's block changes or where
+    the subset skips a trial, so that no brief run or neighbour reaches
+    across a block boundary or a missing trial, whatever the order of the
+    acquisition numbers.
+
+    Parameters
+    ----------
+    path_blocks : array_like of int, shape (path trials,)
+        :func:`trial_blocks` of the whole path.
+    rows : array_like of int, shape (trials,)
+        The subset (increasing trial-table indices).
+
+    Returns
+    -------
+    ndarray of int, shape (trials,)
+    """
+    pb = np.asarray(path_blocks, np.int64).ravel()
+    rows = np.asarray(rows, np.int64).ravel()
+    if rows.size == 0:
+        return np.zeros(0, np.int64)
+    sel = pb[rows]
+    new = np.zeros(rows.size, bool)
+    new[1:] = (sel[1:] != sel[:-1]) | (np.diff(rows) > 1)
+    return np.cumsum(new).astype(np.int64)
+
+
 def check_trend_settings(n_perm, fdr_q, max_brief, seed) -> None:
     """Refuse settings the tests cannot use (ValueError): ``n_perm`` must
     be at least 0, ``max_brief`` at least 1, ``fdr_q`` in (0, 1] and
@@ -477,6 +505,7 @@ def trend_tests(
     workers: int | None = None,
     progress=None,
     unknown_consecutive: bool = True,
+    blocks=None,
 ) -> dict:
     """The step, brief and beyond-trend tests of every source.
 
@@ -506,6 +535,10 @@ def trend_tests(
         Called with ``(done, total)`` as sources are tested.
     unknown_consecutive : bool
         Passed to :func:`trial_blocks`.
+    blocks : array_like of int, shape (trials,), optional
+        The trials' blocks, given instead of deriving them from
+        ``acquisition`` (:func:`image_blocks` for a subset of a path's
+        trials).
 
     Returns
     -------
@@ -534,7 +567,11 @@ def trend_tests(
     tested = np.asarray(ok, bool).ravel() & np.isfinite(L).all(axis=1)
     if T < 3:
         tested[:] = False
-    blocks = trial_blocks(acquisition, unknown_consecutive)
+    if blocks is None:
+        blocks = trial_blocks(acquisition, unknown_consecutive)
+    blocks = np.asarray(blocks, np.int64).ravel()
+    if blocks.size != T:
+        raise ValueError(f"{blocks.size} blocks for {T} trials")
     out: dict = {f: np.full(n_src, np.nan) for f in TREND_FIELDS}
     for f in ("step_k", "brief_start", "brief_len", "resid_k"):
         out[f] = np.full(n_src, -1, np.int64)
