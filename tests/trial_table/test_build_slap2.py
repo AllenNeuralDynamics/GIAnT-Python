@@ -44,16 +44,20 @@ class FakeSession:
     """A data folder whose .dat files are empty, with a fake reader."""
 
     def __init__(self, root: Path, monkeypatch):
+        """Create the data folder and put the fake reader in place."""
         self.dir = root / "data"
         self.dir.mkdir()
         self.info = {}
         monkeypatch.setattr(tt, "read_dat_info", self.read)
 
     def read(self, path):
+        """The fake reader: a file's line count and first-line time."""
         lines, first = self.info[Path(path).name]
         return DatInfo(lines, first, LINE_PERIOD_S)
 
     def dat(self, name, lines, mtime, first_line=None):
+        """Add an empty .dat file with its line count, file time and first-line
+        time."""
         p = self.dir / name
         p.write_bytes(b"")
         stamp = mtime.timestamp()
@@ -62,6 +66,8 @@ class FakeSession:
         self.info[name] = (lines, first)
 
     def triggered(self, lines1, lines2):
+        """Add triggered recordings of both paths with the given line
+        counts."""
         dmd1 = [
             f"acq_DMD1-TRIAL{k:06d}.dat" for k in range(1, len(lines1) + 1)
         ]
@@ -75,6 +81,7 @@ class FakeSession:
         return dmd1, dmd2
 
     def references(self):
+        """Write a small reference stack per path, described as SLAP2 does."""
         import tifffile
 
         ref = self.dir / "reference"
@@ -97,18 +104,22 @@ class FakeSession:
                         )
 
     def mtimes(self, names):
+        """The files' modification times as MATLAB datenums."""
         return np.array([tt._mtime_datenum(self.dir / n) for n in names])
 
     def build(self, save_dir, **kw):
+        """Build the trial table of this folder."""
         return build_trial_table_slap2(self.dir, save_dir, **kw)
 
 
 @pytest.fixture
 def session(tmp_path, monkeypatch):
+    """A fake session in a temporary folder."""
     return FakeSession(tmp_path, monkeypatch)
 
 
 def test_triggered_trials(session, tmp_path):
+    """Triggered recordings of both paths give one trial per file pair."""
     lines = [100000, 120000, 110000]
     dmd1, dmd2 = session.triggered(lines, lines)
     session.references()
@@ -134,6 +145,8 @@ def test_triggered_trials(session, tmp_path):
 
 
 def test_triggered_trial_line_mismatch(session, tmp_path):
+    """A file holding two trials back to back is lined up with the other
+    path."""
     # DMD1's trial number failed to increment: its second file holds DMD2's
     # second and third trials back to back
     dmd1, dmd2 = session.triggered([100000, 220000], [100000, 100000, 120000])
@@ -157,6 +170,8 @@ def test_triggered_trial_line_mismatch(session, tmp_path):
 
 
 def test_order_from_file_names_not_mod_times(session, tmp_path):
+    """Acquisitions are ordered by the time in their names, not by file
+    times."""
     # copies carry upload times: DMD1's are scrambled within a few seconds,
     # DMD2's identical; the earlier acquisition sorts last alphabetically
     acqs = [("spont_20250314_101500", 2), ("activity_20250314_111223", 12)]
@@ -192,6 +207,7 @@ def test_order_from_file_names_not_mod_times(session, tmp_path):
 
 
 def test_file_order_falls_back_to_mod_time(session, tmp_path):
+    """Without a time in the names, files are ordered by modification time."""
     names = ["b_DMD1.dat", "a_DMD1.dat"]
     for k, n in enumerate(names, start=1):
         t = START + datetime.timedelta(minutes=k)
@@ -207,6 +223,8 @@ def test_file_order_falls_back_to_mod_time(session, tmp_path):
 
 
 def test_trial_times_from_line_clock(session, tmp_path):
+    """Trial times come from the line clock, which shows gaps the line counts
+    hide."""
     # DMD1's second file holds trials 2 and 3, with a 0.5 s gap that the line
     # count alone doesn't show; mtimes are identical upload times
     starts = [
@@ -242,6 +260,8 @@ def test_trial_times_from_line_clock(session, tmp_path):
 
 
 def test_multicycle_trials_and_times(session, tmp_path):
+    """A continuous recording is cut into trials with times from the line
+    clock."""
     lines = 450000
     t0 = datetime.datetime(2025, 3, 14, 11, 12, 55)
     names = ["acq_DMD1-CYCLE-000000.dat", "acq_DMD2-CYCLE-000000.dat"]
@@ -267,6 +287,8 @@ def test_multicycle_trials_and_times(session, tmp_path):
 
 
 def test_multicycle_times_from_mtime(session, tmp_path):
+    """Without the line clock, a continuous recording's times come from file
+    times."""
     lines = 450000
     names = ["acq_DMD1-CYCLE-000000.dat", "acq_DMD2-CYCLE-000000.dat"]
     for n in names:
@@ -321,6 +343,8 @@ def test_multicycle_times_from_last_file_mtime(session, tmp_path):
 
 
 def test_multicycle_edges_are_matlab_linspace(session, tmp_path):
+    """The trial edges of a continuous recording are MATLAB's linspace
+    values."""
     # 3 trials of 599838 lines: the edges are fractional, as MATLAB's
     lines = 599837
     names = ["acq_DMD1-CYCLE-000000.dat", "acq_DMD2-CYCLE-000000.dat"]
@@ -335,6 +359,7 @@ def test_multicycle_edges_are_matlab_linspace(session, tmp_path):
 
 
 def test_matlab_linspace_values():
+    """matlab_linspace reproduces values computed in MATLAB."""
     # values from MATLAB R2023b: linspace(1, 599838, 4)
     y = matlab_linspace(1, 599838, 4)
     assert y[0] == 1 and y[-1] == 599838
@@ -343,6 +368,7 @@ def test_matlab_linspace_values():
 
 
 def test_reference_stack(session, tmp_path):
+    """Each path's reference stack is found and stored."""
     session.triggered([100000], [100000])
     session.references()
     t = session.build(tmp_path / "out")
@@ -362,6 +388,8 @@ def test_reference_stack(session, tmp_path):
 
 
 def test_write_trial_table_h5(session, tmp_path):
+    """The written trial_table.h5 holds the table in MATLAB's column-major
+    layout."""
     dmd1, dmd2 = session.triggered([100000, 120000], [100000, 120000])
     session.references()
     out = tmp_path / "out"
@@ -387,6 +415,7 @@ def test_write_trial_table_h5(session, tmp_path):
 
 
 def test_max_duration_trims_and_keeps_untrimmed(session, tmp_path):
+    """max_duration_s trims the table and also writes the untrimmed one."""
     session.triggered([100000, 120000, 110000], [100000, 120000, 110000])
     session.references()
     out = tmp_path / "out"
@@ -402,6 +431,8 @@ def test_max_duration_trims_and_keeps_untrimmed(session, tmp_path):
 
 
 def test_trim_keeps_whole_trials_before_the_limit():
+    """Trimming keeps the trials that start before the limit and shortens the
+    last."""
     table = {
         "filename": np.array([["a", "b"], ["c", "d"]], dtype=object),
         "true_trial_ix": np.array([[1.0, 2.0], [1.0, 2.0]]),
@@ -428,12 +459,14 @@ def test_trim_keeps_whole_trials_before_the_limit():
 
 
 def test_no_reference_stack_error(session, tmp_path):
+    """A session without a reference stack raises FileNotFoundError."""
     session.triggered([100000], [100000])
     with pytest.raises(FileNotFoundError):
         session.build(tmp_path / "out")
 
 
 def test_unaligned_dmds_error(session, tmp_path):
+    """Paths whose recordings do not line up raise an error."""
     session.triggered([100000], [150000])
     session.references()
     with pytest.raises(ValueError, match="lining up"):
@@ -451,6 +484,7 @@ def test_unmatched_trailing_recordings_warn(session, tmp_path):
 
 
 def test_no_trials_error(session, tmp_path):
+    """A session in which no trial lines up warns and raises."""
     session.triggered([100000], [])
     session.references()
     with pytest.warns(TrialTableWarning, match="left out"):
@@ -460,6 +494,7 @@ def test_no_trials_error(session, tmp_path):
 
 @pytest.mark.filterwarnings("ignore:Could not read acquisition times")
 def test_mixed_continuous_and_triggered_error(session, tmp_path):
+    """Continuous and triggered recordings in one folder raise an error."""
     session.triggered([100000], [100000])
     for n in ("acq2_DMD1-CYCLE-000000.dat", "acq2_DMD2-CYCLE-000000.dat"):
         session.dat(n, 450000, START + datetime.timedelta(minutes=5))
@@ -469,6 +504,8 @@ def test_mixed_continuous_and_triggered_error(session, tmp_path):
 
 
 def test_acquisition_order():
+    """Files sort by acquisition time and trial number; ambiguous names are
+    refused."""
     names = [
         "a_20250314_111223_DMD1-TRIAL000010.dat",
         "a_20250314_111223_DMD1-TRIAL000002.dat",
@@ -539,6 +576,7 @@ def _write_mat_datetime(path: Path, ms: complex, tz: str = ""):
 
 
 def test_read_mat_datetime(tmp_path):
+    """The .meta decoder reads an unzoned MATLAB datetime."""
     # 2025-03-14 09:30:20.5 wall clock, unzoned
     ms = (
         datetime.datetime(2025, 3, 14, 9, 30, 20, 500000)
@@ -589,7 +627,10 @@ def test_read_mat_datetime_needs_one_value(tmp_path, n):
 
 
 def test_first_line_timestamp(tmp_path):
+    """The first line's timestamp is read from the .dat file, after a magic-
+    number check."""
     class File:
+        """A stand-in for the SLAP2 data-file object."""
         datFileName = str(tmp_path / "x.dat")
         header = {"firstCycleOffsetBytes": 16}
 

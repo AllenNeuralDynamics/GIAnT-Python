@@ -662,6 +662,7 @@ class _FakePool:
     """A pool whose tasks finish at a set time on a controlled clock."""
 
     def __init__(self, now, finish_at):
+        """Take the clock and each task's finish time."""
         self.now, self.finish_at, self.futures = now, list(finish_at), []
 
     def submit(self, *args, **kwargs):
