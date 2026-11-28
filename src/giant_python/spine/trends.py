@@ -56,9 +56,12 @@ import numpy as np
 _MAD_SD = 0.6745
 # permuted statistics this close (relative) to the observed one are ties
 _TIE_RTOL = 1e-9
+# within-group sums of squares below this share of a series' total are
+# rounding error of the cumulative sums: they are taken as zero
+_SS_RTOL = 1e-10
 
 
-def trial_blocks(acquisition) -> np.ndarray:
+def trial_blocks(acquisition, unknown_consecutive: bool = True) -> np.ndarray:
     """Blocks of consecutive acquisition numbers, as ``spineTrends.m``:
     a new block starts where the number jumps by more than 1.
 
@@ -66,11 +69,14 @@ def trial_blocks(acquisition) -> np.ndarray:
     :func:`~giant_python.spine.pipeline.table_trials` reports it) is a
     block of its own, so that it is neither in a brief run nor one of its
     neighbours; when no trial has a number, the trials are taken as
-    consecutive (one block).
+    consecutive (one block) unless ``unknown_consecutive`` is False (for a
+    subset of trials whose path has numbers elsewhere).
 
     Parameters
     ----------
     acquisition : array_like of int, shape (trials,)
+    unknown_consecutive : bool
+        Take the trials as one block when none has a number.
 
     Returns
     -------
@@ -81,7 +87,7 @@ def trial_blocks(acquisition) -> np.ndarray:
     if a.size == 0:
         return np.zeros(0, np.int64)
     known = a >= 0
-    if not known.any():
+    if not known.any() and unknown_consecutive:
         return np.zeros(a.size, np.int64)
     new = np.zeros(a.size, bool)
     new[1:] = (np.diff(a) > 1) | ~known[1:] | ~known[:-1]
@@ -116,10 +122,11 @@ def step_stat(x: np.ndarray):
     -------
     t : ndarray of float64, shape (series,)
         Signed t of mean(after) - mean(before) at the best split (0 when no
-        split gives a finite, non-zero t).
+        split gives a non-zero t; infinite when the groups of a split have
+        no spread, within ``1e-10`` of the series' sum of squares).
     k : ndarray of int, shape (series,)
         Trials before the step at that split, 1 to ``trials - 1``; 0 when
-        no split gives a finite, non-zero t (MATLAB reports 1 there).
+        no split gives a non-zero t (MATLAB reports 1 there).
     d : ndarray of float64, shape (series,)
         mean(after) - mean(before) at that split (0 without one).
     """
@@ -141,7 +148,10 @@ def step_stat(x: np.ndarray):
             sb = tot - sa
             ma, mb = sa / k, sb / (T - k)
             ss = (cs2[:, k - 1] - sa * ma) + ((tot2 - cs2[:, k - 1]) - sb * mb)
-            s = np.sqrt(np.maximum(ss, 0.0) / (T - 2))
+            # no spread within the groups: the statistic is infinite, the
+            # same for a series and its mirror image (ties)
+            ss = np.where(ss <= _SS_RTOL * tot2, 0.0, ss)
+            s = np.sqrt(ss / (T - 2))
             d = mb - ma
             t = d / (s * math.sqrt(1.0 / k + 1.0 / (T - k)))
             upd = np.abs(t) > np.abs(t_best)
@@ -436,6 +446,7 @@ def trend_tests(
     seed: int = 1,
     workers: int | None = None,
     progress=None,
+    unknown_consecutive: bool = True,
 ) -> dict:
     """The step, brief and beyond-trend tests of every source.
 
@@ -463,6 +474,8 @@ def trend_tests(
         result does not depend on it.
     progress : callable, optional
         Called with ``(done, total)`` as sources are tested.
+    unknown_consecutive : bool
+        Passed to :func:`trial_blocks`.
 
     Returns
     -------
@@ -491,7 +504,7 @@ def trend_tests(
     tested = np.asarray(ok, bool).ravel() & np.isfinite(L).all(axis=1)
     if T < 3:
         tested[:] = False
-    blocks = trial_blocks(acquisition)
+    blocks = trial_blocks(acquisition, unknown_consecutive)
     out: dict = {f: np.full(n_src, np.nan) for f in TREND_FIELDS}
     for f in ("step_k", "brief_start", "brief_len", "resid_k"):
         out[f] = np.full(n_src, -1, np.int64)

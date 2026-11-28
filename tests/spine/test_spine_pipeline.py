@@ -595,3 +595,27 @@ def test_trials_without_numbers_are_noted(session, tmp_path, monkeypatch):
     p = read_product(rep["output"])["paths"][1]
     blocks = p["trends"]["sources"]["mean_ch1"]["blocks"]
     assert blocks[1] != blocks[0] and blocks[1] != blocks[2]
+
+
+def test_unnumbered_trials_follow_the_path_not_the_image():
+    """With some numbered trials on the path, unnumbered trials stay
+    blocks of their own even in an image that covers only them; with no
+    numbers on the path, the table's order stands in (gaps split)."""
+    from giant_python.spine.pipeline import _trends
+
+    vals = np.random.default_rng(0).normal(size=(6, 4)) * 0.1
+    norm = {"img": vals.copy(), "ok": np.ones(4, bool)}
+    norm["img"][[0, 1]] = np.nan  # the image covers trials 2-5 only
+    opts = dict(n_perm=0, fdr_q=0.1, max_brief=3, seed=1)
+    acq = np.array([3, 4, -1, -1, -1, -1])
+    tr, _ = _trends(1, norm, acq, opts, 1, lambda m: None, lambda m: None)
+    np.testing.assert_array_equal(
+        tr["img"]["arrays"]["blocks"], [-1, -1, 0, 1, 2, 3]
+    )
+    norm["img"][3] = np.nan  # a gap in table order
+    tr, _ = _trends(
+        1, norm, np.full(6, -1), opts, 1, lambda m: None, lambda m: None
+    )
+    np.testing.assert_array_equal(
+        tr["img"]["arrays"]["blocks"], [-1, -1, 0, -1, 1, 1]
+    )

@@ -195,10 +195,14 @@ def _trends(n, norm: dict, acq, opts: dict, workers, say, note) -> tuple:
     summary: dict = {}
     n_trials = len(acq)
     unknown = np.asarray(acq) < 0
+    # without any acquisition number, the trial table's order stands in for
+    # it; with some, an unnumbered trial stays a block of its own in every
+    # image, whichever trials the image covers
+    numbers = np.arange(n_trials) if unknown.all() else np.asarray(acq)
     if unknown.all():
         note(
             f"Path{n}: no trial has an acquisition number; the brief test "
-            "takes the trials as consecutive"
+            "takes the trial table's order"
         )
     elif unknown.any():
         note(
@@ -220,12 +224,13 @@ def _trends(n, norm: dict, acq, opts: dict, workers, say, note) -> tuple:
         r = trend_tests(
             vals[rows],
             norm["ok"],
-            acq[rows],
+            numbers[rows],
             n_perm=opts["n_perm"],
             fdr_q=opts["fdr_q"],
             max_brief=opts["max_brief"],
             seed=opts["seed"],
             workers=workers,
+            unknown_consecutive=False,
         )
         skip = ("counts", "var_share", "shared_v", "blocks", "brief_start")
         arrays = {

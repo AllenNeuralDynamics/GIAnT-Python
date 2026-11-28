@@ -86,6 +86,9 @@ def test_trials_without_numbers_are_blocks_of_their_own():
         trial_blocks([10, 11, -1, -1, 14, 15]), [0, 0, 1, 2, 3, 3]
     )
     np.testing.assert_array_equal(trial_blocks([-1, -1, -1]), [0, 0, 0])
+    np.testing.assert_array_equal(
+        trial_blocks([-1, -1, -1], unknown_consecutive=False), [0, 1, 2]
+    )
     x = np.zeros((1, 7))
     x[0, 3] = 1.0  # a transient at the trial without a number
     x += np.random.default_rng(0).normal(size=x.shape) * 1e-3
@@ -312,6 +315,20 @@ def test_ties_at_the_edge_split_count():
     r = trend_tests(x - x.mean(), np.ones(1, bool), np.arange(T), n_perm=4000)
     assert r["step_k"][0] == 1
     assert r["step_p"][0] == pytest.approx(2 / T, abs=0.02)
+
+
+def test_noise_free_edge_outlier_ties_with_its_mirror():
+    """A series without spread apart from one end trial has an infinite
+    step statistic, equal for the series and its mirror image, so every
+    order that puts the trial at either end ties (p about 2/T)."""
+    x = np.zeros((2, 10))
+    x[0, -1] = 1.0
+    x[1, 0] = 1.0
+    t, k, _ = step_stat(x)
+    assert np.isinf(t).all() and t[0] > 0 > t[1]
+    np.testing.assert_array_equal(k, [9, 1])
+    r = trend_tests(x[:1].T, np.ones(1, bool), np.arange(10), n_perm=4000)
+    assert r["step_p"][0] == pytest.approx(0.2, abs=0.03)
 
 
 def test_trend_tests_without_permutations():
