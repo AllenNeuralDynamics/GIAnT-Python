@@ -1389,28 +1389,69 @@ _LAYOUTS_KEPT = 4
 """Recording layouts read by :func:`recording_layout` (the last few)."""
 
 
+def _layout_inputs(dat_path) -> tuple:
+    """``(name, size, modification time)`` of every file the reader of
+    ``dat_path`` opens, as ``slap2_utils`` finds them: the ``.dat`` file or,
+    for a CYCLE-split recording, every segment of its group (the ``.dat``
+    files of its directory whose names start with its stem), and the
+    metadata file of each (``<name without -TRIAL and -CYCLE>.meta``); a
+    missing file has size and time None."""
+    import re
+
+    from ...io.slap2 import is_cycle_split
+
+    path = os.path.abspath(dat_path)
+    folder, name = os.path.split(path)
+    stem = os.path.splitext(name)[0]
+    names = [name]
+    if is_cycle_split(path):
+        group = re.sub(r"-CYCLE-?[0-9]+$", "", stem, flags=re.IGNORECASE)
+        names = [
+            f
+            for f in os.listdir(folder)
+            if f.lower().endswith(".dat")
+            and os.path.splitext(f)[0].startswith(group)
+        ]
+    metas = set()
+    for f in names:
+        base = re.sub(r"-TRIAL\d+", "", os.path.splitext(f)[0], flags=re.I)
+        metas.add(re.sub(r"-CYCLE-?\d+", "", base, flags=re.I) + ".meta")
+    out = []
+    for f in sorted(set(names) | metas):
+        try:
+            st = os.stat(os.path.join(folder, f))
+            out.append((f, st.st_size, st.st_mtime_ns))
+        except OSError:
+            out.append((f, None, None))
+    return tuple(out)
+
+
 def recording_layout(dat_path) -> RasterLayout:
     """:func:`~giant_python.io.slap2_raster.raster_layout` of a recording,
-    read once per file.
+    read once per recording.
 
     The trials of a continuous (CYCLE-split) recording are line ranges of
     the same ``.dat`` file, and reading its layout opens every file of the
     recording and parses its metadata: tens of seconds per trial on a
     network mount, the same for every trial. The layout is kept for the
-    last few files (keyed by the resolved path, size and modification time,
-    so a changed file is read again); one reader at a time, so concurrent
-    loads of one recording read it once. A file that cannot be stat'ed is
-    read every time.
+    last few recordings, keyed by the path as given (its name decides
+    whether the reader takes one file or the group) and the name, size and
+    modification time of every file the reader opens (the group's segments
+    and their metadata, :func:`_layout_inputs`), so that a changed, added
+    or removed file is read again. One reader at a time, so concurrent
+    loads of one recording read it once. A ``.dat`` file that cannot be
+    found is read every time (the reader reports it).
     """
     try:
-        st = os.stat(dat_path)
+        inputs = _layout_inputs(dat_path)
     except OSError:
+        return raster_layout(dat_path)
+    if any(size is None for f, size, _ in inputs if f.endswith(".dat")):
         return raster_layout(dat_path)
     key = (
         raster_layout,  # the reader (tests replace it)
-        str(Path(dat_path).resolve()),
-        st.st_size,
-        st.st_mtime_ns,
+        os.path.abspath(dat_path),
+        inputs,
     )
     with _LAYOUTS_LOCK:
         layout = _LAYOUTS.get(key)

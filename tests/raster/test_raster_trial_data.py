@@ -951,6 +951,55 @@ def test_recording_layout_is_read_once_per_file(
         np.testing.assert_array_equal(got.finv, ref.finv)
 
 
+def test_recording_layout_follows_segments_and_metadata(
+    recording, monkeypatch, tmp_path
+):
+    """A CYCLE-split recording's layout is read again when a segment is
+    added or removed or its metadata changes, and the path as given is
+    part of the key (its name decides how the reader opens it)."""
+    import os
+
+    layout = recording[0]
+    calls = []
+    monkeypatch.setattr(
+        trial_data, "raster_layout", lambda path: calls.append(path) or layout
+    )
+    folder = tmp_path / "split"
+    folder.mkdir()
+    first = folder / "rec_DMD1-TRIAL000001-CYCLE-000000.dat"
+    first.write_bytes(b"x")
+    meta = folder / "rec_DMD1.meta"
+    meta.write_bytes(b"m")
+    (folder / "rec_DMD2-TRIAL000001-CYCLE-000000.dat").write_bytes(b"y")
+    read = trial_data.recording_layout
+    read(first), read(first)
+    assert len(calls) == 1
+    names = [n for n, _, _ in trial_data._layout_inputs(first)]
+    assert names == [first.name, meta.name]  # not the other DMD's
+    second = folder / "rec_DMD1-TRIAL000001-CYCLE-000100.dat"
+    second.write_bytes(b"z")  # a segment added
+    read(first), read(first)
+    assert len(calls) == 2
+    st = meta.stat()  # the metadata changed
+    os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    read(first)
+    assert len(calls) == 3
+    second.unlink()  # a segment removed
+    read(first)
+    assert len(calls) == 4
+    # the same absolute path is the same key; a link to the file is not
+    (folder / "sub").mkdir()
+    read(str(folder / "sub" / ".." / first.name))
+    assert len(calls) == 4
+    link = folder / "link_DMD1-TRIAL000001.dat"
+    try:
+        os.symlink(first, link)
+    except (OSError, NotImplementedError):
+        return  # no symbolic links here
+    read(link)
+    assert len(calls) == 5
+
+
 def test_load_trial_without_selected_pixels(recording, monkeypatch):
     """No selected pixel, no ROI and no labeled pixel: empty data, and the
     traces are missing. A selection that is never sampled is an error."""
