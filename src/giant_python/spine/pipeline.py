@@ -53,7 +53,7 @@ from .product import FORMAT_VERSION, _code_version, write_product
 from .readout import common_valid, mask_mean, norm_log, project
 from .rois import masks_roiset, sources_roiset
 from .summary_io import RunSummary
-from .trends import trend_tests
+from .trends import check_trend_settings, trend_tests
 
 _TRIAL_RE = re.compile(r"TRIAL0*(\d+)")
 _REGISTERED = "_REGISTERED"
@@ -175,10 +175,11 @@ def _normalize(r: dict, images: dict, window: list, used) -> dict:
     return norm
 
 
-def _trends(n, norm: dict, acq, opts: dict, workers, say) -> tuple:
+def _trends(n, norm: dict, acq, opts: dict, workers, say, note) -> tuple:
     """The trend tests of every image's normalized source sizes
     (:func:`~giant_python.spine.trends.trend_tests`), over the trials in
-    which the image has values.
+    which the image has values. ``say`` gets progress lines, ``note`` the
+    notes stored with the summary (trials without acquisition numbers).
 
     Returns
     -------
@@ -193,6 +194,19 @@ def _trends(n, norm: dict, acq, opts: dict, workers, say) -> tuple:
     trends: dict = {}
     summary: dict = {}
     n_trials = len(acq)
+    unknown = np.asarray(acq) < 0
+    if unknown.all():
+        note(
+            f"Path{n}: no trial has an acquisition number; the brief test "
+            "takes the trials as consecutive"
+        )
+    elif unknown.any():
+        note(
+            f"Path{n}: trial(s) "
+            f"{', '.join(str(t + 1) for t in np.flatnonzero(unknown))} have "
+            "no acquisition number; the brief test leaves them out of its "
+            "runs and their neighbours"
+        )
     for name, vals in norm.items():
         if name == "ok":
             continue
@@ -491,6 +505,7 @@ def make_spine_summary(  # noqa: C901
     """
     if (baseline_dir is None) != (moco_dir is None):
         raise ValueError("give both --baseline-dir and --moco-dir, or neither")
+    check_trend_settings(n_perm, fdr_q, max_brief, seed)
     if gain_work_dir is not None and baseline_dir is None:
         raise ValueError("--gain-work-dir needs --baseline-dir")
     run = RunSummary(run_dir)
@@ -736,7 +751,7 @@ def make_spine_summary(  # noqa: C901
                 continue
             normalized[set_name] = _normalize(r, images, window, used)
             trends[set_name], summ = _trends(
-                n, normalized[set_name], acq, trend_opts, workers, say
+                n, normalized[set_name], acq, trend_opts, workers, say, note
             )
             report["paths"].setdefault(n, {})["trends"] = summ
         activity = {}
