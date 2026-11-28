@@ -296,3 +296,94 @@ def test_product_records_the_activity_channel(tmp_path):
     prod = read_product(rep["output"])
     assert prod["paths"][1]["activity_channel"] == 2
     assert {"mean_ch1", "mean_ch2"} <= set(prod["paths"][1]["images"])
+
+
+def test_displacement_maps_end_to_end(tmp_path):
+    """A run with a displacement field (patchwise alignment) puts the
+    network's trials in place through the field, not the affine maps."""
+    kw = dict(trim_s=0.1)
+    s = syn.make_session(tmp_path / "d", displacement=True)
+    run = RunSummary(s["run"])
+    assert run.trial_map(1).displacement is not None
+    rep = make_spine_summary(
+        s["run"],
+        s["table"],
+        tmp_path / "d" / "out",
+        baseline_dir=s["baselines"],
+        moco_dir=s["moco"],
+        **kw,
+    )
+    p = read_product(rep["output"])["paths"][1]
+    ok = p["valid"]
+    assert ok.sum() > 0.5 * ok.size
+    np.testing.assert_allclose(
+        p["images"]["f0_net"][:, ok],
+        p["images"]["f0_silo_ch1"][:, ok],
+        rtol=1e-3,
+    )
+    np.testing.assert_allclose(
+        p["normalized"]["sources"]["f0_net"], 0, atol=2e-3
+    )
+    # the same maps as affine identity alone leave the trials displaced
+    a = np.zeros((syn.N_TRIALS, 2, 3))
+    a[:, :, :2] = np.eye(2)
+    s0 = syn.make_session(tmp_path / "a", affine=a)
+    rep0 = make_spine_summary(
+        s0["run"],
+        s0["table"],
+        tmp_path / "a" / "out",
+        baseline_dir=s0["baselines"],
+        moco_dir=s0["moco"],
+        **kw,
+    )
+    p0 = read_product(rep0["output"])["paths"][1]
+    ok0 = p0["valid"]
+    net = p0["images"]["f0_net"][1:, ok0]
+    assert np.abs(net / p0["images"]["f0_silo_ch1"][1:, ok0] - 1).max() > 1e-2
+
+
+def test_fitted_images_do_not_shrink_the_windows(tmp_path):
+    """SILo's own F0 images, with values only at the pixels it fitted, are
+    read out in the windows of the field images: the sources (inside the
+    fitted pixels) read as before, a user ROI partly outside keeps its
+    readouts of the other images and gets NaN in f0_silo, and the report
+    counts it."""
+    kw = dict(trim_s=0.1)
+    full = syn.make_session(tmp_path / "full")
+    box = syn.make_session(
+        tmp_path / "box", f0_silo_box=(slice(4, 20), slice(5, 25))
+    )
+    reps, prods = {}, {}
+    for name, s in (("full", full), ("box", box)):
+        reps[name] = make_spine_summary(
+            s["run"],
+            s["table"],
+            tmp_path / name / "out",
+            baseline_dir=s["baselines"],
+            moco_dir=s["moco"],
+            **kw,
+        )
+        prods[name] = read_product(reps[name]["output"])["paths"][1]
+    a, b = prods["full"], prods["box"]
+    np.testing.assert_array_equal(a["valid"], b["valid"])
+    for k in a["readout"]["sources"]:
+        np.testing.assert_allclose(
+            a["readout"]["sources"][k], b["readout"]["sources"][k]
+        )
+    for k in a["normalized"]["sources"]:
+        np.testing.assert_allclose(
+            a["normalized"]["sources"][k], b["normalized"]["sources"][k]
+        )
+    ua, ub = a["readout"]["user"], b["readout"]["user"]
+    np.testing.assert_array_equal(ua["n_pixels"], ub["n_pixels"])
+    np.testing.assert_allclose(ua["f0_net"], ub["f0_net"])
+    assert np.isnan(ub["f0_silo_ch1"][:, 0]).all()  # roi A: partly outside
+    np.testing.assert_allclose(
+        ub["f0_silo_ch1"][:, 1], ua["f0_silo_ch1"][:, 1]
+    )
+    assert reps["box"]["paths"][1]["not_covered"] == {
+        "user": {"f0_silo_ch1": 1, "f0_silo_ch2": 1}
+    }
+    assert "not_covered" not in reps["full"]["paths"][1]
+    assert b["image_attrs"]["f0_silo_ch1"]["covers"] == "fitted"
+    assert b["image_attrs"]["f0_net"]["covers"] == "field"

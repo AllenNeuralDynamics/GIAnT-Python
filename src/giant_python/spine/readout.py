@@ -99,9 +99,10 @@ def mask_mean(images: np.ndarray, rois: RoiSet, valid=None):
 
     Without ``valid`` this is GIAnT-MATLAB's ``user_rois/per_trial_F0``:
     every pixel with a value in that trial, so the window can change
-    between trials and images. With ``valid`` (:func:`common_valid`) only
-    the ROI's valid pixels are averaged, the same windows in every trial
-    and image.
+    between trials and images. With ``valid`` (:func:`common_valid`) the
+    ROI's valid pixels are averaged, the same windows in every trial and
+    image: a trial in which the image has no value at one of them gives
+    NaN, as :func:`project` does.
 
     Returns
     -------
@@ -128,9 +129,11 @@ def mask_mean(images: np.ndarray, rois: RoiSet, valid=None):
         ok = np.isfinite(x)
         n = ok.sum(axis=1)
         coverage[:, k] = n / n_all
+        # with fixed windows, only complete ones
+        need = idx.size if vflat is not None else 1
         with np.errstate(invalid="ignore", divide="ignore"):
             values[:, k] = np.where(
-                n > 0,
+                n >= need,
                 np.where(ok, x, 0).sum(axis=1) / np.maximum(n, 1),
                 np.nan,
             )

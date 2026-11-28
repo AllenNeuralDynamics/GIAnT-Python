@@ -20,7 +20,9 @@ selected pixels (``sources/sel``, listed column by column, as MATLAB's
 ``find(selPix)``). As in SILo's collect stage, only results made from the
 current plan are read. A work folder that holds results of more than one
 solve for a trial (other solve settings or inputs) is an error, since the
-summaries do not record which solve they used.
+summaries do not record which solve they used, and so are a trial's files
+that leave out some of its subproblems (an incomplete set of shards), which
+the collect stage also refuses.
 
 Only the gain modes whose baseline is ``g * b_net`` are read: 'gain' (N1),
 and 'gain_shared' (N2) subproblems whose shared time course stayed at 1.
@@ -108,11 +110,56 @@ def current_results(files, plan: str) -> list:
     return next(iter(groups.values()), [])
 
 
+def _n_subproblems(path, f: h5py.File, n_sub):
+    """The trial's number of subproblems as the file records it (or
+    ``n_sub`` if it does not), checked against ``n_sub`` from its other
+    files."""
+    ns = f.attrs.get("n_subproblems")
+    if ns is None:
+        return n_sub
+    ns = int(ns)
+    if n_sub is not None and ns != n_sub:
+        raise ValueError(
+            f"{path}: the trial has {ns} subproblems here but {n_sub} in "
+            "another of its results files"
+        )
+    return ns
+
+
+def _subproblem_gains(path, k: int, g: h5py.Group):
+    """A subproblem's pixels and gains (``baseline_step.gain`` of its
+    ``info`` record), checked as :func:`trial_gains` describes."""
+    step = json.loads(g.attrs["info"]).get("baseline_step")
+    if not step or "gain" not in step:
+        raise ValueError(
+            f"{path}: subproblem {k} has no gain record "
+            "(not a 'gain' baseline mode)"
+        )
+    shared = step.get("shared")
+    if shared is not None and not np.allclose(
+        np.asarray(shared, dtype=np.float64), 1.0
+    ):
+        raise ValueError(
+            f"{path}: subproblem {k} has a shared baseline time "
+            "course ('gain_shared'); its baseline is not "
+            "gain x network baseline"
+        )
+    p = np.asarray(g["pixels"][()], dtype=np.int64).ravel()
+    v = np.asarray(step["gain"], dtype=np.float64).ravel()
+    if p.size != v.size:
+        raise ValueError(
+            f"{path}: subproblem {k} has {p.size} pixels but {v.size} gains"
+        )
+    return p, v
+
+
 def trial_gains(results_files) -> tuple[np.ndarray, np.ndarray]:
     """Every subproblem pixel's gain in one trial-path's results files.
 
     A subproblem that is in several files (identical copies, which SILo's
-    collect stage also allows) counts once.
+    collect stage also allows) counts once. As in the collect stage, every
+    subproblem of the trial (``n_subproblems``, where the files record it)
+    must be in the files.
 
     Returns
     -------
@@ -128,39 +175,22 @@ def trial_gains(results_files) -> tuple[np.ndarray, np.ndarray]:
         If a subproblem has no gain record (the run did not use a 'gain'
         mode), has a shared time course other than 1 ('gain_shared',
         whose baseline is then not ``g * b_net``), or has two different
-        copies.
+        copies; or if the files disagree on the trial's number of
+        subproblems or leave some out.
     """
     seen: dict = {}
+    n_sub = None
+    extracted = True
     for path in results_files:
         with h5py.File(path, "r") as f:
+            n_sub = _n_subproblems(path, f, n_sub)
+            if not int(f.attrs.get("extracted", 1)):
+                extracted = False
             if "subproblems" not in f:
                 continue
             for k in f["subproblems/index"][()]:
                 k = int(k)
-                g = f[f"subproblems/{k}"]
-                info = json.loads(g.attrs["info"])
-                step = info.get("baseline_step")
-                if not step or "gain" not in step:
-                    raise ValueError(
-                        f"{path}: subproblem {k} has no gain record "
-                        "(not a 'gain' baseline mode)"
-                    )
-                shared = step.get("shared")
-                if shared is not None and not np.allclose(
-                    np.asarray(shared, dtype=np.float64), 1.0
-                ):
-                    raise ValueError(
-                        f"{path}: subproblem {k} has a shared baseline time "
-                        "course ('gain_shared'); its baseline is not "
-                        "gain x network baseline"
-                    )
-                p = np.asarray(g["pixels"][()], dtype=np.int64).ravel()
-                v = np.asarray(step["gain"], dtype=np.float64).ravel()
-                if p.size != v.size:
-                    raise ValueError(
-                        f"{path}: subproblem {k} has {p.size} pixels "
-                        f"but {v.size} gains"
-                    )
+                p, v = _subproblem_gains(path, k, f[f"subproblems/{k}"])
                 if k in seen:
                     p0, v0 = seen[k]
                     if not (np.array_equal(p0, p) and np.array_equal(v0, v)):
@@ -170,6 +200,15 @@ def trial_gains(results_files) -> tuple[np.ndarray, np.ndarray]:
                         )
                     continue
                 seen[k] = (p, v)
+    if n_sub is not None and extracted:
+        missing = sorted(set(range(n_sub)) - set(seen))
+        if missing:
+            names = ", ".join(Path(x).name for x in results_files)
+            raise ValueError(
+                f"{len(missing)} of {n_sub} subproblems have no results in "
+                f"{names} (first: {missing[0]}): the trial's results are "
+                "incomplete"
+            )
     if not seen:
         return np.zeros(0, np.int64), np.zeros(0)
     return (

@@ -17,10 +17,15 @@ cached per path under a key of their inputs' identities and settings, so a
 rerun with other readout settings reuses them.
 
 Every image is read out in the same windows: pixels with a value in every
-trial used, in every image (:func:`~giant_python.spine.readout.
-common_valid`), so the variants can be compared trial by trial. User ROIs
-are also read out as GIAnT-MATLAB's ``user_rois/per_trial_F0``
-(``readout/user_any``), whose windows can differ between trials and images.
+trial used, in every image that covers the field of view (the mean images
+and ``f0_net``; :func:`~giant_python.spine.readout.common_valid`), so the
+variants can be compared trial by trial. The images that have values only
+at the pixels SILo fitted (``f0_silo_ch<c>``, ``f0_gain``) are read out in
+the same windows, with NaN where they do not cover one, so that they do not
+take pixels or trials away from the other images; the report counts those
+windows and trials. User ROIs are also read out as GIAnT-MATLAB's
+``user_rois/per_trial_F0`` (``readout/user_any``), whose windows can differ
+between trials and images.
 """
 
 from __future__ import annotations
@@ -56,6 +61,88 @@ def _stem(name) -> str | None:
     # split
     base = PurePosixPath(name.replace("\\", "/")).name
     return base.split(_REGISTERED)[0]
+
+
+def _trials_and_window(n: int, images: dict, nfr, say):
+    """The trials read out and the images that set the windows.
+
+    The images that cover the field of view (``covers`` 'field') set them:
+    a trial is used if it has frames and each of them has values in it.
+    An image without any values is left out (with a note), so that it does
+    not empty every window. Without field images, all images set them.
+    """
+    frames = np.asarray(nfr) > 0
+    has = {
+        k: np.isfinite(np.asarray(s).reshape(s.shape[0], -1)).any(axis=1)
+        for k, (s, _) in images.items()
+    }
+    window = [k for k, (_, a) in images.items() if a.get("covers") == "field"]
+    if not window:
+        window = list(images)
+    for k in list(window):
+        if not (has[k] & frames).any():
+            say(f"Path{n}: {k} has no values; it does not set the windows")
+            window.remove(k)
+    if not window:
+        raise ValueError(f"Path{n}: none of the per-trial images has values")
+    ok = frames.copy()
+    for k in window:
+        lost = np.flatnonzero(frames & ~has[k])
+        if lost.size:
+            say(
+                f"Path{n}: {k} has no values in trial(s) "
+                f"{', '.join(str(t + 1) for t in lost)}; they are not read out"
+            )
+        ok &= has[k]
+    return np.flatnonzero(ok), window
+
+
+def _not_covered(r: dict, images: dict, window: list, used) -> dict:
+    """Per image that does not set the windows: how many windows it leaves
+    without a value in some trial used where the window images have one
+    (only images that leave some)."""
+    if used.size == 0:
+        return {}
+    ref = np.ones(r[window[0]][used].shape, bool)
+    for k in window:
+        ref &= np.isfinite(r[k][used])
+    out = {}
+    for k in images:
+        if k in window:
+            continue
+        gap = (ref & ~np.isfinite(r[k][used])).any(axis=0)
+        if gap.any():
+            out[k] = int(gap.sum())
+    return out
+
+
+def _normalize(r: dict, images: dict, window: list, used) -> dict:
+    """The normalized sizes (:func:`~giant_python.spine.readout.norm_log`)
+    of every image's source readouts.
+
+    The per-trial median is taken over one set of sources (``ok``): those
+    whose readouts are positive in every trial used, in every image. An
+    image that does not cover a source (or a trial) leaves it out of its
+    own normalization only, so that images with values only at the pixels
+    SILo fitted do not change the reference set of the others.
+    """
+    ok = np.ones(r[window[0]].shape[1], bool)
+    cover = {}
+    for name in images:
+        vals = r[name][used]
+        rows = np.isfinite(vals).any(axis=1)
+        cov = np.isfinite(vals[rows]).all(axis=0) & rows.any()
+        cover[name] = (rows, cov)
+        pos = np.all(vals[rows] > 0, axis=0)
+        ok &= pos if name in window else (pos | ~cov)
+    norm: dict = {"ok": ok}
+    for name in images:
+        rows, cov = cover[name]
+        full = np.full_like(r[name], np.nan)
+        if rows.any():
+            full[used[rows]] = norm_log(r[name][used[rows]], ok & cov)
+        norm[name] = full
+    return norm
 
 
 def table_trials(table_path, path: int) -> tuple[list, np.ndarray]:
@@ -383,14 +470,22 @@ def make_spine_summary(  # noqa: C901
                 say(f"Path{n}: per-trial mean images, channel {c + 1}")
                 images[f"mean_ch{c + 1}"] = (
                     run.per_trial_images(n, "per_trial_mean_im", c),
-                    {"source": "per_trial_mean_im", "units": "counts"},
+                    {
+                        "source": "per_trial_mean_im",
+                        "units": "counts",
+                        "covers": "field",
+                    },
                 )
         if run.has_per_trial(n, "visualizations/per_trial_F0_im"):
             for c in range(n_ch):
                 say(f"Path{n}: the run's per-trial F0 images, channel {c + 1}")
                 images[f"f0_silo_ch{c + 1}"] = (
                     run.per_trial_images(n, "per_trial_F0_im", c),
-                    {"source": "per_trial_F0_im", "units": "counts"},
+                    {
+                        "source": "per_trial_F0_im",
+                        "units": "counts",
+                        "covers": "fitted",
+                    },
                 )
         if n in stacks and gain_work_dir is not None:
             say(f"Path{n}: gains of the run's baseline fit")
@@ -402,7 +497,11 @@ def make_spine_summary(  # noqa: C901
                 )
             images["f0_gain"] = (
                 gain * stacks[n].images,
-                {"source": "network baseline x SILo gain", "units": "counts"},
+                {
+                    "source": "network baseline x SILo gain",
+                    "units": "counts",
+                    "covers": "fitted",
+                },
             )
             with np.errstate(invalid="ignore", divide="ignore"):
                 rel = spread / gain
@@ -423,18 +522,15 @@ def make_spine_summary(  # noqa: C901
                 {
                     "source": "network baseline",
                     "units": "counts",
+                    "covers": "field",
                     "n_frames": st.n_frames,
                     "settings": st.attrs,
                 },
             )
         if not images:
             raise ValueError(f"Path{n}: no per-trial images in the run")
-        has = np.ones(len(stems), bool)
-        for stack, _ in images.values():
-            flat = np.asarray(stack).reshape(stack.shape[0], -1)
-            has &= np.isfinite(flat).any(axis=1)
-        used = np.flatnonzero(has & (nfr > 0))
-        valid = common_valid([s for s, _ in images.values()], used)
+        used, window = _trials_and_window(n, images, nfr, say)
+        valid = common_valid([images[k][0] for k in window], used)
         rois = {}
         if run.has(n, "sources/spatial/profiles"):
             rois["sources"] = sources_roiset(run.profiles(n))
@@ -468,17 +564,18 @@ def make_spine_summary(  # noqa: C901
                 for name, (stack, _) in images.items():
                     r[name], r["n_pixels"] = project(stack, rs, valid)
             readout[set_name] = r
+            gaps = _not_covered(r, images, window, used)
+            if gaps:
+                rep_n = report["paths"].setdefault(n, {})
+                rep_n.setdefault("not_covered", {})[set_name] = gaps
+                for name, k in gaps.items():
+                    say(
+                        f"Path{n}: {name} does not cover {k} of {len(rs)} "
+                        f"{set_name} windows in every trial used (NaN there)"
+                    )
             if set_name != "sources" or used.size == 0:
                 continue
-            ok = np.ones(len(rs), bool)
-            for name in images:
-                ok &= np.all(r[name][used] > 0, axis=0)
-            norm: dict = {"ok": ok}
-            for name in images:
-                full = np.full_like(r[name], np.nan)
-                full[used] = norm_log(r[name][used], ok)
-                norm[name] = full
-            normalized[set_name] = norm
+            normalized[set_name] = _normalize(r, images, window, used)
         activity = {}
         if "sources" in rois:
             activity["sources"] = run.activity(n)
@@ -502,6 +599,7 @@ def make_spine_summary(  # noqa: C901
         report["paths"].setdefault(n, {}).update(
             {
                 "images": list(images),
+                "window_images": list(window),
                 "trials_used": int(used.size),
                 "valid_pixels": int(valid.sum()),
                 "rois": {k: len(v) for k, v in rois.items()},

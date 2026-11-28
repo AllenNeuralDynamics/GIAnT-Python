@@ -53,10 +53,17 @@ Windows and readout
 
 Windows are the sources' mean footprints (``sources/spatial/profiles``) and
 the run's user ROIs. All images are read out in the same windows: pixels
-with a value in every trial used, in every image. For a footprint ``h``
+with a value in every trial used, in every image that covers the field of
+view (the mean images and ``f0_net``). ``f0_silo_ch<c>`` and ``f0_gain``
+have values only at the pixels SILo fitted, which hold the sources'
+footprints but often not all of a user ROI; they are read out in the same
+windows, with NaN where they do not cover one, and the command reports how
+many windows that leaves without them. For a footprint ``h``
 normalized to sum 1 over those pixels and a trial's image ``x``, the size is
-``(h . x) / (h . h)``. User ROIs are read out as the mean over their pixels
-with a value, with the share of such pixels as coverage. The normalized size
+``(h . x) / (h . h)``. User ROIs are read out as the mean over their
+pixels in the windows, and also as GIAnT-MATLAB's ``user_rois/per_trial_F0``:
+the mean over their pixels with a value in that trial, with the share of
+such pixels as coverage. The normalized size
 is ``log`` of the readout, minus each trial's median over the sources
 (bleaching), minus each source's own mean. GIAnT-MATLAB's ``spineTrends``
 uses the same readout and normalization.

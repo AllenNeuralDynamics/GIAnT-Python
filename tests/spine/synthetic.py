@@ -78,6 +78,37 @@ def consensus_trial(path: int, t: int) -> np.ndarray:
     return np.where(ok, out, np.nan)
 
 
+def _trial_maps(affine, displacement: bool) -> dict:
+    """The ``frame_info`` trial maps: ``affine`` (default: the shifts
+    ``SHIFTS``), or with ``displacement`` the shifts as a displacement field
+    beside identity affine maps."""
+    if displacement:
+        disp = np.broadcast_to(
+            np.asarray(SHIFTS, float)[:, :, None, None], (N_TRIALS, 2, H, W)
+        ).copy()
+        eye = np.zeros((N_TRIALS, 2, 3))
+        eye[:, :, :2] = np.eye(2)
+        return {
+            "trial_alignment_affine": eye,
+            "trial_alignment_displacement": disp,
+        }
+    if affine is None:
+        affine = np.zeros((N_TRIALS, 2, 3))
+        affine[:, :, :2] = np.eye(2)
+        affine[:, :, 2] = np.asarray(SHIFTS, float)
+    return {"trial_alignment_affine": affine}
+
+
+def _in_box(images: np.ndarray, box) -> np.ndarray:
+    """``images`` (``(..., H, W)``) with NaN outside ``box`` (rows, cols
+    slices; None keeps every pixel)."""
+    if box is None:
+        return images
+    keep = np.zeros((H, W), bool)
+    keep[box] = True
+    return np.where(keep, images, np.nan)
+
+
 def make_session(
     root: Path,
     with_f0_silo: bool = True,
@@ -85,6 +116,8 @@ def make_session(
     missing_trial: int | None = None,
     discard_initial_s: float | None = None,
     affine: np.ndarray | None = None,
+    displacement: bool = False,
+    f0_silo_box: tuple | None = None,
 ) -> dict:
     """Write the synthetic session under ``root``; return its folders.
 
@@ -94,7 +127,12 @@ def make_session(
     traces, as a trial without extracted sources. ``discard_initial_s``
     is recorded as the run's ``params/discardInitial_s`` (not recorded if
     None). ``affine`` replaces the trial maps (``(trials, 2, 3)``, written
-    as given; default: the shifts ``SHIFTS``).
+    as given; default: the shifts ``SHIFTS``). With ``displacement`` the
+    shifts are written as a displacement field
+    (``trial_alignment_displacement``, as patchwise alignment saves it) and
+    the affine maps are the identity, so only the field puts the trials in
+    place. ``f0_silo_box`` (rows, cols slices) limits the run's own F0
+    images to a box, as they have values only at the pixels SILo fitted.
     """
     root = Path(root)
     run = root / "run"
@@ -102,10 +140,7 @@ def make_session(
     base = root / "baselines"
     for d in (run, moco, base):
         d.mkdir(parents=True, exist_ok=True)
-    if affine is None:
-        affine = np.zeros((N_TRIALS, 2, 3))
-        affine[:, :, :2] = np.eye(2)
-        affine[:, :, 2] = np.asarray(SHIFTS, float)
+    maps = _trial_maps(affine, displacement)
     fp = footprints()
     exp: dict = {
         "params": {
@@ -138,7 +173,7 @@ def make_session(
             },
             "frame_info": {
                 "trial_num_frames": np.full((1, N_TRIALS), 10.0),
-                "trial_alignment_affine": affine,
+                **maps,
             },
             "user_rois": {
                 "labels": np.array([["roi A", "roi B"]], dtype=object),
@@ -156,7 +191,9 @@ def make_session(
         }
         if with_f0_silo:
             f0 = np.stack([imgs, imgs * 0.1], axis=1)[:, :, None]
-            per[f"Path{p}"]["visualizations"]["per_trial_F0_im"] = f0
+            per[f"Path{p}"]["visualizations"]["per_trial_F0_im"] = (
+                _in_box(f0, f0_silo_box)
+            )
         for t in range(N_TRIALS):
             stem = f"E1T{t + 1}DMD{p}"
             img = trial_image(p, t)
@@ -282,6 +319,7 @@ def make_gain_work(root: Path, gain_of_trial, baselines=None) -> Path:
                     for k, pix in enumerate(halves)
                 },
                 container_hash=f"c{p}-{t}",
+                n_subproblems=2,
                 **extra,
             )
     return work

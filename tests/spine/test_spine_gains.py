@@ -14,6 +14,7 @@ from giant_python.spine.gains import (
 )
 from giant_python.spine.pipeline import make_spine_summary
 from giant_python.spine.product import read_product
+from giant_python.spine.readout import project
 
 from . import synthetic as syn
 
@@ -78,14 +79,31 @@ def test_readout_adds_the_gain_image(tmp_path):
     )
     assert not np.isfinite(p["images"]["f0_gain"][:, 0, 0]).any()
     assert rep["paths"][1]["gain"]["median"] > 1.0
-    # every image is read in the same windows: with gains of 1, the user
-    # ROIs' f0_gain and f0_net readouts agree
-    user = p["readout"]["user"]
-    ok = np.isfinite(user["f0_gain"])
-    assert ok.any()
-    np.testing.assert_allclose(
-        user["f0_gain"][ok], user["f0_net"][ok], rtol=1e-6
+    # every image is read in the same windows: the source inside the
+    # selected pixels reads gain x f0_net in the field images' window
+    src = p["readout"]["sources"]
+    expect, _ = project(
+        gain * p["images"]["f0_net"], p["rois"]["sources"], p["valid"]
     )
+    np.testing.assert_allclose(src["f0_gain"][:, 0], expect[:, 0], rtol=1e-5)
+    # the gains (selected pixels only) do not shrink the other images'
+    # windows: the sources and user ROIs outside them keep their readouts,
+    # and the report counts the windows f0_gain leaves out
+    assert np.isfinite(src["f0_net"]).all()
+    assert np.isnan(src["f0_gain"][:, 1]).all()
+    assert np.isfinite(p["readout"]["user"]["f0_net"]).all()
+    gaps = rep["paths"][1]["not_covered"]
+    assert gaps == {"sources": {"f0_gain": 2}, "user": {"f0_gain": 2}}
+    assert rep["paths"][1]["window_images"] == [
+        "mean_ch1",
+        "mean_ch2",
+        "f0_net",
+    ]
+    # its normalization uses the sources it covers; the others' is unchanged
+    norm = p["normalized"]["sources"]
+    assert norm["ok"].all()
+    np.testing.assert_allclose(norm["f0_gain"][:, 0], 0, atol=1e-6)
+    assert np.isnan(norm["f0_gain"][:, 1:]).all()
     with pytest.raises(ValueError, match="needs --baseline-dir"):
         make_spine_summary(s["run"], s["table"], tmp_path, gain_work_dir=work)
 
@@ -206,3 +224,24 @@ def test_gains_need_the_images_baseline_files(tmp_path):
     kw["gain_work_dir"] = plain
     with pytest.raises(ValueError, match="record no network baseline"):
         make_spine_summary(s["run"], s["table"], tmp_path / "out", **kw)
+
+
+def test_trial_gains_needs_every_subproblem(tmp_path):
+    """As in the collect stage, a trial's results must hold all of its
+    subproblems: a missing shard, or files that disagree on the number of
+    subproblems, are refused; a trial too short to extract is not."""
+    info = {"baseline_step": {"gain": [1.0, 1.0]}}
+    a, b = tmp_path / "a.h5", tmp_path / "b.h5"
+    syn.write_results(a, {0: ([0, 1], info)}, n_subproblems=2)
+    with pytest.raises(ValueError, match="1 of 2 subproblems"):
+        trial_gains([a])
+    syn.write_results(b, {1: ([2, 3], info)}, n_subproblems=2)
+    pix, _ = trial_gains([a, b])
+    assert sorted(pix.tolist()) == [0, 1, 2, 3]
+    syn.write_results(b, {1: ([2, 3], info)}, n_subproblems=3)
+    with pytest.raises(ValueError, match="3 subproblems here but 2"):
+        trial_gains([a, b])
+    short = tmp_path / "short.h5"
+    syn.write_results(short, {}, n_subproblems=4, extracted=0)
+    pix, _ = trial_gains([short])
+    assert pix.size == 0
