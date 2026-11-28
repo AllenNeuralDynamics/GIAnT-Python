@@ -297,3 +297,24 @@ def test_null_sd_acceptance():
     assert p.localization_keep_null and p.plan_params().seed_acceptance == (
         "null_sd"
     )
+
+
+def test_amplitude_rule_pixel_keeps_sharp_peaks():
+    """MATLAB's final test (a 2 x 2 pixel mean of the Gaussian) drops a
+    sharp peak whose own pixel is well above the threshold; 'pixel' keeps
+    it, and drops a peak whose own pixel is below."""
+    from giant_python.extraction.raster.peaks import _finish
+
+    theta = np.array([[0.9, 10.0, 10.0, 0.3], [0.1, 20.0, 20.0, 0.3]])
+    excl = np.zeros((30, 30), bool)
+    assert _finish(theta, 0.22, excl, False).shape[0] == 0
+    kept = _finish(theta, 0.22, excl, False, "pixel")
+    np.testing.assert_allclose(kept[:, 1:3], [[9.0, 9.0]])
+    with pytest.raises(ValueError):
+        get_act_im_peaks(np.zeros((10, 10)), 3.0, amplitude_rule="area")
+    with pytest.raises(ValueError):
+        PlanParams(seed_amplitude_rule="area")
+    p = SiloParams(seed_amplitude_rule="pixel")
+    assert p.plan_params().seed_amplitude_rule == "pixel"
+    assert "seed_amplitude_rule" in p.stage_settings("plan")
+    assert "seed_amplitude_rule" not in SiloParams().stage_settings("plan")

@@ -50,7 +50,7 @@ from .alignment import (
     warp_trial_image,
 )
 from .localization import nanmedfilt2
-from .peaks import SEED_FITS
+from .peaks import AMPLITUDE_RULES, SEED_FITS
 from .solver_setup import Subproblem
 from .trial_data import RigidShift
 from .seeding import (
@@ -114,6 +114,10 @@ class PlanParams:
         ``"null_sd"``: ``peak_th`` counts in robust SDs of that null.
     seed_false_per_field : float
         Expected false seeds per path with ``seed_acceptance="null"``.
+    seed_amplitude_rule : str
+        The seeding's final test of each fitted peak: ``"matlab"`` (the
+        default) or ``"pixel"`` (its value on its own pixel; see
+        :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`).
     min_peak_distance : int
         ``minPeakDistance``.
     d_xy : float
@@ -140,6 +144,7 @@ class PlanParams:
     peak_th: float = 3.0
     seed_acceptance: str = "image"
     seed_false_per_field: float = 1.0
+    seed_amplitude_rule: str = "matlab"
     min_peak_distance: int = 1
     d_xy: float = 3.0
     sigma_px: float = 1.33
@@ -188,6 +193,11 @@ class PlanParams:
             )
         if not self.seed_false_per_field > 0:
             raise ValueError("seed_false_per_field must be positive")
+        if self.seed_amplitude_rule not in AMPLITUDE_RULES:
+            raise ValueError(
+                f"seed_amplitude_rule must be one of {AMPLITUDE_RULES}, "
+                f"not {self.seed_amplitude_rule!r}"
+            )
 
     @property
     def sel_radius(self) -> int:
@@ -731,6 +741,7 @@ _PLAN_FIELDS_ADDED = {
     "valid_kernel": 3,
     "seed_acceptance": "image",
     "seed_false_per_field": 1.0,
+    "seed_amplitude_rule": "matlab",
 }
 
 
@@ -992,6 +1003,7 @@ def plan_path(  # noqa: C901
             null_im=null_im,
             false_per_field=p.seed_false_per_field,
             info=seed_info,
+            amplitude_rule=p.seed_amplitude_rule,
         )
     seeds = np.asarray(seeds, dtype=np.float64).reshape(-1, 4)
     rows, cols, values = sources_from_seeds(seeds, shape)

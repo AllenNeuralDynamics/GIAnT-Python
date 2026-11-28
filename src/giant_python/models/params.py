@@ -642,6 +642,11 @@ class SiloParams:
         option.
     seed_false_per_field : float
         Expected false seeds per path with ``seed_acceptance='null'``.
+    seed_amplitude_rule : {'matlab', 'pixel'}
+        The plan's final test of each fitted seed (see
+        :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`):
+        MATLAB's (its 2 x 2 pixel mean, which drops sharp peaks) or its
+        value on its own pixel ('pixel', not in MATLAB).
     wmf_peak_th, wmf_dip, wmf_deblend_th : float
         ``wmfPeakth``, ``wmfDip``, ``wmfDeblendth`` (WMF only; recorded).
     photon_scale : float
@@ -728,6 +733,7 @@ class SiloParams:
     seed_merge_px: Optional[float] = None
     seed_acceptance: str = "image"
     seed_false_per_field: float = 1.0
+    seed_amplitude_rule: str = "matlab"
     wmf_peak_th: float = 3.0
     wmf_dip: float = 3.0
     wmf_deblend_th: float = 8.0
@@ -852,6 +858,11 @@ class SiloParams:
             ("image", "null", "null_sd"),
         )
         _positive("seed_false_per_field", self.seed_false_per_field)
+        _choice(
+            "seed_amplitude_rule",
+            self.seed_amplitude_rule,
+            ("matlab", "pixel"),
+        )
         if self.localization_keep_null is None:
             object.__setattr__(
                 self,
@@ -932,6 +943,7 @@ class SiloParams:
             peak_th=self.peak_th,
             seed_acceptance=self.seed_acceptance,
             seed_false_per_field=self.seed_false_per_field,
+            seed_amplitude_rule=self.seed_amplitude_rule,
             min_peak_distance=self.min_peak_distance,
             d_xy=self.d_xy,
             sigma_px=self.sigma_px,
@@ -1242,6 +1254,7 @@ _STAGE_FIELDS_ADDED = {
         "seed_merge_px": 0.0,
         "seed_acceptance": "image",
         "seed_false_per_field": 1.0,
+        "seed_amplitude_rule": "matlab",
         "align_patch_px": 1500,
         # each stage after localization checks the source of the stage
         # before it, so changing only the source redoes them
@@ -1296,6 +1309,7 @@ _PYTHON_ONLY = {
     "min_source_snr": ("minSourceSNR", 0.0),
     "min_source_events": ("minSourceEvents", 0),
     "seed_acceptance": ("seedAcceptance", "image"),
+    "seed_amplitude_rule": ("seedAmplitudeRule", "matlab"),
     "seed_false_per_field": ("seedFalsePerField", 1.0),
     "baseline_source": ("baselineSource", "median"),
     "baseline_mode": ("baselineMode", "fit"),

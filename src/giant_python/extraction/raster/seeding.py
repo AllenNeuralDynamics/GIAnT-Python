@@ -248,6 +248,7 @@ def seed_sources(
     null_im: np.ndarray | None = None,
     false_per_field: float = 1.0,
     info: dict | None = None,
+    amplitude_rule: str = "matlab",
 ) -> np.ndarray:
     """Seed sources in the combined activity image.
 
@@ -282,6 +283,9 @@ def seed_sources(
         The combined image's null (needed with ``acceptance='null'``).
     false_per_field : float
         Expected false seeds per field with ``acceptance='null'``.
+    amplitude_rule : {'matlab', 'pixel'}
+        The final test of every fitted peak (see
+        :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`).
     info : dict, optional
         Receives the threshold used (``peak_th``, ``background``: None for
         the image's own) and, with ``acceptance='null'``, the null's tail
@@ -314,7 +318,14 @@ def seed_sources(
         acceptance, peak_th, null_im, false_per_field, mask, info
     )
     return get_act_im_peaks(
-        act_im, peak_th, mask, min_peak_distance, fit, merge_px, background
+        act_im,
+        peak_th,
+        mask,
+        min_peak_distance,
+        fit,
+        merge_px,
+        background,
+        amplitude_rule,
     )
 
 

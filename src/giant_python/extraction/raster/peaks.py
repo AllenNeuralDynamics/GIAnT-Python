@@ -48,6 +48,9 @@ _SQRT2 = np.sqrt(2.0)
 
 #: Seed fits: MATLAB's (``"matlab"``) and the local variant (``"local"``).
 SEED_FITS = ("matlab", "local")
+#: The final amplitude test of a fitted peak: MATLAB's (``"matlab"``) or its
+#: value on its own pixel (``"pixel"``); see :func:`get_act_im_peaks`.
+AMPLITUDE_RULES = ("matlab", "pixel")
 # the local fit: pixels (Chebyshev) around its start pixel a Gaussian is
 # evaluated at (its centre stays within 1.5 px of it, and activity-image
 # peaks are narrower than a pixel); peaks within this distance of a new
@@ -237,6 +240,7 @@ def get_act_im_peaks(  # noqa: C901
     fit: str = "matlab",
     merge_px: float = 0.0,
     background: tuple[float, float] | None = None,
+    amplitude_rule: str = "matlab",
 ) -> np.ndarray:
     """Seed sources in a 2-D activity image (port of ``getActImPeaks.m``).
 
@@ -271,6 +275,13 @@ def get_act_im_peaks(  # noqa: C901
         image's median and robust SD (MATLAB's); e.g. those of a null image
         (:func:`~giant_python.extraction.raster.seeding.null_threshold`).
         The centre is also the level the Gaussians are fitted above.
+    amplitude_rule : {'matlab', 'pixel'}
+        The final test of every fitted peak. ``'matlab'``: its amplitude
+        times ``pi/2 s^2 erf(1/(sqrt(2) s))^2`` (the Gaussian's mean over a
+        2 x 2 pixel square) must reach the threshold, which a peak narrower
+        than a pixel (the activity image's usual peak) fails at up to about
+        four times the threshold. ``'pixel'`` (not in MATLAB): the fitted
+        Gaussian's own value on the pixel its centre falls in must reach it.
 
     Returns
     -------
@@ -280,6 +291,11 @@ def get_act_im_peaks(  # noqa: C901
     """
     if fit not in SEED_FITS:
         raise ValueError(f"fit must be one of {SEED_FITS}, not {fit!r}")
+    if amplitude_rule not in AMPLITUDE_RULES:
+        raise ValueError(
+            f"amplitude_rule must be one of {AMPLITUDE_RULES}, "
+            f"not {amplitude_rule!r}"
+        )
     if not merge_px >= 0:
         raise ValueError("merge_px must be nonnegative")
     act = np.asarray(act_im, dtype=float)
@@ -314,7 +330,14 @@ def get_act_im_peaks(  # noqa: C901
     if fit == "local":
         local = _LocalFit(act, (mu_bg, sigma_bg), peak_th, excl, buffer_se)
         theta = local.run(p_tmp, merge_px)
-        return _finish(theta, peak_thresh, excl, exclusion_mask is not None)
+        return _finish(
+            theta,
+            peak_thresh,
+            excl,
+            exclusion_mask is not None,
+            amplitude_rule,
+            mu_bg,
+        )
 
     p_y, p_x = _find_f(p_tmp)
     amp = act[(p_y - 1).astype(int), (p_x - 1).astype(int)] * _AMP_SCALE
@@ -406,7 +429,14 @@ def get_act_im_peaks(  # noqa: C901
                 res_im, buffer_mask, excl, reject, fit_support, sel, peak_th
             )
 
-    return _finish(theta, peak_thresh, excl, exclusion_mask is not None)
+    return _finish(
+        theta,
+        peak_thresh,
+        excl,
+        exclusion_mask is not None,
+        amplitude_rule,
+        mu_bg,
+    )
 
 
 def _next_to_another(theta, idx, merge_px):
@@ -418,14 +448,26 @@ def _next_to_another(theta, idx, merge_px):
     return bool(d.min() < merge_px)
 
 
-def _finish(theta, peak_thresh, excl, masked):
+def _finish(theta, peak_thresh, excl, masked, rule="matlab", mu_bg=0.0):
     """Drop peaks too small for the threshold and (if ``masked``) peaks
-    whose centre ended in the exclusion mask; 0-based ``N x 4``."""
-    s = theta[:, 3]
-    adj_thresh = peak_thresh / (
-        np.pi / 2 * s**2 * erf(1.0 / (_SQRT2 * s)) ** 2
-    )
-    theta = theta[~(theta[:, 0] < adj_thresh)]
+    whose centre ended in the exclusion mask; 0-based ``N x 4``.
+
+    ``rule`` 'matlab': getActImPeaks' test; 'pixel': the peak's own value
+    (above ``mu_bg``, the level it was fitted above) on the pixel its centre
+    falls in (see :func:`get_act_im_peaks`)."""
+    s = np.maximum(theta[:, 3], np.finfo(float).eps)
+    if rule == "pixel":
+        iy, ix = _rounded_index(theta, excl.shape)
+        own = theta[:, 0] * (
+            _integral(iy + 0.5, iy + 1.5, theta[:, 1], s)
+            * _integral(ix + 0.5, ix + 1.5, theta[:, 2], s)
+        )
+        theta = theta[~(own + mu_bg < peak_thresh)]
+    else:
+        adj_thresh = peak_thresh / (
+            np.pi / 2 * s**2 * erf(1.0 / (_SQRT2 * s)) ** 2
+        )
+        theta = theta[~(theta[:, 0] < adj_thresh)]
     if masked and theta.shape[0]:
         # a fit may move a centre up to 1.5 px into the mask (not in MATLAB)
         iy, ix = _rounded_index(theta, excl.shape)
