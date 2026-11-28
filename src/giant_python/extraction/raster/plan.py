@@ -54,6 +54,7 @@ from .peaks import SEED_FITS
 from .solver_setup import Subproblem
 from .trial_data import RigidShift
 from .seeding import (
+    SEED_ACCEPTANCE,
     SEEDING_METHODS,
     disk_strel,
     seed_sources,
@@ -103,6 +104,15 @@ class PlanParams:
     peak_th : float
         Seed threshold in robust SDs of the combined activity image
         (``peakth``: 3 for SLAP2, 8 otherwise).
+    seed_acceptance : str
+        ``"image"`` (the default, MATLAB's): ``peak_th`` counts in robust
+        SDs of the combined image. ``"null"``: the threshold is set from
+        the combined image's null so that ``seed_false_per_field`` false
+        seeds are expected per path (needs every valid trial's null images,
+        :attr:`TrialImages.null_im`; ``peak_th`` is then not used). See
+        :func:`~giant_python.extraction.raster.seeding.null_threshold`.
+    seed_false_per_field : float
+        Expected false seeds per path with ``seed_acceptance="null"``.
     min_peak_distance : int
         ``minPeakDistance``.
     d_xy : float
@@ -127,6 +137,8 @@ class PlanParams:
     seed_fit: str = "local"
     seed_merge_px: float = 1.5
     peak_th: float = 3.0
+    seed_acceptance: str = "image"
+    seed_false_per_field: float = 1.0
     min_peak_distance: int = 1
     d_xy: float = 3.0
     sigma_px: float = 1.33
@@ -151,6 +163,7 @@ class PlanParams:
             )
         if not self.seed_merge_px >= 0:
             raise ValueError("seed_merge_px must be nonnegative")
+        self._check_acceptance()
         for name in (
             "d_xy",
             "sigma_px",
@@ -164,6 +177,16 @@ class PlanParams:
             raise ValueError("max_shift must not be negative")
         if not self.align_patch_px >= 1:
             raise ValueError("align_patch_px must be at least 1 pixel")
+
+    def _check_acceptance(self) -> None:
+        """Validate the seed threshold's settings."""
+        if self.seed_acceptance not in SEED_ACCEPTANCE:
+            raise ValueError(
+                f"seed_acceptance must be one of {SEED_ACCEPTANCE}, "
+                f"not {self.seed_acceptance!r}"
+            )
+        if not self.seed_false_per_field > 0:
+            raise ValueError("seed_false_per_field must be positive")
 
     @property
     def sel_radius(self) -> int:
@@ -193,6 +216,9 @@ class TrialImages:
     half_ims : ndarray of shape (2, rows, cols, channels), optional
         Mean images of two halves of the trial's frames, which weight the
         patchwise alignment's patches (only that mode uses them).
+    null_im : ndarray of shape (draws, rows, cols), optional
+        The trial's null activity images, calibrated like ``act_im``
+        (``seed_acceptance="null"`` combines them as the activity images).
     """
 
     mean_im: np.ndarray
@@ -200,6 +226,7 @@ class TrialImages:
     peaks: np.ndarray | None = None
     discard: np.ndarray | None = None
     half_ims: np.ndarray | None = None
+    null_im: np.ndarray | None = None
 
     @classmethod
     def from_localization(cls, localization, trial) -> "TrialImages":
@@ -629,14 +656,80 @@ def combined_activity_image(
     return act_im - med_im, med_im, nan_frac
 
 
+def combined_null_image(
+    null_aligned: np.ndarray, act_aligned: np.ndarray, nan_thresh: float
+) -> np.ndarray:
+    """The combined activity image's null, combined as the image itself.
+
+    Each draw's null images of the trials (aligned like the activity
+    images) are averaged, scaled by the factor that scaled the combined
+    activity image (from ``act_aligned``), set to NaN where that image is
+    NaN, and their own 5 x 5 NaN-median is subtracted
+    (:func:`combined_activity_image`).
+
+    Parameters
+    ----------
+    null_aligned : ndarray of shape (trials, draws, rows, cols)
+        The valid trials' aligned null images.
+    act_aligned : ndarray of shape (trials, rows, cols)
+        The same trials' aligned activity images.
+    nan_thresh : float
+        As for :func:`combined_activity_image`.
+
+    Returns
+    -------
+    ndarray of shape (draws, rows, cols)
+    """
+    null_aligned = np.asarray(null_aligned, dtype=np.float64)
+    act_mean = act_aligned.mean(axis=0)
+    top = np.nanmax(act_mean) if not np.isnan(act_mean).all() else np.nan
+    scale = 10.0 ** (math.floor(math.log10(top)) - 1) if top > 0 else 1.0
+    off = np.isnan(act_aligned).mean(axis=0) > nan_thresh
+    out = np.empty(null_aligned.shape[1:])
+    for k in range(null_aligned.shape[1]):
+        im = null_aligned[:, k].mean(axis=0) / scale
+        im[off] = np.nan
+        out[k] = im - nanmedfilt2(im, 5)
+    return out
+
+
+def _aligned_nulls(trials, valid, warp, shape, refined) -> np.ndarray:
+    """The valid trials' null images in the consensus frame,
+    ``(trials, draws, rows, cols)``, placed and warped as the activity
+    images."""
+    nulls = []
+    for t in valid:
+        im = trials[t].null_im if trials[t] is not None else None
+        if im is None:
+            raise ValueError(
+                f"seed_acceptance='null': trial {t} has no null images "
+                "(localize with the bootstrap null and keep its images)"
+            )
+        im = np.asarray(im, dtype=np.float64)
+        nulls.append(im.reshape((-1,) + im.shape[-2:]))
+    draws = min(n.shape[0] for n in nulls)
+    out = np.full((len(valid), draws) + tuple(shape), np.nan)
+    for i, t in enumerate(valid):
+        grid = warp.grid_coords(t, shape) if refined else None
+        for k in range(draws):
+            canvas = np.full(shape, np.nan)
+            n = nulls[i][k]
+            canvas[: n.shape[0], : n.shape[1]] = n
+            out[i, k] = warp_trial_image(canvas, warp, t, coords=grid)
+    return out
+
+
 # fields added to PlanParams after plans were first written, or whose
 # default changed, with the value that describes plans written before them
-# (MATLAB's seed fit, no merging, its patch size, its 3 x 3 support)
+# (MATLAB's seed fit, no merging, its patch size, its 3 x 3 support, the
+# image's own threshold)
 _PLAN_FIELDS_ADDED = {
     "seed_fit": "matlab",
     "seed_merge_px": 0.0,
     "align_patch_px": 1500.0,
     "valid_kernel": 3,
+    "seed_acceptance": "image",
+    "seed_false_per_field": 1.0,
 }
 
 
@@ -791,8 +884,10 @@ def plan_path(  # noqa: C901
     details : dict, optional
         If given, it receives the intermediates that the plan does not
         keep: ``med_im``, ``nan_frac``, the sources before pruning
-        (``rows``, ``cols``, ``values``, ``pixels``, ``keep_sources``) and,
-        for a refined alignment, ``alignment_info``
+        (``rows``, ``cols``, ``values``, ``pixels``, ``keep_sources``), the
+        seeding's threshold (``seed_info``; with ``seed_acceptance="null"``
+        also the combined null, ``null_im``) and, for a refined alignment,
+        ``alignment_info``
         (:class:`~giant_python.extraction.raster.alignment.AlignmentInfo`).
     seeds : ndarray of shape (n, 4), optional
         ``[amplitude, row, col, sigma]`` (zero-based) of seeds to use
@@ -873,7 +968,17 @@ def plan_path(  # noqa: C901
         act_aligned[valid], p.nan_thresh
     )
     soma = _soma_canvas(soma_mask, shape, warp, soma_mask_trial)
+    seed_info: dict = {}
     if seeds is None:
+        null_im = None
+        if p.seed_acceptance == "null":
+            null_im = combined_null_image(
+                _aligned_nulls(trials, valid, warp, shape, refined),
+                act_aligned[valid],
+                p.nan_thresh,
+            )
+            if details is not None:
+                details["null_im"] = null_im
         seeds = seed_sources(
             act_im,
             p.peak_th,
@@ -882,6 +987,10 @@ def plan_path(  # noqa: C901
             p.peak_method,
             p.seed_fit,
             p.seed_merge_px,
+            acceptance=p.seed_acceptance,
+            null_im=null_im,
+            false_per_field=p.seed_false_per_field,
+            info=seed_info,
         )
     seeds = np.asarray(seeds, dtype=np.float64).reshape(-1, 4)
     rows, cols, values = sources_from_seeds(seeds, shape)
@@ -898,6 +1007,7 @@ def plan_path(  # noqa: C901
         details.update(
             med_im=med_im,
             nan_frac=nan_frac,
+            seed_info=seed_info,
             rows=rows,
             cols=cols,
             values=values,

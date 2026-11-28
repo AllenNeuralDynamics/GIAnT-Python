@@ -598,6 +598,11 @@ class SiloParams:
         Threshold of the soft-threshold score, robust SDs.
     localization_peak_th : float or None
         Threshold of the per-trial peaks; None uses ``peak_th``.
+    localization_keep_null : bool or None
+        Keep each trial's calibrated null images (the bootstrap null's
+        activity images) in its localization file, for
+        ``seed_acceptance='null'``. None: kept exactly when
+        ``seed_acceptance`` is 'null'. Not a MATLAB option.
     trial_peaks : bool
         Fit each trial's peaks (Gaussians at the per-trial activity image's
         maxima). They feed only the per-trial summary's
@@ -627,6 +632,15 @@ class SiloParams:
         another peak (default 1.5, which keeps a source between pixels
         from being seeded two or three times; 0 is MATLAB's rule only).
         None takes the plan stage's default.
+    seed_acceptance : {'image', 'null'}
+        How the plan's seed threshold is set: ``peak_th`` robust SDs of the
+        combined activity image ('image', MATLAB's), or from the null of
+        the combined image so that ``seed_false_per_field`` false seeds are
+        expected per path ('null'; needs ``localization_null='bootstrap'``;
+        ``peak_th`` then sets only the per-trial peaks). Not a MATLAB
+        option.
+    seed_false_per_field : float
+        Expected false seeds per path with ``seed_acceptance='null'``.
     wmf_peak_th, wmf_dip, wmf_deblend_th : float
         ``wmfPeakth``, ``wmfDip``, ``wmfDeblendth`` (WMF only; recorded).
     photon_scale : float
@@ -658,6 +672,15 @@ class SiloParams:
     min_kinetic_score : float
         Sources whose transients score below this in the kinetics test are
         removed after extraction (``minKineticScore``; 0 keeps all).
+    min_source_snr : float
+        The evidence test (not in MATLAB; 0, the default, turns it off):
+        sources whose SNR (the solver's, averaged over the extracted
+        trials) is below this are removed after extraction with those the
+        kinetics test rejects. Meant for permissive seeding (a lower
+        ``peak_th`` or a larger ``seed_false_per_field``).
+    min_source_events : int
+        The evidence test's other criterion (0: off): sources with fewer
+        events than this in the kinetics test are removed.
     min_frames : int
         Trials with fewer frames are loaded but not source-extracted
         (MATLAB's ``minFrames``).
@@ -695,12 +718,15 @@ class SiloParams:
     localization_score: str = "squared_maxima"
     localization_soft_th: float = 2.0
     localization_peak_th: Optional[float] = None
+    localization_keep_null: Optional[bool] = None
     trial_peaks: bool = True
     inter_trial_alignment: str = "patchwise"
     align_patch_px: int = 1500
     peak_method: str = "getactimpeaks"
     seed_fit: Optional[str] = None
     seed_merge_px: Optional[float] = None
+    seed_acceptance: str = "image"
+    seed_false_per_field: float = 1.0
     wmf_peak_th: float = 3.0
     wmf_dip: float = 3.0
     wmf_deblend_th: float = 8.0
@@ -715,6 +741,8 @@ class SiloParams:
     baseline_knot_factor: float = 0.5
     baseline_penalty: float = 30.0
     min_kinetic_score: float = 0.2
+    min_source_snr: float = 0.0
+    min_source_events: int = 0
     min_frames: int = 100
     user_rois: bool = True
 
@@ -757,6 +785,8 @@ class SiloParams:
             "phi",
             "baseline_penalty",
             "min_kinetic_score",
+            "min_source_snr",
+            "min_source_events",
             "wmf_peak_th",
             "wmf_dip",
             "wmf_deblend_th",
@@ -765,6 +795,8 @@ class SiloParams:
             _nonnegative(name, getattr(self, name))
         if self.localization_peak_th is not None:
             _positive("localization_peak_th", self.localization_peak_th)
+        if not isinstance(self.min_source_events, Integral):
+            raise ValueError("min_source_events must be an integer")
         for name in (
             "localization_surround",
             "localization_variance_floor",
@@ -813,6 +845,27 @@ class SiloParams:
                 object.__setattr__(self, name, getattr(PlanParams, name))
         _choice("seed_fit", self.seed_fit, ("matlab", "local"))
         _nonnegative("seed_merge_px", self.seed_merge_px)
+        _choice("seed_acceptance", self.seed_acceptance, ("image", "null"))
+        _positive("seed_false_per_field", self.seed_false_per_field)
+        if self.localization_keep_null is None:
+            object.__setattr__(
+                self,
+                "localization_keep_null",
+                self.seed_acceptance == "null",
+            )
+        if not isinstance(self.localization_keep_null, bool):
+            raise ValueError("localization_keep_null must be a bool")
+        if (
+            self.localization_keep_null or self.seed_acceptance == "null"
+        ) and self.localization_null != "bootstrap":
+            raise ValueError(
+                "seed_acceptance='null' and localization_keep_null need "
+                "localization_null='bootstrap'"
+            )
+        if self.seed_acceptance == "null" and not self.localization_keep_null:
+            raise ValueError(
+                "seed_acceptance='null' needs localization_keep_null"
+            )
 
     def _solver_defaults(self) -> None:
         """Take the footprint fit's default from the solver (one default)."""
@@ -870,6 +923,8 @@ class SiloParams:
             seed_fit=self.seed_fit,
             seed_merge_px=self.seed_merge_px,
             peak_th=self.peak_th,
+            seed_acceptance=self.seed_acceptance,
+            seed_false_per_field=self.seed_false_per_field,
             min_peak_distance=self.min_peak_distance,
             d_xy=self.d_xy,
             sigma_px=self.sigma_px,
@@ -1170,10 +1225,16 @@ _STAGE_FIELDS = {
 # stage fields added after the stage files' first version, and the value
 # that reproduces what the stage did before (see SiloParams.stage_settings)
 _STAGE_FIELDS_ADDED = {
-    "localize": {"seed_fit": "matlab", "seed_merge_px": 0.0},
+    "localize": {
+        "seed_fit": "matlab",
+        "seed_merge_px": 0.0,
+        "localization_keep_null": False,
+    },
     "plan": {
         "seed_fit": "matlab",
         "seed_merge_px": 0.0,
+        "seed_acceptance": "image",
+        "seed_false_per_field": 1.0,
         "align_patch_px": 1500,
         # each stage after localization checks the source of the stage
         # before it, so changing only the source redoes them
@@ -1183,6 +1244,7 @@ _STAGE_FIELDS_ADDED = {
     },
     "prepare": {"baseline_source": "median"},
     "solve": {"baseline_mode": "fit", "valid_kernel": 3},
+    "collect": {"min_source_snr": 0.0, "min_source_events": 0},
 }
 
 # the settings that SiloParams.baseline_source sets, per source (see the
@@ -1223,6 +1285,11 @@ _PYTHON_ONLY = {
     "min_frames": ("minFrames", 100),
     "seed_fit": ("seedFit", "matlab"),
     "seed_merge_px": ("seedMergePx", 0.0),
+    "localization_keep_null": ("localizationKeepNull", False),
+    "min_source_snr": ("minSourceSNR", 0.0),
+    "min_source_events": ("minSourceEvents", 0),
+    "seed_acceptance": ("seedAcceptance", "image"),
+    "seed_false_per_field": ("seedFalsePerField", 1.0),
     "baseline_source": ("baselineSource", "median"),
     "baseline_mode": ("baselineMode", "fit"),
 }

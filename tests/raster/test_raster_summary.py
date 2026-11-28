@@ -392,3 +392,27 @@ def test_nearest_interpolation():
         _nearest(ds, v, [0, 2, 3, 4, 7, 12]), [10, 10, 20, 20, 30, 30]
     )
     np.testing.assert_array_equal(_nearest(ds[:1], v[:1], [0, 4]), [10, 10])
+
+
+def test_evidence_test_removes_weak_sources(tmp_path):
+    """With min_snr the sources whose SNR averaged over trials is below it
+    are removed with the kinetics test's, and marked in the summary; the
+    SNR of a source without one (NaN) does not judge it."""
+    plan = make_plan()
+    result = PathResult(
+        plan=plan,
+        trials=[None, outcome(1, plan.n_pixels), outcome(2, plan.n_pixels)],
+        alignment=[None, alignment(1), alignment(2)],
+    )
+    kin = kinetics_test(result, 0.024, 200.0, 0.0, min_snr=3.5)
+    # SNR per trial [1, 2, nan, 4] * t: means 1.5, 3, nan, 6
+    np.testing.assert_allclose(kin.snr, [1.5, 3.0, np.nan, 6.0])
+    np.testing.assert_array_equal(kin.weak, [True, True, False, False])
+    np.testing.assert_array_equal(kin.keep, [False, False, True, True])
+    exp, per = tmp_path / "e.h5", tmp_path / "p.h5"
+    write_summaries(exp, per, [result], {"x": 1.0}, N_TRIALS, C, 1)
+    rej = load_struct_h5(exp)["Path1"]["sources"]["rejected"]
+    np.testing.assert_array_equal(rej["weak"].ravel(), [1, 1])
+    np.testing.assert_allclose(rej["SNR"].ravel(), [1.5, 3.0])
+    off = kinetics_test(result, 0.024, 200.0, 0.0)
+    assert off.weak is None and off.keep.all()

@@ -8,6 +8,12 @@ the sensor's ``exp(-1)``: about 1 for the sensor's kinetics, about 0 for
 one- or two-frame transients. Sources scoring below ``min_kinetic_score``
 are removed after extraction.
 
+An evidence test can remove, with them, sources whose extracted activity is
+too weak to tell from noise (:func:`weak_sources`; not in MATLAB, off by
+default): meant for permissive seeding (GIAnT-Python#51), whose extra seeds
+the kinetics test cannot judge, since a source with fewer than
+:data:`MIN_EVENTS` events gets no score and is kept.
+
 Traces are ``(sources, frames)`` per trial, NaN at discarded frames, as
 SILo's ``E{t}.dF.ls(:, :, 1)``.
 """
@@ -224,11 +230,18 @@ class KineticsTest:
         Sources kept.
     score, n_events : ndarray, shape (sources,)
         Every source's score and event count.
+    weak : ndarray of bool, shape (sources,), optional
+        Sources the evidence test removed (:func:`weak_sources`); None when
+        it was not run.
+    snr : ndarray, shape (sources,), optional
+        Every source's SNR averaged over trials, when the evidence test ran.
     """
 
     keep: np.ndarray
     score: np.ndarray
     n_events: np.ndarray
+    weak: Optional[np.ndarray] = None
+    snr: Optional[np.ndarray] = None
 
     @property
     def kept_score(self) -> np.ndarray:
@@ -285,3 +298,54 @@ def reject_fast_sources(
         with np.errstate(invalid="ignore"):
             keep = ~(score < min_kinetic_score)
     return KineticsTest(keep=keep, score=score, n_events=n_events)
+
+
+def mean_snr(
+    snrs: Sequence[Optional[np.ndarray]], n_sources: int
+) -> np.ndarray:
+    """Each source's SNR averaged over the trials that have one.
+
+    ``snrs`` holds each trial's per-source SNR (the solver's: the SD of the
+    denoised activity over its noise, ``TrialActivity.snr``), or None for a
+    trial without sources; NaN where no trial has one.
+    """
+    total = np.zeros(n_sources)
+    count = np.zeros(n_sources)
+    for s in snrs:
+        if s is None or np.size(s) != n_sources:
+            continue
+        s = np.asarray(s, dtype=np.float64)
+        ok = np.isfinite(s)
+        total[ok] += s[ok]
+        count[ok] += 1
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+def weak_sources(
+    snr: np.ndarray,
+    n_events: np.ndarray,
+    min_snr: float = 0.0,
+    min_events: int = 0,
+) -> np.ndarray:
+    """Sources whose extracted activity is too weak (the evidence test).
+
+    A source is weak when its SNR averaged over trials (:func:`mean_snr`) is
+    below ``min_snr`` or when the kinetics test found fewer than
+    ``min_events`` events in its trace (:func:`source_kinetics`); 0 turns
+    either criterion off. A source without an SNR (no extracted trial) is
+    not judged by it.
+
+    Returns
+    -------
+    ndarray of bool, shape (sources,)
+    """
+    if min_snr < 0 or min_events < 0:
+        raise ValueError("min_snr and min_events must be nonnegative")
+    weak = np.zeros(np.shape(snr), bool)
+    if min_snr > 0:
+        with np.errstate(invalid="ignore"):
+            weak |= np.asarray(snr, dtype=np.float64) < min_snr
+    if min_events > 0:
+        weak |= np.asarray(n_events) < min_events
+    return weak

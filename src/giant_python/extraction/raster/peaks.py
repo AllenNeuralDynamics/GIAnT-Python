@@ -236,6 +236,7 @@ def get_act_im_peaks(  # noqa: C901
     min_peak_distance: int = 1,
     fit: str = "matlab",
     merge_px: float = 0.0,
+    background: tuple[float, float] | None = None,
 ) -> np.ndarray:
     """Seed sources in a 2-D activity image (port of ``getActImPeaks.m``).
 
@@ -265,6 +266,11 @@ def get_act_im_peaks(  # noqa: C901
         that does not move). An activity image's peak that falls between
         pixels is otherwise often fitted as two peaks less than a pixel
         apart.
+    background : (float, float), optional
+        The centre and scale that ``peak_th`` counts from, in place of the
+        image's median and robust SD (MATLAB's); e.g. those of a null image
+        (:func:`~giant_python.extraction.raster.seeding.null_threshold`).
+        The centre is also the level the Gaussians are fitted above.
 
     Returns
     -------
@@ -286,9 +292,16 @@ def get_act_im_peaks(  # noqa: C901
     min_peak_distance = max(1, int(min_peak_distance))
     buffer_se = np.ones((2 * min_peak_distance - 1,) * 2, bool)
     finite = ~np.isnan(act)
-    vals = act[finite]
-    mu_bg = float(np.median(vals))
-    sigma_bg = float(np.median(np.abs(vals - mu_bg))) / _MAD_SCALE
+    if background is None:
+        vals = act[finite]
+        mu_bg = float(np.median(vals))
+        sigma_bg = float(np.median(np.abs(vals - mu_bg))) / _MAD_SCALE
+    else:
+        mu_bg, sigma_bg = (float(v) for v in background)
+        if not (np.isfinite(mu_bg) and sigma_bg > 0):
+            raise ValueError(
+                "background must be a finite centre and scale > 0"
+            )
     peak_thresh = mu_bg + peak_th * sigma_bg
 
     explored = act * ~excl

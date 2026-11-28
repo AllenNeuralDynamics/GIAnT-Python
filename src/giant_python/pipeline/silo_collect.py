@@ -281,7 +281,12 @@ def collect(
         if r is None:
             continue
         kin = kinetics_test(
-            r, params.tau_s, params.analyze_hz, params.min_kinetic_score
+            r,
+            params.tau_s,
+            params.analyze_hz,
+            params.min_kinetic_score,
+            params.min_source_snr,
+            params.min_source_events,
         )
         kept[d + 1] = (int(kin.keep.sum()), int(kin.keep.size))
     t1 = time.perf_counter()

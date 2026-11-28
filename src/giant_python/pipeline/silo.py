@@ -233,6 +233,9 @@ def _localize_job(job: dict) -> dict:
             p.seed_fit,
             p.seed_merge_px,
         )
+    null_im = None
+    if p.localization_keep_null:
+        null_im = loc.info.get("null", {}).get("null_im")
     write_localization(
         job["out"],
         trial.mean_im,
@@ -242,6 +245,7 @@ def _localize_job(job: dict) -> dict:
         peaks,
         job["attrs"],
         trial.half_ims,
+        null_im,
     )
     return {
         "unit": job["unit"],
