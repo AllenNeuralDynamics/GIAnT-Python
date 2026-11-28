@@ -383,3 +383,4 @@ def test_trial_orders_are_seeded_permutations():
     assert (np.sort(o, axis=1) == np.arange(9)).all()
     np.testing.assert_array_equal(o, trial_orders(1, 7, 50, 9))
     assert not np.array_equal(o, trial_orders(1, 8, 50, 9))
+    assert trial_orders(1, 7, 0, 9).shape == (0, 9)
