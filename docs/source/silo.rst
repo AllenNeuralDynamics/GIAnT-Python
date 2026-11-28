@@ -99,6 +99,61 @@ these options existed (with MATLAB's fit); ``seed_fit='matlab'`` with
 :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`, and the
 standalone per-trial localization, keep MATLAB's fit as their own default.
 
+Seed thresholds for dim sources (options, off by default)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MATLAB's seed threshold counts in robust SDs of the combined activity
+image itself (``peak_th``), so it rises with the number of pixels that
+carry real activity. Two options for seeding more of the dim sources
+(GIAnT-Python#51) are not MATLAB's and are off by default:
+
+* ``seed_acceptance='null'`` sets the plan's threshold from the null of
+  the combined image instead: each trial's bootstrap null image (the noise
+  movie the localization already draws, calibrated as the trial's image;
+  kept in the localization files with ``localization_keep_null``, which
+  this turns on) is combined as the data (aligned, averaged, scaled, its
+  5 x 5 median subtracted), and the threshold's centre and scale are that
+  null's median and robust SD, its level where the null's candidates
+  exceed it ``seed_false_per_field`` times per path (an exponential tail
+  fitted to the null's 50 largest candidates per path where it has fewer;
+  :func:`~giant_python.extraction.raster.seeding.null_threshold`).
+  ``peak_th`` then sets only the per-trial peaks. It needs
+  ``localization_null='bootstrap'`` (the network baseline's default).
+  ``seed_acceptance='null_sd'`` keeps only that null's scale: ``peak_th``
+  counts in robust SDs of the combined null, no tail is extrapolated.
+* ``seed_amplitude_rule='pixel'`` changes the seeding's final test of each
+  fitted peak. MATLAB's (``'matlab'``) requires the fitted Gaussian's mean
+  over a 2 x 2 pixel square to reach the threshold, which drops sharp
+  peaks (the activity image's peaks are narrower than a pixel) whose own
+  pixel is well above it; ``'pixel'`` requires the Gaussian's value on the
+  pixel its centre falls in.
+* ``min_source_snr`` and ``min_source_events`` add an evidence test to the
+  kinetics test after extraction: a source whose SNR (the solver's: the SD
+  of its denoised activity over its noise, averaged over trials) is below
+  ``min_source_snr``, or whose trace has fewer than ``min_source_events``
+  events of the kinetics test, is removed with the sources the kinetics
+  test rejects (``sources/rejected/weak`` marks them in the summary). It is
+  meant for permissive seeding (a lower ``peak_th``): the kinetics test
+  cannot judge a source with fewer than 5 events and keeps it.
+
+The bootstrap null holds the photon noise of each trial's model only: on
+the GFP control (no activity, registered with older code) the calibrated
+activity images of bright pixels are wider than their null (about twice,
+in the upper tail; 5 false seeds per path where ``seed_false_per_field``
+promised 1e-6), so the promised false seeds are a lower bound and GFP data
+are the reference for the false-source rate. With kept null images each
+trial-path draws its null movies from its own seed, so that the trials'
+nulls are independent.
+
+Evaluated on injected dim-source ground truth (GFP session 847983) and on
+three recordings (GIAnT-Python#58): with the network baseline, ``peak_th``
+5 with ``min_source_events`` 5 raised the recall of sources near the
+detection limit (isolated, 0.28 x the standard event sizes: 62% to 92%) at
+0.5 false sources per path on the GFP control and 17-49% more extraction
+CPU; ``peak_th`` 6 alone gave no false source. The null modes behaved like
+a lower ``peak_th``, since the image's robust SD was 1.0-1.7 times its
+null's on every set.
+
 Footprint support
 ~~~~~~~~~~~~~~~~~
 
