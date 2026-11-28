@@ -347,9 +347,10 @@ position in the trial through the across-trial map. With an affine or
 patchwise map every pixel then has its own sub-pixel position, so every
 frame goes through the loader's general bilinear interpolation, and the
 interpolation's blur differs slightly from pixel to pixel.
-Solving each trial on its own pixel grid instead (each subproblem moved
-into the trial by one whole-pixel shift and read through the loader's
-fast path, its footprints mapped back to the consensus frame) was built
+Solving each trial on its own pixel grid instead (the trial grid,
+``solve_grid='trial'``: each subproblem moved into the trial by one
+whole-pixel shift and read through the loader's fast path, its footprints
+mapped back to the consensus frame) was built
 and measured for GIAnT-Python#52, and removed: on 32 cores the loads took
 no less time (the interpolation runs in parallel within a load), sources
 and traces were the same, but the per-trial position jitter rose by 0.02
