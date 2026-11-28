@@ -33,7 +33,7 @@ if TYPE_CHECKING:
         register_multiroi,
     )
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 _MODEL_EXPORTS = {
     "AnnotationOptions",
