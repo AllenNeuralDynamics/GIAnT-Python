@@ -617,8 +617,8 @@ class SiloParams:
         (the default; MATLAB's): the plan's selected pixels of the
         consensus frame, each read at its position in the trial through the
         across-trial map. ``'trial'``: each subproblem moved into the trial
-        by one whole-pixel shift (the map's rounded mean displacement over
-        its pixels), read at whole pixels of the trial's registered frame,
+        by one whole-pixel shift (the map's rounded mean displacement at
+        its sources), read at whole pixels of the trial's registered frame,
         and its footprints mapped back to the consensus frame once per
         trial (:mod:`~giant_python.extraction.raster.trial_grid`). With an
         affine or patchwise map it reads every pixel through the same

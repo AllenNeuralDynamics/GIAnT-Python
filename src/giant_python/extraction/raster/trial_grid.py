@@ -12,13 +12,15 @@ blur and noise differ from pixel to pixel.
 With ``solve_grid='trial'`` the map is used only to place the plan's
 subproblems in the trial. Locally the map is a shift: each subproblem (a
 group of sources with its crop of selected pixels) is moved into the trial
-by one whole-pixel shift, the rounded mean displacement of the map over its
-pixels. The trial is read at those whole pixels of its registered frame (the
-fast path: only the within-trial motion is interpolated), the subproblems
+by one whole-pixel shift, the rounded mean displacement of the map at its
+sources (a trial whose map would leave a source more than a pixel from its
+pixel in the moved subproblem is refused). The trial is read at those whole
+pixels of its registered frame (the fast path: only the within-trial motion
+is interpolated), the subproblems
 are solved there with the plan's sources and crops, and the fitted
 footprints are mapped back to the consensus frame once per trial
 (:func:`footprints_to_consensus`) for the summaries and the viewer. The
-sub-pixel rest of the map (at most about half a pixel) is absorbed by the
+sub-pixel rest of the map (about half a pixel per axis) is absorbed by the
 footprints, which the solver fits freely within their support, and is put
 back when they are mapped.
 
@@ -39,6 +41,15 @@ from .plan import ExtractionPlan, SubproblemGroup
 
 SOLVE_GRIDS = ("consensus", "trial")
 """Grids the subproblems can be solved on (``SiloParams.solve_grid``)."""
+
+MAX_SOURCE_OFFSET_PX = 1.0
+"""Farthest a source may lie from its pixel in the moved subproblem (px).
+
+A footprint is fitted within ``(valid_kernel - 1) / 2`` pixels of its
+source's pixel; a source off its pixel by more than a pixel would lose
+part of its footprint to the support's edge. One shift per subproblem
+leaves a single source within half a pixel per axis (0.71 px); more only
+where the map stretches or bends across a subproblem."""
 
 
 @dataclass
@@ -66,8 +77,8 @@ class TrialGrid:
         Where the map puts each of the plan's selected pixels in the trial
         (fractional), for mapping footprints back.
     residual : ndarray, shape (groups,)
-        Largest distance (px) over each group's pixels between the map's
-        displacement and the group's shift.
+        Largest distance (px) over each group's sources between where the
+        map puts the source and its pixel in the moved subproblem.
     """
 
     trial: int
@@ -109,6 +120,9 @@ def trial_grid(plan: ExtractionPlan, trial: int) -> TrialGrid:
     trial : int
         Zero-based trial; it must have been aligned.
 
+    Each subproblem moves by the map's mean displacement over its sources,
+    rounded to whole pixels.
+
     Returns
     -------
     TrialGrid
@@ -116,7 +130,10 @@ def trial_grid(plan: ExtractionPlan, trial: int) -> TrialGrid:
     Raises
     ------
     ValueError
-        If the trial was not aligned across trials.
+        If the trial was not aligned across trials, or if the map puts a
+        source more than :data:`MAX_SOURCE_OFFSET_PX` from its pixel in the
+        moved subproblem (the map stretches or bends too much across a
+        subproblem for one shift; solve on the consensus grid instead).
     """
     warp: TrialWarp = plan.warp
     if not warp.aligned[trial]:
@@ -127,19 +144,33 @@ def trial_grid(plan: ExtractionPlan, trial: int) -> TrialGrid:
     )
     r_t = np.asarray(r_t, dtype=np.float64).ravel()
     c_t = np.asarray(c_t, dtype=np.float64).ravel()
-    d_r, d_c = r_t - rows, c_t - cols
+    src_r = np.asarray(plan.source_rows, dtype=np.float64)
+    src_c = np.asarray(plan.source_cols, dtype=np.float64)
+    s_r, s_c = warp.coords(trial, src_r, src_c)
+    s_r = np.asarray(s_r, dtype=np.float64).ravel() - src_r
+    s_c = np.asarray(s_c, dtype=np.float64).ravel() - src_c
     n_groups = len(plan.groups)
     shifts = np.zeros((n_groups, 2), dtype=np.int64)
     residual = np.zeros(n_groups)
     moved_r, moved_c = [], []
     for g, grp in enumerate(plan.groups):
         pix = np.asarray(grp.pixels, dtype=np.int64)
-        mean = np.array([d_r[pix].mean(), d_c[pix].mean()])
+        src = np.asarray(grp.sources, dtype=np.int64)
+        mean = np.array([s_r[src].mean(), s_c[src].mean()])
         s = matlab_round(mean).astype(np.int64)
         shifts[g] = s
-        residual[g] = float(
-            np.sqrt((d_r[pix] - s[0]) ** 2 + (d_c[pix] - s[1]) ** 2).max()
-        )
+        off = np.sqrt((s_r[src] - s[0]) ** 2 + (s_c[src] - s[1]) ** 2)
+        residual[g] = float(off.max())
+        if residual[g] > MAX_SOURCE_OFFSET_PX:
+            k = int(src[np.argmax(off)])
+            raise ValueError(
+                f"trial {trial}: the across-trial map puts source {k} "
+                f"{residual[g]:.2f} px from its pixel in its subproblem "
+                f"(group {g}) moved by one whole-pixel shift; more than "
+                f"{MAX_SOURCE_OFFSET_PX:g} px: the map stretches or bends "
+                "too much across the subproblem for the trial grid; solve "
+                "on the consensus grid (solve_grid='consensus')"
+            )
         moved_r.append(rows[pix] + s[0])
         moved_c.append(cols[pix] + s[1])
     points, index = _union(moved_r, moved_c)

@@ -118,3 +118,26 @@ def test_streamed_run_loading_ahead_is_the_same(
         _summary(a.out_dir / "experiment_summary.h5"),
         _summary(b.out_dir / "experiment_summary.h5"),
     )
+
+
+def test_held_bytes_count_what_a_loaded_trial_keeps():
+    """The memory of a loaded trial waiting for the solver: its
+    subproblems' data, variance multipliers and baselines, and its
+    traces."""
+    from types import SimpleNamespace
+
+    y = np.zeros((2, 10, 50), np.float32)
+    sub = SimpleNamespace(
+        y=y, finv=np.zeros((10, 50), np.float32), baseline=None
+    )
+    with_base = SimpleNamespace(
+        y=y, finv=sub.finv, baseline=np.zeros((10, 50), np.float32)
+    )
+    rec = SimpleNamespace(
+        global_f=np.zeros((2, 50)),
+        roi_f=np.zeros((1, 2, 50)),
+        roi_fsvd=np.zeros((1, 2, 50)),
+    )
+    traces = 3 * 100 * 8
+    assert silo._held_bytes([sub], rec) == 4000 + 2000 + traces
+    assert silo._held_bytes([sub, with_base], rec) == 2 * 6000 + 2000 + traces

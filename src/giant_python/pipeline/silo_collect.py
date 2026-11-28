@@ -30,7 +30,7 @@ import h5py
 import numpy as np
 
 from ..models.params import SiloExecution, SiloParams
-from .silo_session import SiloSession, attr, now, skip_hash
+from .silo_session import SiloSession, attr, now, skip_applies
 from .silo_solve import solve_science
 
 
@@ -213,8 +213,8 @@ def path_result(
     science = solve_science(params)
     for t in plan.valid_trials:
         t = int(t)
-        if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
-            continue  # no data at the selected pixels
+        if skip_applies(session.skip_file(d, t), plan_hash, params.solve_grid):
+            continue  # no data at the selected pixels (on this grid)
         files = _current(
             _results_files(session, d, t),
             plan_hash,

@@ -1001,7 +1001,7 @@ def prepare(
         except ValueError as exc:
             if NO_DATA not in str(exc):
                 raise
-            _mark_skipped(session, d, t, str(exc), h, ph)
+            _mark_skipped(session, d, t, str(exc), h, ph, params.solve_grid)
             continue
         if skip.exists():
             skip.unlink()
@@ -1035,10 +1035,14 @@ def prepare(
     return done
 
 
-def _mark_skipped(session, d, t, reason, prepare_hash, plan_hash) -> None:
-    """Mark a trial-path as without data; remove its earlier container and
-    results files, so that no stage uses them."""
-    write_skip(session.skip_file(d, t), reason, prepare_hash, plan_hash)
+def _mark_skipped(
+    session, d, t, reason, prepare_hash, plan_hash, solve_grid="consensus"
+) -> None:
+    """Mark a trial-path as without data on ``solve_grid``; remove its
+    earlier container and results files, so that no stage uses them."""
+    write_skip(
+        session.skip_file(d, t), reason, prepare_hash, plan_hash, solve_grid
+    )
     stale = [session.container_file(d, t)]
     stem = f"path{d + 1}_trial{t + 1:04d}"
     if session.results_dir.exists():
@@ -1257,6 +1261,20 @@ def _save_container(
         f.attrs["settings_hash"] = chash
 
 
+def _held_bytes(subs, record) -> int:
+    """Bytes of the arrays a loaded trial keeps until its results are
+    written: its subproblems' data, variance multipliers and baselines,
+    and its traces."""
+    total = 0
+    for s in subs:
+        for a in (s.y, s.finv, s.baseline):
+            if a is not None:
+                total += int(np.asarray(a).nbytes)
+    for a in (record.global_f, record.roi_f, record.roi_fsvd):
+        total += int(np.asarray(a).nbytes)
+    return total
+
+
 @dataclass
 class _Unit:
     """A trial-path the streaming driver extracts: where its results go
@@ -1442,7 +1460,15 @@ def stream(  # noqa: C901
             except ValueError as exc:
                 if NO_DATA not in str(exc):
                     raise
-                _mark_skipped(session, u.d, u.t, str(exc), u.chash, ph)
+                _mark_skipped(
+                    session,
+                    u.d,
+                    u.t,
+                    str(exc),
+                    u.chash,
+                    ph,
+                    params.solve_grid,
+                )
                 return {"skipped": str(exc)}
             if u.skip.exists():
                 u.skip.unlink()
@@ -1493,7 +1519,6 @@ def stream(  # noqa: C901
                 params,
                 options,
             )
-            nbytes = int(trial.y.nbytes + trial.finv.nbytes)
             del trial, tb
             placements = [(g.pixels, g.sources) for g in groups]
             return {
@@ -1502,7 +1527,7 @@ def stream(  # noqa: C901
                 "placements": placements if extracted else [],
                 "subs": subs,
                 "attrs": attrs,
-                "nbytes": nbytes,
+                "nbytes": _held_bytes(subs, record),
             }
 
         for u, item in _loaded(units, load, execution):

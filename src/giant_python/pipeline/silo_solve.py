@@ -43,7 +43,7 @@ from .silo_session import (
     SiloSession,
     attr,
     make_pool,
-    skip_hash,
+    skip_applies,
     stage_hash,
 )
 
@@ -328,16 +328,17 @@ def solve_container(
     return {"seconds": time.perf_counter() - t0, "solved": len(subs)}
 
 
-def _containers(session: SiloSession) -> list:
-    """Containers of the session's planned, valid trial-paths."""
+def _containers(session: SiloSession, solve_grid: str = "consensus") -> list:
+    """Containers of the session's planned, valid trial-paths (those not
+    marked as without data for the plan on ``solve_grid``)."""
     from .silo import _valid_units
 
     out = []
     for d, t in _valid_units(session):
         f = session.container_file(d, t)
         plan_hash = attr(session.plan_file(d), "settings_hash")
-        if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
-            continue  # marked as without data for this plan
+        if skip_applies(session.skip_file(d, t), plan_hash, solve_grid):
+            continue  # marked as without data for this plan and grid
         if f.exists():
             out.append(((d, t), f))
         else:
@@ -405,7 +406,7 @@ def dispatch(
     ex = execution or SiloExecution()
     options = ex.solver_options()
     entries = []  # (container file, container hash, k, work)
-    for _, f in _containers(session):
+    for _, f in _containers(session, params.solve_grid):
         c = read_container(f, data=False)
         check_container(c, params, f.name)
         h = attr(f, "settings_hash")
@@ -569,7 +570,7 @@ def solve_containers(
     done = {}
     pool = _pool(ex, options)
     try:
-        for (d, t), f in _containers(session):
+        for (d, t), f in _containers(session, params.solve_grid):
             done[f.name] = solve_container(
                 f,
                 session.results_file(d, t),

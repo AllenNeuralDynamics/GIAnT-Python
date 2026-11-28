@@ -91,10 +91,18 @@ def test_layout_moves_each_subproblem_by_one_shift(bent_plan):
         order = np.lexsort((g.points[:, 0], g.points[:, 1]))
         np.testing.assert_array_equal(order, np.arange(g.n_pixels))
         assert np.unique(g.points, axis=0).shape[0] == g.n_pixels
+        src_r = plan.source_rows.astype(float)
+        src_c = plan.source_cols.astype(float)
+        sr, sc = plan.warp.coords(t, src_r, src_c)
         for k, (cons, moved) in enumerate(zip(plan.groups, g.groups)):
-            pix = cons.pixels
-            mean = [(r_t - rows)[pix].mean(), (c_t - cols)[pix].mean()]
+            pix, src = cons.pixels, cons.sources
+            mean = [(sr - src_r)[src].mean(), (sc - src_c)[src].mean()]
             np.testing.assert_array_equal(g.shifts[k], matlab_round(mean))
+            off = np.hypot(
+                sr[src] - src_r[src] - g.shifts[k, 0],
+                sc[src] - src_c[src] - g.shifts[k, 1],
+            )
+            assert g.residual[k] == pytest.approx(off.max())
             want = np.column_stack([rows[pix], cols[pix]]) + g.shifts[k]
             np.testing.assert_array_equal(g.points[moved.pixels], want)
             assert moved.sel is cons.sel
@@ -117,6 +125,17 @@ def test_layout_moves_each_subproblem_by_one_shift(bent_plan):
     # the plan's map differs between trials: so do the shifts
     shifts = [trial_grid(plan, t).shifts for t in range(plan.n_trials)]
     assert any(not np.array_equal(shifts[0], s) for s in shifts[1:])
+
+
+def test_layout_refuses_a_map_that_stretches_a_subproblem(bent_plan):
+    """One shift cannot serve a subproblem whose sources the map moves
+    apart by more than about two pixels: the trial grid refuses it."""
+    stretch = np.zeros((bent_plan.n_trials, 2, 3))
+    stretch[:] = [[1.0, 0.0, 0.3], [0.0, 2.0, 0.0]]  # columns twice as far
+    plan = replace(bent_plan, warp=TrialWarp(stretch))
+    assert any(len(grp.sources) > 1 for grp in plan.groups)
+    with pytest.raises(ValueError, match="consensus grid"):
+        trial_grid(plan, 0)
 
 
 def _trial_footprints(plan, grid, offset=(0.0, 0.0), sigma=1.3):
@@ -314,3 +333,23 @@ def test_trial_grid_stages_refuse_the_other_grid(tmp_path, grid_fake):
     with pytest.raises(FileNotFoundError):
         silo_collect.collect(s, consensus, EX)
     silo_collect.collect(s, TRIAL_GRID, EX)
+
+
+def test_skip_markers_belong_to_their_grid(tmp_path):
+    """A no-data marker holds for its plan and grid only: the trial grid
+    reads other pixels than the consensus grid. Markers written before the
+    option are of the consensus grid."""
+    from giant_python.pipeline.silo_session import skip_applies, write_skip
+
+    f = tmp_path / "path1_trial0001.skip.json"
+    assert not skip_applies(f, "p", "consensus")  # no marker
+    write_skip(f, "no data", "h", "p")
+    assert skip_applies(f, "p", "consensus")
+    assert not skip_applies(f, "p", "trial")
+    assert not skip_applies(f, "other plan", "consensus")
+    write_skip(f, "no data", "h", "p", "trial")
+    assert skip_applies(f, "p", "trial")
+    assert not skip_applies(f, "p", "consensus")
+    assert not skip_applies(f, "", "trial")
+    f.write_text("not json")
+    assert not skip_applies(f, "p", "trial")

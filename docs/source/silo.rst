@@ -296,7 +296,9 @@ interpolation's blur and noise differ from pixel to pixel.
 off by default) solves each trial on its own pixel grid instead
 (:mod:`giant_python.extraction.raster.trial_grid`): the map only places the
 subproblems in the trial, each moved by one whole-pixel shift (the map's
-mean displacement over its pixels, rounded), and the trial is read at those
+mean displacement at its sources, rounded; a trial whose map would leave a
+source more than a pixel from its pixel in the moved subproblem is refused),
+and the trial is read at those
 whole pixels of its registered frame, where all pixels share a frame's
 interpolation weights (the fast path). The global trace and the user-ROI
 traces are read on the same grid (labeled pixels from the trial's own mean
