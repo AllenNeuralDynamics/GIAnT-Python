@@ -291,10 +291,12 @@ async function init() {
   await setPath(S.meta.paths[0].path);
 }
 function pathMeta() { return S.meta.paths.find((p) => p.path === S.path); }
-function resetMovie() {  // the movie view's trial-path state: none loaded, nothing pending
+function resetMovie() {  // the movie view's trial-path state: none loaded, nothing pending, nothing shown
   B.seq++; B.st = null; B.trial = null; B.frame = null; B.trace = null; B.lastKey = undefined;
   B.events = []; B.ev = -1; B.evSrc = null; B.pending = false;
   if (B.playing) togglePlay();
+  B.tiles = []; $("tiles").innerHTML = ""; $("binfo").textContent = ""; $("breadout").textContent = " "; $("pixinfo").textContent = "";
+  drawBCharts();
   updateEvInfo(); $("evinfo").textContent = "No source picked: pick one in the Sources view to step through its largest events.";
 }
 async function setPath(d) {
@@ -580,7 +582,7 @@ for (const cid of ["cL", "cR"]) {
       return;
     }
     const { best, r, c: cc } = nearestMark(c, ev), tip = $("tip");
-    const e = A.images[imgKey(cid === "cL" ? "selL" : "selR").key];
+    const e = A.images[imgKey(cid === "cL" && !A.flick ? "selL" : "selR").key];  // the image this canvas shows
     const ri = Math.floor(r), ci = Math.floor(cc);
     const v = e && ri >= 0 && ri < A.h && ci >= 0 && ci < A.w ? e.data[ri * A.w + ci] : NaN;
     $("areadout").textContent = ri >= 0 && ri < A.h && ci >= 0 && ci < A.w ? `row ${ri}, col ${ci}: ${fmt(v)}` : " ";
