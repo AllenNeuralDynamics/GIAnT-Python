@@ -185,7 +185,9 @@ details.defs li { margin: 3px 0; }
 "use strict";
 const $ = id => document.getElementById(id);
 const S = { meta: null, prod: 0, path: null, trial: -1, src: -1, data: null, roi: null, crops: null, field: null,
-  lim: {}, view: { s: 1, ox: 0, oy: 0 }, order: [], sortKey: "step_p", sortDir: 1, cropsKey: "", fieldKey: "" };
+  lim: {}, view: { s: 1, ox: 0, oy: 0 }, order: [], sortKey: "step_p", sortDir: 1, cropsKey: "", fieldKey: "",
+  // request counters: a response is used only if no newer request of its kind was made meanwhile
+  gen: { path: 0, field: 0, roi: 0, crops: 0, size: 0 } };
 const MARK_VAR = { "Growing": "--grow", "Shrinking": "--shrink", "Unsure": "--unsure", "Not a spine": "--notspine" };
 const PREFER = ["f0_gain", "f0_net", "f0_silo_ch1", "mean_ch1"];
 const MARK_KEYS = { g: "Growing", s: "Shrinking", u: "Unsure", x: "Not a spine", c: "" };
@@ -257,9 +259,14 @@ const api = {
 function status(msg, err) { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; }
 
 // ---------------------------------------------------------------- helpers
-const pct = x => (x === null || x === undefined || !isFinite(x)) ? NaN : 100 * (Math.exp(x) - 1);
-const fmtP = p => (p === null || p === undefined || !isFinite(p)) ? "" : (p < 0.001 ? p.toExponential(0) : p.toFixed(3));
-const fmtPct = x => isFinite(x) ? (x > 0 ? "+" : "") + x.toFixed(0) : "";
+// a number from JSON (null, as NaN and Infinity arrive, is NaN)
+const num = v => (typeof v === "number" ? v : NaN);
+// text from files (labels, notes, names) as HTML text
+const esc = v => String(v === null || v === undefined ? "" : v).replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = x => (x === null || x === undefined || !Number.isFinite(x)) ? NaN : 100 * (Math.exp(x) - 1);
+const fmtP = p => (p === null || p === undefined || !Number.isFinite(p)) ? "" : (p < 0.001 ? p.toExponential(0) : p.toFixed(3));
+const fmtPct = x => Number.isFinite(x) ? (x > 0 ? "+" : "") + x.toFixed(0) : "";
 function pmeta() { return S.meta.products[S.prod].paths[S.path]; }
 function acqOf(t) {
   // acquisition number of trial index t ("" for -1: no split or run)
@@ -275,7 +282,7 @@ function trialList(ts) {
 }
 function quantile(sorted, q) { if (!sorted.length) return NaN; const i = (sorted.length - 1) * q, a = Math.floor(i), b = Math.ceil(i);
   return sorted[a] + (sorted[b] - sorted[a]) * (i - a); }
-function finiteSorted(arr) { const v = []; for (const x of arr) if (isFinite(x)) v.push(x); return v.sort((a, b) => a - b); }
+function finiteSorted(arr) { const v = []; for (const x of arr) if (Number.isFinite(x)) v.push(x); return v.sort((a, b) => a - b); }
 function series(k) { return css(`--series-${(k % 8) + 1}`); }
 function hexRgb(h) { h = h.replace("#", ""); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
 // blue - white - red, as spineViewer.m
@@ -345,6 +352,7 @@ function fillSelect(sel, items, keep) {
 }
 
 async function loadPath(n, near, view) {
+  const g = ++S.gen.path;
   S.path = n; status("loading…");
   const pm = pmeta();
   const imgs = pm.images.map(x => [x.name, x.name]);
@@ -363,9 +371,13 @@ async function loadPath(n, near, view) {
   $("fview").querySelector('option[value="activity"]').disabled = !pm.has_activity_image;
   const sl = $("tslider"); sl.max = pm.acquisition.length - 1;
   S.trial = Math.min(S.trial, pm.acquisition.length - 1);
+  let data;
   try {
-    S.data = await api.sources(S.prod, n);
-  } catch (e) { status(e.message, true); return; }
+    data = await api.sources(S.prod, n);
+  } catch (e) { if (g === S.gen.path) status(e.message, true); return; }
+  if (g !== S.gen.path) return; // a newer path or product was chosen meanwhile
+  S.data = data;
+  S.src = Math.min(S.src, data.n - 1);
   S.lim = {};
   let s = 0;
   if (near && S.data.n) {
@@ -375,9 +387,10 @@ async function loadPath(n, near, view) {
   if (EMB && !near) { const inc = exportedSources(n); if (inc.length && !inc.includes(s)) s = inc[0]; }
   buildTable();
   await drawField(true, view === null || view === undefined);
+  if (g !== S.gen.path) return;
   if (view) { S.view = view; drawOverlay(); }
   setTrial(S.trial, true);
-  if (S.data.n) await selectSource(s, true); else status("no sources");
+  if (S.data.n) await selectSource(s, true); else { S.src = -1; S.roi = null; S.crops = null; status("no sources"); }
 }
 
 function exportedSources(n) {
@@ -424,7 +437,7 @@ function fitView() {
 }
 function toImg(e) {
   const r = $("field").getBoundingClientRect();
-  return [(e.clientY - r.top - S.view.oy) / S.view.s, (e.clientX - r.left - S.view.ox) / S.view.s];
+  return [(e.clientY - r.top - S.view.oy) / S.view.s - 0.5, (e.clientX - r.left - S.view.ox) / S.view.s - 0.5];
 }
 function clickField(e) {
   if (!S.data || !S.data.n) return;
@@ -439,8 +452,8 @@ function fieldTip(e) {
   if (ri < 0 || ci < 0 || ri >= H || ci >= W) { tip.style.display = "none"; return; }
   const v = S.field.data[ri * W + ci];
   const view = $("fview").value;
-  const txt = view === "change" ? `change ${isFinite(v) ? (100 * v).toFixed(1) + "%" : "–"}` :
-    view === "activity" ? `z ${isFinite(v) ? v.toFixed(1) : "–"}` : `${isFinite(v) ? v.toFixed(3) : "–"} × trial median`;
+  const txt = view === "change" ? `change ${Number.isFinite(v) ? (100 * v).toFixed(1) + "%" : "–"}` :
+    view === "activity" ? `z ${Number.isFinite(v) ? v.toFixed(1) : "–"}` : `${Number.isFinite(v) ? v.toFixed(3) : "–"} × trial median`;
   tip.innerHTML = `<div class="r"><span>row ${ri}, col ${ci}</span><span>${txt}</span></div>`;
   tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px";
 }
@@ -450,16 +463,20 @@ async function drawField(refetch, fit) {
   $("vs").disabled = view !== "change"; $("range").disabled = view !== "change"; $("fimg").disabled = view === "activity";
   const key = [S.prod, S.path, image, S.trial, view, vs].join("|");
   if (refetch || key !== S.fieldKey) {
-    try { S.field = await api.field(S.prod, S.path, image, S.trial, view, vs); S.fieldKey = key; }
-    catch (e) { status(`field: ${e.message}`, true); S.field = null; S.fieldKey = key; }
+    const g = ++S.gen.field;
+    let f = null, err = null;
+    try { f = await api.field(S.prod, S.path, image, S.trial, view, vs); } catch (e) { err = e; }
+    if (g !== S.gen.field) return; // superseded by a newer field request
+    S.field = f; S.fieldKey = key;
+    if (err) status(`field: ${err.message}`, true);
   }
   renderField();
   if (fit) fitView();
   drawOverlay();
   const tl = S.trial < 0 ? "mean of trials" : `trial ${acqOf(S.trial)}`;
   const what = view === "activity" ? "activity image (robust z; sources detected above threshold)" :
-    view === "change" ? `${image} change, ${S.trial < 0 ? "late vs early trials" : (vs === "previous" ? "vs the previous trial" : "vs the mean of trials")} (red brighter, blue dimmer, ±${$("range").value}%)` :
-    `${image}, bleach-normalized`;
+    view === "change" ? `${esc(image)} change, ${S.trial < 0 ? "late vs early trials" : (vs === "previous" ? "vs the previous trial" : "vs the mean of trials")} (red brighter, blue dimmer, ±${$("range").value}%)` :
+    `${esc(image)}, bleach-normalized`;
   $("ftitle").innerHTML = `<b>Path${S.path}</b>: ${what}, ${view === "activity" ? "all trials" : tl}. Click a ring to select a source; drag to pan, scroll to zoom.`;
   const leg = Object.entries(MARK_VAR).map(([l, v]) => `<span><span class="chip" style="background:${css(v)}"></span>${l}</span>`);
   $("flegend").innerHTML = `<span><span class="chip" style="border:1.5px solid ${css("--text-secondary")}"></span>source</span>` + leg.join("");
@@ -473,11 +490,11 @@ function renderField() {
   if (view === "change") {
     const r = (+$("range").value || 25) / 100; const b = a.subarray(H * W);
     for (let i = 0; i < H * W; i++) { const c = a[i];
-      if (!isFinite(c)) { d[i * 4 + 3] = 0; continue; }
+      if (!Number.isFinite(c)) { d[i * 4 + 3] = 0; continue; }
       const idx = Math.round(255 * Math.min(Math.max((c / r + 1) / 2, 0), 1)); const m = DIV[idx]; const br = b[i];
       d[i * 4] = m[0] * br; d[i * 4 + 1] = m[1] * br; d[i * 4 + 2] = m[2] * br; d[i * 4 + 3] = 255; }
   } else if (view === "activity") {
-    for (let i = 0; i < H * W; i++) { const z = a[i]; if (!isFinite(z)) { d[i * 4 + 3] = 0; continue; }
+    for (let i = 0; i < H * W; i++) { const z = a[i]; if (!Number.isFinite(z)) { d[i * 4 + 3] = 0; continue; }
       const c = actColour(z); d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = 255; }
   } else {
     // one contrast per image (from the first view of it), so trials compare
@@ -485,7 +502,7 @@ function renderField() {
     if (!S.lim[lk]) { const v = finiteSorted(Array.from(a.subarray(0, H * W), x => sqrtv(x, sq)));
       S.lim[lk] = [quantile(v, 0.005), quantile(v, 0.998)]; }
     const [lo, hi] = S.lim[lk]; const sc = 255 / Math.max(hi - lo, 1e-9);
-    for (let i = 0; i < H * W; i++) { const x = a[i]; if (!isFinite(x)) { d[i * 4 + 3] = 0; continue; }
+    for (let i = 0; i < H * W; i++) { const x = a[i]; if (!Number.isFinite(x)) { d[i * 4 + 3] = 0; continue; }
       const g = Math.max(0, Math.min(255, (sqrtv(x, sq) - lo) * sc)); d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = g; d[i * 4 + 3] = 255; }
   }
   ctx.putImageData(im, 0, 0);
@@ -517,7 +534,7 @@ function drawOverlay() {
     const m = by[k];
     ctx.beginPath(); ctx.arc(x, y, Math.max(3.5, Math.min(7, 2.2 * v.s)), 0, 2 * Math.PI);
     ctx.strokeStyle = "rgba(0,0,0,.65)"; ctx.lineWidth = 3; ctx.stroke();
-    ctx.strokeStyle = m && m.label ? css(MARK_VAR[m.label]) : (S.data.ok[k] ? "#ffffff" : "#9a9a95"); ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.strokeStyle = m && MARK_VAR[m.label] ? css(MARK_VAR[m.label]) : (S.data.ok[k] ? "#ffffff" : "#9a9a95"); ctx.lineWidth = 1.4; ctx.stroke();
   }
   if (S.roi && S.src >= 0) {
     const [r0, c0] = S.roi.origin;
@@ -540,7 +557,11 @@ async function selectSource(k, keepTable) {
   const [w, h] = fieldSize(); const x = (S.data.cols[k] + 0.5) * S.view.s + S.view.ox, y = (S.data.rows[k] + 0.5) * S.view.s + S.view.oy;
   if (x < 20 || y < 20 || x > w - 20 || y > h - 20) { S.view.ox += w / 2 - x; S.view.oy += h / 2 - y; }
   status(`source ${S.data.ids[k] + 1}`);
-  try { S.roi = await api.roi(S.prod, S.path, k); } catch (e) { S.roi = null; status(`window: ${e.message}`, true); }
+  const g = ++S.gen.roi; const data = S.data;
+  let roi = null, err = null;
+  try { roi = await api.roi(S.prod, S.path, k); } catch (e) { err = e; }
+  if (g !== S.gen.roi || data !== S.data) return; // another source or path was chosen meanwhile
+  S.roi = roi; if (err) status(`window: ${err.message}`, true);
   drawOverlay(); drawSize(); drawAct(); showMark(); highlightRow(keepTable);
   await loadCrops();
 }
@@ -549,9 +570,12 @@ async function loadCrops() {
   const image = $("cimg").value, view = $("cview").value, vs = $("vs").value;
   const key = [S.prod, S.path, S.src, image, view, vs].join("|");
   if (key !== S.cropsKey) {
-    try { S.crops = await api.crops(S.prod, S.path, S.src, image, view, vs); }
-    catch (e) { S.crops = null; status(`crops: ${e.message}`, true); }
-    S.cropsKey = key;
+    const g = ++S.gen.crops;
+    let c = null, err = null;
+    try { c = await api.crops(S.prod, S.path, S.src, image, view, vs); } catch (e) { err = e; }
+    if (g !== S.gen.crops) return; // superseded by a newer crop request
+    S.crops = c; S.cropsKey = key;
+    if (err) status(`crops: ${err.message}`, true);
   }
   drawCrops();
 }
@@ -587,7 +611,7 @@ function drawCrops() {
     } else if (k > 0 && S.crops) {
       const t = k - 1; const base = t * sz * sz; const plane = S.crops.shape[1] * sz * sz;
       for (let p = 0; p < sz * sz; p++) { const x = S.crops.data[base + p]; const i = p * 4;
-        if (!isFinite(x)) { d[i + 3] = 0; continue; }
+        if (!Number.isFinite(x)) { d[i + 3] = 0; continue; }
         if (view === "change" && nL > 1) { const br = S.crops.data[plane + base + p]; const m = DIV[Math.round(255 * Math.min(Math.max((x / rng + 1) / 2, 0), 1))];
           d[i] = m[0] * br; d[i + 1] = m[1] * br; d[i + 2] = m[2] * br; }
         else { const g = Math.max(0, Math.min(255, 255 * (sqrtv(x, sq) - lo) / Math.max(hi - lo, 1e-9))); d[i] = d[i + 1] = d[i + 2] = g; }
@@ -611,7 +635,7 @@ function drawCrops() {
   const npx = S.roi ? S.roi.weights.flat().filter((x, i) => x > 0 && S.roi.valid.flat()[i]).length : 0;
   const inc = exportedSources(S.path);
   const incTxt = EMB ? ` <span class="muted">(this page holds the crops of sources ${inc.map(k => S.data.ids[k] + 1).join(", ") || "none"})</span>` : "";
-  $("ctitle").innerHTML = `<b>Source ${s}</b>: window (footprint weights, ${npx} px used; red 50%, orange 10% of the peak; hatched: left out), then ${$("cimg").value} ${view === "change" ? "change" : "bleach-normalized, one contrast"}, mean and each trial${incTxt}`;
+  $("ctitle").innerHTML = `<b>Source ${s}</b>: window (footprint weights, ${npx} px used; red 50%, orange 10% of the peak; hatched: left out), then ${esc($("cimg").value)} ${view === "change" ? "change" : "bleach-normalized, one contrast"}, mean and each trial${incTxt}`;
 }
 
 // ---------------------------------------------------------------- charts
@@ -641,26 +665,26 @@ function sizeOf(name, k) {
   const L = S.data.normalized[name]; if (!L) return null;
   return L.map(row => pct(row[k]));
 }
-function otherSource() {
-  // the next product's source nearest the selected one (within 2.5 px), for the size plot
-  if (S.meta.products.length < 2 || !S.other) return null;
-  return S.other;
-}
 async function refreshOther() {
-  S.other = null;
-  if (S.meta.products.length < 2 || EMB || S.src < 0) return;
-  const j = (S.prod + 1) % S.meta.products.length; const om = S.meta.products[j].paths[S.path]; if (!om) return;
+  // the next summary's source nearest the selected one; returns it (or null) without touching S
+  if (S.meta.products.length < 2 || EMB || S.src < 0) return null;
+  const j = (S.prod + 1) % S.meta.products.length; const n = S.path; const om = S.meta.products[j].paths[n]; if (!om) return null;
+  const key = `${j}|${n}`;
   try {
-    const od = S.otherData && S.otherData.key === `${j}|${S.path}` ? S.otherData.d : await api.sources(j, S.path);
-    S.otherData = { key: `${j}|${S.path}`, d: od };
+    const od = S.otherData && S.otherData.key === key ? S.otherData.d : await api.sources(j, n);
+    S.otherData = { key, d: od };
     let best = Infinity, k = -1;
     for (let i = 0; i < od.n; i++) { const d = (od.rows[i] - S.data.rows[S.src]) ** 2 + (od.cols[i] - S.data.cols[S.src]) ** 2; if (d < best) { best = d; k = i; } }
-    if (k >= 0 && best <= 2.5 ** 2) S.other = { name: S.meta.products[j].name, d: od, k };
+    if (k >= 0 && best <= 2.5 ** 2) return { name: S.meta.products[j].name, d: od, k };
   } catch (e) { /* the comparison is optional */ }
+  return null;
 }
 async function drawSize() {
   if (!S.data || S.src < 0) return;
-  await refreshOther();
+  const g = ++S.gen.size; const data = S.data, src = S.src;
+  const other = await refreshOther();
+  if (g !== S.gen.size || data !== S.data || src !== S.src) return; // superseded
+  S.other = other;
   const { ctx, w, h } = chartFrame("size"); const pm = pmeta(); const nT = pm.acquisition.length;
   const prim = $("simg").value; const names = pm.normalized; const k = S.src;
   CH.size = { l: 44, r: 8, t: 8, b: 26, w, h, n: nT, series: [] };
@@ -668,21 +692,21 @@ async function drawSize() {
   // y range from the 5-95% band of all sources and this source's series
   const L = S.data.normalized[prim] || []; const okk = S.data.ok;
   const band = [];
-  for (let t = 0; t < nT; t++) { const v = []; for (let i = 0; i < S.data.n; i++) if (okk[i]) { const x = pct(L[t] ? L[t][i] : NaN); if (isFinite(x)) v.push(x); }
+  for (let t = 0; t < nT; t++) { const v = []; for (let i = 0; i < S.data.n; i++) if (okk[i]) { const x = pct(L[t] ? L[t][i] : NaN); if (Number.isFinite(x)) v.push(x); }
     v.sort((a, b) => a - b); band.push(v.length ? [quantile(v, 0.1), quantile(v, 0.9), quantile(v, 0.5)] : [NaN, NaN, NaN]); }
   const ser = names.map((nm, j) => ({ name: nm, y: sizeOf(nm, k), col: series(j), main: nm === prim }));
   const tr = S.data.trends[prim];
   let shared = null;
-  if (tr && isFinite(tr.shared_loading[k])) shared = tr.shared_v.map(v => pct(tr.shared_loading[k] * v));
-  const oth = otherSource();
+  if (tr && Number.isFinite(num(tr.shared_loading[k]))) shared = tr.shared_v.map(v => pct(num(tr.shared_loading[k]) * num(v)));
+  const oth = S.other;
   // the other summary's nearest source, in the same image or else in its own leading one
   let othY = null, othImg = null;
   if (oth) { othImg = oth.d.normalized[prim] ? prim : PREFER.find(x => oth.d.normalized[x]);
     if (othImg) othY = oth.d.normalized[othImg].map(row => pct(row[oth.k])); }
   let lo = Infinity, hi = -Infinity;
-  const upd = arr => { if (arr) for (const x of arr) if (isFinite(x)) { lo = Math.min(lo, x); hi = Math.max(hi, x); } };
+  const upd = arr => { if (arr) for (const x of arr) if (Number.isFinite(x)) { lo = Math.min(lo, x); hi = Math.max(hi, x); } };
   ser.forEach(s => upd(s.y)); upd(band.map(b => b[0])); upd(band.map(b => b[1])); upd(shared); upd(othY);
-  if (!isFinite(lo)) { lo = -10; hi = 10; }
+  if (!Number.isFinite(lo)) { lo = -10; hi = 10; }
   const pad = Math.max(2, 0.08 * (hi - lo)); lo -= pad; hi += pad;
   const Y = v => c.t + (hi - v) / (hi - lo) * (h - c.t - c.b); c.Y = Y; c.lo = lo; c.hi = hi;
   // grid and axes
@@ -695,18 +719,18 @@ async function drawSize() {
   // band
   ctx.fillStyle = css("--band");
   eachBlock(nT, (a, b) => { ctx.beginPath(); let st = false;
-    for (let t = a; t <= b; t++) { if (!isFinite(band[t][1])) continue; const x = trialX("size", t); if (!st) { ctx.moveTo(x, Y(band[t][1])); st = true; } else ctx.lineTo(x, Y(band[t][1])); }
-    for (let t = b; t >= a; t--) { if (!isFinite(band[t][0])) continue; ctx.lineTo(trialX("size", t), Y(band[t][0])); }
+    for (let t = a; t <= b; t++) { if (!Number.isFinite(band[t][1])) continue; const x = trialX("size", t); if (!st) { ctx.moveTo(x, Y(band[t][1])); st = true; } else ctx.lineTo(x, Y(band[t][1])); }
+    for (let t = b; t >= a; t--) { if (!Number.isFinite(band[t][0])) continue; ctx.lineTo(trialX("size", t), Y(band[t][0])); }
     ctx.closePath(); ctx.fill(); });
   // selected trial
   if (S.trial >= 0) { ctx.strokeStyle = css("--accent"); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(trialX("size", S.trial), c.t); ctx.lineTo(trialX("size", S.trial), h - c.b); ctx.stroke(); ctx.setLineDash([]); }
   const line = (y, col, width, dash, dots) => {
     if (!y) return; ctx.strokeStyle = col; ctx.lineWidth = width; ctx.setLineDash(dash || []);
     eachBlock(nT, (a, b) => { ctx.beginPath(); let st = false;
-      for (let t = a; t <= b; t++) { if (!isFinite(y[t])) { st = false; continue; } const x = trialX("size", t); if (!st) { ctx.moveTo(x, Y(y[t])); st = true; } else ctx.lineTo(x, Y(y[t])); }
+      for (let t = a; t <= b; t++) { if (!Number.isFinite(y[t])) { st = false; continue; } const x = trialX("size", t); if (!st) { ctx.moveTo(x, Y(y[t])); st = true; } else ctx.lineTo(x, Y(y[t])); }
       ctx.stroke(); });
     ctx.setLineDash([]);
-    if (dots) { ctx.fillStyle = col; for (let t = 0; t < nT; t++) if (isFinite(y[t])) { ctx.beginPath(); ctx.arc(trialX("size", t), Y(y[t]), 3.2, 0, 2 * Math.PI); ctx.fill();
+    if (dots) { ctx.fillStyle = col; for (let t = 0; t < nT; t++) if (Number.isFinite(y[t])) { ctx.beginPath(); ctx.arc(trialX("size", t), Y(y[t]), 3.2, 0, 2 * Math.PI); ctx.fill();
       ctx.strokeStyle = css("--surface-1"); ctx.lineWidth = 1; ctx.stroke(); } }
   };
   for (const s of ser) if (!s.main) line(s.y, s.col, 1.2);
@@ -718,14 +742,14 @@ async function drawSize() {
   if (othY) c.series.push({ name: `${oth.name} source ${oth.d.ids[oth.k] + 1} (${othImg})`, y: othY });
   c.band = band;
   // legend and title
-  const leg = ser.map(s => `<span><span class="sw" style="background:${s.col};${s.main ? "height:4px" : ""}"></span>${s.name}${s.main ? " (sizes)" : ""}</span>`);
+  const leg = ser.map(s => `<span><span class="sw" style="background:${s.col};${s.main ? "height:4px" : ""}"></span>${esc(s.name)}${s.main ? " (sizes)" : ""}</span>`);
   if (shared) leg.push(`<span><span class="sw dot" style="border-color:${m ? m.col : series(0)}"></span>shared-trend part</span>`);
-  if (othY) leg.push(`<span><span class="sw dash" style="border-color:${css("--text-secondary")}"></span>${oth.name}, source ${oth.d.ids[oth.k] + 1} (${othImg})</span>`);
+  if (othY) leg.push(`<span><span class="sw dash" style="border-color:${css("--text-secondary")}"></span>${esc(oth.name)}, source ${oth.d.ids[oth.k] + 1} (${esc(othImg)})</span>`);
   leg.push(`<span><span class="sw band"></span>all sources, 10–90%</span>`);
   $("slegend").innerHTML = leg.join("");
-  let tt = `<b>Source ${S.data.ids[k] + 1}</b>: size vs its own mean (${prim})`;
+  let tt = `<b>Source ${S.data.ids[k] + 1}</b>: size vs its own mean (${esc(prim)})`;
   if (tr && tr.tested[k]) {
-    const q = tr.attrs.fdr_q; const b = (p, qq, txt) => qq <= q ? `<b>${txt}</b>` : txt;
+    const q = tr.attrs.fdr_q; const b = (p, qq, txt) => num(qq) <= q ? `<b>${txt}</b>` : txt;
     tt += tr.step_after[k] >= 0 ? `; ${b(tr.step_p[k], tr.step_q[k], `step ${fmtPct(pct(tr.step_d[k]))}% after trial ${acqOf(tr.step_after[k])} (p ${fmtP(tr.step_p[k])}, q ${fmtP(tr.step_q[k])})`)}` : "; no step";
     const bt = []; for (let i = 0; i < tr.brief_len[k]; i++) bt.push(tr.brief_first[k] + i);
     tt += bt.length ? `; ${b(tr.brief_p[k], tr.brief_q[k], `brief ${fmtPct(pct(tr.brief_d[k]))}% at ${trialList(bt)} (p ${fmtP(tr.brief_p[k])})`)}` : "; no brief change";
@@ -749,7 +773,7 @@ function drawAct() {
   CH.act = { l: 44, r: 8, t: 6, b: 20, w, h, n: nT, id: "act" };
   const c = CH.act; const a = S.data.activity.mean_dF; const ev = S.data.activity.event_frames;
   if (!a) { $("atitle").textContent = "no activity in this product"; return; }
-  const y = a.map(r => r[k]); let hi = 0, lo = 0; for (const v of y) if (isFinite(v)) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
+  const y = a.map(r => num(r[k])); let hi = 0, lo = 0; for (const v of y) if (Number.isFinite(v)) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
   if (hi === lo) hi = lo + 1;
   const Y = v => c.t + (hi - v) / (hi - lo) * (h - c.t - c.b); c.Y = Y;
   ctx.strokeStyle = css("--text-muted"); ctx.beginPath(); ctx.moveTo(c.l, Y(0)); ctx.lineTo(w - c.r, Y(0)); ctx.stroke();
@@ -757,9 +781,9 @@ function drawAct() {
   ctx.fillText(hi.toPrecision(2), c.l - 4, Y(hi));
   xAxis(ctx, c, nT);
   const bw = Math.max(2, 0.6 * (w - c.l - c.r) / nT); ctx.fillStyle = series(1);
-  for (let t = 0; t < nT; t++) if (isFinite(y[t])) { const x = trialX("act", t); ctx.fillRect(x - bw / 2, Math.min(Y(0), Y(y[t])), bw, Math.max(1, Math.abs(Y(y[t]) - Y(0)))); }
+  for (let t = 0; t < nT; t++) if (Number.isFinite(y[t])) { const x = trialX("act", t); ctx.fillRect(x - bw / 2, Math.min(Y(0), Y(y[t])), bw, Math.max(1, Math.abs(Y(y[t]) - Y(0)))); }
   if (S.trial >= 0) { ctx.strokeStyle = css("--accent"); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(trialX("act", S.trial), c.t); ctx.lineTo(trialX("act", S.trial), h - c.b); ctx.stroke(); ctx.setLineDash([]); }
-  c.series = [{ name: "mean dF", y }]; if (ev) c.series.push({ name: "event frames", y: ev.map(r => r[k]) });
+  c.series = [{ name: "mean dF", y }]; if (ev) c.series.push({ name: "event frames", y: ev.map(r => num(r[k])) });
   $("atitle").innerHTML = `Activity per trial (mean dF_ls, channel ${pm.activity_channel}): leakage into the size would follow these bars`;
 }
 function chartTip(id, e) {
@@ -767,8 +791,8 @@ function chartTip(id, e) {
   if (t === null || !c || !c.series) { tip.style.display = "none"; return; }
   let html = `<div class="r"><span>trial ${acqOf(t)}</span><span></span></div>`;
   for (const s of c.series) { const v = s.y ? s.y[t] : NaN;
-    html += `<div class="r"><span>${s.name}</span><span>${isFinite(v) ? (id === "size" ? fmtPct(v) + "%" : v.toPrecision(3)) : "–"}</span></div>`; }
-  if (id === "size" && c.band && isFinite(c.band[t][2])) html += `<div class="r"><span>all sources, median</span><span>${fmtPct(c.band[t][2])}%</span></div>`;
+    html += `<div class="r"><span>${esc(s.name)}</span><span>${Number.isFinite(v) ? (id === "size" ? fmtPct(v) + "%" : v.toPrecision(3)) : "–"}</span></div>`; }
+  if (id === "size" && c.band && Number.isFinite(c.band[t][2])) html += `<div class="r"><span>all sources, median</span><span>${fmtPct(c.band[t][2])}%</span></div>`;
   tip.innerHTML = html; tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px";
 }
 
@@ -801,24 +825,24 @@ function buildTable() {
   const key = S.sortKey;
   idx.sort((a, b) => { let va = rowVal(a, key, tr), vb = rowVal(b, key, tr);
     if (typeof va === "string" || typeof vb === "string") return S.sortDir * String(va).localeCompare(String(vb));
-    const fa = isFinite(va), fb = isFinite(vb); if (!fa && !fb) return a - b; if (!fa) return 1; if (!fb) return -1;
+    const fa = Number.isFinite(va), fb = Number.isFinite(vb); if (!fa && !fb) return a - b; if (!fa) return 1; if (!fb) return -1;
     if (key.endsWith("_d") || key === "shared_r") { va = Math.abs(va); vb = Math.abs(vb); }
     return S.sortDir * (va - vb) || a - b; });
   S.order = idx;
   for (const k of idx) {
-    const m = markOf(k); const chip = m && m.label ? `<span class="chip" style="background:${css(MARK_VAR[m.label])}"></span>` : "";
+    const m = markOf(k); const chip = m && MARK_VAR[m.label] ? `<span class="chip" style="background:${css(MARK_VAR[m.label])}"></span>` : "";
     const tested = tr && tr.tested[k];
     const cell = (v, cls) => `<td class="${cls || ""}">${v}</td>`;
-    let r = `<tr data-k="${k}">` + cell(S.data.ids[k] + 1) + cell(chip + (m ? m.label : "")) + cell(S.data.ok[k] ? "✓" : "");
+    let r = `<tr data-k="${k}">` + cell(S.data.ids[k] + 1) + cell(chip + esc(m ? m.label : "")) + cell(S.data.ok[k] ? "✓" : "");
     for (const t of ["step", "brief", "resid"]) {
       if (!tested) { r += cell("", "nt").repeat(4); continue; }
-      const pass = tr[`${t}_q`][k] <= q ? "pass" : "";
+      const pass = num(tr[`${t}_q`][k]) <= q ? "pass" : "";
       let at;
       if (t === "brief") { const bt = []; for (let i = 0; i < tr.brief_len[k]; i++) bt.push(tr.brief_first[k] + i); at = trialList(bt); }
       else at = acqOf(tr[`${t}_after`][k]);
       r += cell(fmtPct(pct(tr[`${t}_d`][k])), pass) + cell(at) + cell(fmtP(tr[`${t}_p`][k]), pass) + cell(fmtP(tr[`${t}_q`][k]), pass);
     }
-    r += cell(tested && isFinite(tr.shared_r[k]) ? tr.shared_r[k].toFixed(2) : "") + cell(S.data.n_pixels[k]) + "</tr>";
+    r += cell(tested && Number.isFinite(tr.shared_r[k]) ? tr.shared_r[k].toFixed(2) : "") + cell(num(S.data.n_pixels[k])) + "</tr>";
     html += r;
   }
   tb.innerHTML = html + "</tbody>";
@@ -847,7 +871,7 @@ function highlightRow(keep) {
 function markOf(k) { const by = S.data && S.data.marks ? S.data.marks.by_source : null; return by ? by[k] : undefined; }
 function showMark() {
   const m = markOf(S.src); const st = $("markstate");
-  if (m && m.label) { st.textContent = m.label; st.style.color = css(MARK_VAR[m.label]); } else { st.textContent = "not marked"; st.style.color = css("--text-muted"); }
+  if (m && m.label) { st.textContent = m.label; st.style.color = MARK_VAR[m.label] ? css(MARK_VAR[m.label]) : ""; } else { st.textContent = "not marked"; st.style.color = css("--text-muted"); }
   $("note").value = m ? m.note || "" : "";
   $("mtitle").innerHTML = S.src >= 0 ? `Mark <b>source ${S.data.ids[S.src] + 1}</b> (saved at once; attaches to its position)` : "Mark";
   document.querySelectorAll(".marks button, #note").forEach(b => b.disabled = !S.meta.marks_file);

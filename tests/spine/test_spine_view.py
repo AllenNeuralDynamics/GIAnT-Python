@@ -328,3 +328,77 @@ def test_pick_sources_marked_first_then_by_q_and_size():
     src = {"n": 5, "trends": {"f0": tr}, "marks": {"by_source": {"0": {}}}}
     assert pick_sources(src, "f0", 3) == [0, 2, 1, 4]
     assert pick_sources(src, "f0", 0) == [0]
+
+
+def test_marks_need_json_from_this_server(product, tmp_path):
+    """The mark endpoint refuses bodies that are not JSON (a cross-origin
+    page could send those without a preflight) and requests whose Origin
+    is another site."""
+    marks = tmp_path / "marks.csv"
+    store = SpineStore([(None, product)], marks)
+    srv = make_server(store, port=0)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    body = json.dumps({"path": 1, "id": 0, "label": "Unsure"}).encode()
+    try:
+        for headers, code in (
+            ({"Content-Type": "text/plain"}, 415),
+            (
+                {
+                    "Content-Type": "application/json",
+                    "Origin": "http://example.com",
+                },
+                403,
+            ),
+        ):
+            req = urllib.request.Request(
+                base + "/api/mark", data=body, headers=headers
+            )
+            with pytest.raises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(req)
+            assert e.value.code == code
+        assert not marks.exists()
+        req = urllib.request.Request(
+            base + "/api/mark",
+            data=body,
+            headers={"Content-Type": "application/json", "Origin": base},
+        )
+        with urllib.request.urlopen(req) as r:
+            assert r.status == 200
+        assert read_marks(marks)[0]["Label"] == "Unsure"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_sources_without_sources_keep_the_fields(product, tmp_path):
+    """A path without sources answers with the same, empty, fields."""
+    store = SpineStore([(None, product)])
+    pr = store.products[0]
+    pr.small()["paths"][1]["rois"].pop("sources")
+    src = store.sources(0, 1)
+    assert src["n"] == 0 and src["trends"] == {} and src["ids"] == []
+    assert src["marks"] == {"by_source": {}, "unattached": 0}
+
+
+def test_cache_keys_follow_the_file(product, tmp_path):
+    """A result made from the old file is not served after the file
+    changes, even if it lands in the cache after the reload."""
+    import os
+    import shutil
+
+    copy = tmp_path / "copy.h5"
+    shutil.copy(product, copy)
+    store = SpineStore([(None, copy)])
+    pr = store.products[0]
+    old = pr.normalized(1, "mean_ch1")
+    gen = pr._gen
+    st = os.stat(copy)
+    os.utime(copy, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    pr.small()
+    assert pr._gen == gen + 1
+    # a late insert under the old generation's key is never read
+    pr._cache.get((gen, "norm", 1, "mean_ch1"), lambda: "stale")
+    new = pr.normalized(1, "mean_ch1")
+    assert new is not old and not isinstance(new, str)

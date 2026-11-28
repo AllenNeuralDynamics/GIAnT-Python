@@ -135,14 +135,34 @@ class _Handler(BaseHTTPRequestHandler):
 
         self._guard(go)
 
+    def _cross_origin(self) -> bool:
+        """Whether the request comes from a page of another origin: its
+        ``Origin`` (or ``Referer``) names a host other than this
+        server's."""
+        src = self.headers.get("Origin") or self.headers.get("Referer")
+        if not src:
+            return False
+        return urlparse(src).netloc != self.headers.get("Host", "")
+
     def do_POST(self):
-        """Set a mark."""
+        """Set a mark (JSON from a page of this server only: a page of
+        another origin cannot send JSON without a preflight, which this
+        server does not answer, and its Origin is refused)."""
         u = urlparse(self.path)
 
         def go():
             """Answer it."""
             if u.path != "/api/mark":
                 raise LookupError(u.path)
+            ctype = self.headers.get("Content-Type", "")
+            if ctype.split(";")[0].strip().lower() != "application/json":
+                self._json({"error": "marks take application/json"}, 415)
+                return
+            if self._cross_origin():
+                self._json(
+                    {"error": "marks only from this server's page"}, 403
+                )
+                return
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
             marks = self.store.set_mark(

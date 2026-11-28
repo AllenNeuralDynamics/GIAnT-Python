@@ -150,6 +150,9 @@ class SpineProduct:
         self._small: dict = {}
         self._lock = threading.Lock()
         self._cache = _Lru(cache)
+        # bumped when the file is read again: cache keys carry it, so a
+        # result computed from the old file is never served for the new
+        self._gen = 0
         self.small()
 
     def small(self) -> dict:
@@ -158,6 +161,7 @@ class SpineProduct:
         with self._lock:
             if mt != self._mtime:
                 self._small = self._read_small()
+                self._gen += 1
                 self._cache.clear()
                 self._mtime = mt
             return self._small
@@ -275,7 +279,7 @@ class SpineProduct:
             }
 
         self.small()
-        return self._cache.get(("norm", n, image), make)
+        return self._cache.get((self._gen, "norm", n, image), make)
 
     def change_prep(self, n: int, image: str) -> dict:
         """The change views' inputs: the blurred normalized trials, their
@@ -306,7 +310,7 @@ class SpineProduct:
             }
 
         self.small()
-        return self._cache.get(("change", n, image), make)
+        return self._cache.get((self._gen, "change", n, image), make)
 
     def near_sources(self, n: int) -> np.ndarray:
         """Pixels within 4 px of a source's centre."""
@@ -457,7 +461,19 @@ class SpineStore:
         p = self.product(i).path(n)
         rs = p["rois"].get("sources")
         if rs is None:
-            return {"n": 0}
+            # no sources: the same fields, empty, so that the page loads
+            return {
+                "n": 0,
+                "ids": [],
+                "rows": [],
+                "cols": [],
+                "n_pixels": [],
+                "ok": [],
+                "normalized": {},
+                "trends": {},
+                "activity": {},
+                "marks": {"by_source": {}, "unattached": 0},
+            }
         norm = p["normalized"].get("sources", {})
         trends = {}
         for name, t in p["trends"].get("sources", {}).items():
@@ -527,18 +543,18 @@ class SpineStore:
         hw = self.crop_half
         r0, c0 = _centre(rs.rows[k], rs.cols[k])
         n_t = len(p["trials"]["acquisition"])
-        frames = [-1] + list(range(n_t))
-        if view == "change":
-            tiles = [pr.change(n, image, t, vs) for t in frames]
-        else:
-            tiles = [pr.field(n, image, t, "image", vs) for t in frames]
-        out = np.stack(
-            [
-                np.stack([_crop(t[j], r0, c0, hw, np.nan) for t in tiles])
-                for j in range(tiles[0].shape[0])
-            ]
-        )
-        return out.astype(np.float32)
+        layers = 2 if view == "change" else 1
+        s = 2 * hw + 1
+        out = np.full((layers, n_t + 1, s, s), np.nan, np.float32)
+        # each frame is cropped as it is made: only the tiles are kept
+        for j, t in enumerate([-1] + list(range(n_t))):
+            if view == "change":
+                frame = pr.change(n, image, t, vs)
+            else:
+                frame = pr.field(n, image, t, "image", vs)
+            for layer in range(layers):
+                out[layer, j] = _crop(frame[layer], r0, c0, hw, np.nan)
+        return out
 
     # ---- marks ----
     def _read_marks(self) -> list:
