@@ -68,7 +68,11 @@ the mean over their pixels with a value in that trial, with the share of
 such pixels as coverage. The normalized size
 is ``log`` of the readout, minus each trial's median over the sources
 (bleaching), minus each source's own mean. GIAnT-MATLAB's ``spineTrends``
-uses the same readout and normalization.
+uses the same readout and normalization. The median is over one set of
+sources (``ok``: positive readouts in every trial used, in every image that
+covers them); an image with values only at the fitted pixels takes it over
+the sources of that set it covers, which is the whole set unless a
+footprint reaches past the fitted pixels.
 
 The output
 ----------

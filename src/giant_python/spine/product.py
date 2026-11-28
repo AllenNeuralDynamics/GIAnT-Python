@@ -36,8 +36,15 @@ run's consensus frame, zero-based coordinates)::
                                 user_rois/per_trial_F0 (every pixel with a
                                 value in the trial)
       readout/user_any/coverage_<name>  (T, R) share of the ROI's pixels
-      normalized/<set>/<name>   (T, R) ``norm_log`` of the readout
-      normalized/<set>/ok       (R,) windows in the per-trial median
+      normalized/<set>/<name>   (T, R) ``norm_log`` of the readout, over
+                                the trials in which the image has values;
+                                its per-trial median is over the windows
+                                in ``ok`` that the image covers in all of
+                                them (all of ``ok`` unless the image has
+                                values only at the fitted pixels)
+      normalized/<set>/ok       (R,) windows in the per-trial median:
+                                positive readouts in every trial used, in
+                                every image that covers them
       activity/<set>/<name>     (T, R) per-trial activity (sources)
 """
 
