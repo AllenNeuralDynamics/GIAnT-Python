@@ -4,7 +4,11 @@ Port of the seeding part of GIAnT-MATLAB's ``SILo.m`` (main at 5a0673b):
 
 1. seeds in the combined activity image (:func:`seed_sources`; the default
    method is :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`,
-   and ``"wmf"`` is reserved for the port of ``findSourcesWMF``);
+   and ``"wmf"`` is reserved for the port of ``findSourcesWMF``); the
+   threshold counts in robust SDs of the image itself (MATLAB's), or, with
+   ``acceptance="null"`` (not in MATLAB), is set from the null of the
+   combined image so that it admits a chosen expected number of false seeds
+   per field (:func:`null_threshold`);
 2. sources at the seeds' rounded positions, duplicates removed
    (:func:`sources_from_seeds`);
 3. each source's selected pixels: a disk of ``selRadius`` around it
@@ -26,9 +30,16 @@ import numpy as np
 from scipy.signal import convolve2d
 
 from .alignment import matlab_round
-from .peaks import get_act_im_peaks
+from .peaks import _MAD_SCALE, get_act_im_peaks, ordfilt3x3
 
 SEEDING_METHODS = ("getactimpeaks", "wmf")
+#: How a seed's threshold is set: robust SDs of the image (``"image"``,
+#: MATLAB's), false seeds per field under the image's null (``"null"``), or
+#: robust SDs of the image's null (``"null_sd"``).
+SEED_ACCEPTANCE = ("image", "null", "null_sd")
+# largest candidates of the null (per field) that its exponential tail is
+# fitted to
+_TAIL_K = 50
 
 # offsets of the periodic lines of MATLAB's disk decomposition
 _DISK_LINES = {
@@ -107,6 +118,123 @@ def disk_strel(radius: int, n: int = 4) -> np.ndarray:
     return nhood
 
 
+def candidate_statistic(
+    act_im: np.ndarray, exclusion: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """The seeding's candidate statistic at an image's local maxima.
+
+    A pixel is a candidate of
+    :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks` when it
+    is the maximum of its 3 x 3 neighbourhood and the second-largest value
+    there exceeds the threshold; this returns, for every 3 x 3 maximum
+    outside ``exclusion`` (and away from NaN), that second-largest value.
+
+    Returns
+    -------
+    rc : ndarray of int, shape (n, 2)
+        The maxima's (row, col).
+    value : ndarray of shape (n,)
+        Their second-largest 3 x 3 value.
+    """
+    act = np.asarray(act_im, dtype=np.float64)
+    excl = np.zeros(act.shape, bool)
+    if exclusion is not None:
+        excl = np.asarray(exclusion, bool)
+        act = act * ~excl  # as get_act_im_peaks: excluded pixels are 0
+    second = ordfilt3x3(act, 8)
+    with np.errstate(invalid="ignore"):
+        is_max = (act == ordfilt3x3(act, 9)) & np.isfinite(second) & ~excl
+    rc = np.argwhere(is_max)
+    return rc, second[is_max]
+
+
+def null_background(null_ims: np.ndarray) -> tuple[float, float]:
+    """Median and robust SD (MATLAB's MAD scale) of null images' finite
+    pixels."""
+    vals = np.asarray(null_ims, dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 10:
+        raise ValueError("the null image has too few pixels")
+    mu = float(np.median(vals))
+    sigma = float(np.median(np.abs(vals - mu))) / _MAD_SCALE
+    if not sigma > 0:
+        raise ValueError("the null image has no spread")
+    return mu, sigma
+
+
+def null_threshold(
+    null_ims: np.ndarray,
+    false_per_field: float,
+    exclusion: np.ndarray | None = None,
+    tail_k: int = _TAIL_K,
+) -> tuple[tuple[float, float], float, dict]:
+    """Seed threshold from the null of a combined activity image.
+
+    ``null_ims`` holds one or more images of what the combined activity
+    image would be if every trial held only noise (the bootstrap null's
+    images, combined as the data:
+    :func:`~giant_python.extraction.raster.plan.combined_null_image`). The
+    threshold's centre and scale are the null's median and robust SD (in
+    place of the image's own, which rise with the density of real
+    sources), and its level is where the null's candidates
+    (:func:`candidate_statistic`) exceed it ``false_per_field`` times per
+    image: read off the null where it has at least ``tail_k`` candidates
+    per image above it, else extrapolated with an exponential tail fitted
+    to the ``tail_k`` largest candidates per image.
+
+    Parameters
+    ----------
+    null_ims : ndarray of shape (draws, rows, cols) or (rows, cols)
+        Null combined images (NaN outside the image).
+    false_per_field : float
+        Expected false seeds per field (per combined image), > 0.
+    exclusion : ndarray of bool, optional
+        Pixels where no seed may be placed (the soma mask).
+    tail_k : int
+        Candidates per image the tail is fitted to.
+
+    Returns
+    -------
+    background : (float, float)
+        The null's median and robust SD (MATLAB's MAD scale).
+    peak_th : float
+        The threshold in units of ``background``.
+    info : dict
+        ``draws``, ``candidates`` (per image), ``tail_start`` and
+        ``tail_scale`` (in units of the background) and ``extrapolated``.
+    """
+    if not false_per_field > 0:
+        raise ValueError("false_per_field must be positive")
+    null = np.asarray(null_ims, dtype=np.float64)
+    if null.ndim == 2:
+        null = null[None]
+    mu, sigma = null_background(null)
+    z = np.concatenate(
+        [(candidate_statistic(im, exclusion)[1] - mu) / sigma for im in null]
+    )
+    z = np.sort(z)[::-1]
+    draws = null.shape[0]
+    k = int(min(tail_k * draws, z.size))
+    if k < 2:
+        raise ValueError("the null image has too few local maxima")
+    want = false_per_field * draws  # exceedances over all draws
+    u = float(z[k - 1])
+    beta = float(np.mean(z[: k - 1] - u))
+    if want >= k:  # within the null's own candidates: read it off
+        th, extrapolated = float(z[min(int(np.ceil(want)), z.size) - 1]), False
+    else:
+        th = u + max(beta, 1e-12) * float(np.log(k / want))
+        extrapolated = True
+    info = dict(
+        draws=draws,
+        candidates=z.size / draws,
+        tail_start=u,
+        tail_scale=beta,
+        extrapolated=extrapolated,
+    )
+    return (mu, sigma), th, info
+
+
 def seed_sources(
     act_im: np.ndarray,
     peak_th: float,
@@ -115,6 +243,12 @@ def seed_sources(
     method: str = "getactimpeaks",
     fit: str = "matlab",
     merge_px: float = 0.0,
+    *,
+    acceptance: str = "image",
+    null_im: np.ndarray | None = None,
+    false_per_field: float = 1.0,
+    info: dict | None = None,
+    amplitude_rule: str = "matlab",
 ) -> np.ndarray:
     """Seed sources in the combined activity image.
 
@@ -138,6 +272,24 @@ def seed_sources(
     merge_px : float
         Reject a residual peak that ends closer than this to another peak
         (0: MATLAB's rule only).
+    acceptance : {'image', 'null', 'null_sd'}
+        ``'image'``: ``peak_th`` robust SDs above the image's median
+        (MATLAB's). ``'null'``: the threshold that ``null_im`` crosses
+        ``false_per_field`` times per field (:func:`null_threshold`);
+        ``peak_th`` is then not used. ``'null_sd'``: ``peak_th`` robust SDs
+        above the median of ``null_im`` (a scale that does not grow with
+        the density of real sources; no tail is extrapolated).
+    null_im : ndarray of shape (draws, rows, cols), optional
+        The combined image's null (needed with ``acceptance='null'``).
+    false_per_field : float
+        Expected false seeds per field with ``acceptance='null'``.
+    amplitude_rule : {'matlab', 'pixel'}
+        The final test of every fitted peak (see
+        :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`).
+    info : dict, optional
+        Receives the threshold used (``peak_th``, ``background``: None for
+        the image's own) and, with ``acceptance='null'``, the null's tail
+        (:func:`null_threshold`).
 
     Returns
     -------
@@ -150,6 +302,7 @@ def seed_sources(
         raise ValueError(
             f"method must be one of {SEEDING_METHODS}, not {method!r}"
         )
+    _check_acceptance(acceptance, null_im)
     if method == "wmf":
         raise NotImplementedError(
             "WMF seeding (findSourcesWMF) is not ported yet"
@@ -161,9 +314,49 @@ def seed_sources(
     usable = ~np.isnan(act_im) if mask is None else ~np.isnan(act_im) & ~mask
     if not usable.any():  # SILo.m: no sources without a pixel to seed in
         return np.zeros((0, 4))
-    return get_act_im_peaks(
-        act_im, peak_th, mask, min_peak_distance, fit, merge_px
+    background, peak_th = _threshold(
+        acceptance, peak_th, null_im, false_per_field, mask, info
     )
+    return get_act_im_peaks(
+        act_im,
+        peak_th,
+        mask,
+        min_peak_distance,
+        fit,
+        merge_px,
+        background,
+        amplitude_rule,
+    )
+
+
+def _check_acceptance(acceptance: str, null_im) -> None:
+    """Reject an unknown acceptance, or a null one without the null."""
+    if acceptance not in SEED_ACCEPTANCE:
+        raise ValueError(
+            f"acceptance must be one of {SEED_ACCEPTANCE}, "
+            f"not {acceptance!r}"
+        )
+    if acceptance != "image" and null_im is None:
+        raise ValueError(
+            f"acceptance={acceptance!r} needs the null image (null_im)"
+        )
+
+
+def _threshold(acceptance, peak_th, null_im, false_per_field, mask, info):
+    """The background (None: the image's own) and threshold of a seeding;
+    recorded in ``info`` when given."""
+    background = None
+    if acceptance == "null":
+        background, peak_th, tail = null_threshold(
+            null_im, false_per_field, mask
+        )
+        if info is not None:
+            info.update(tail)
+    elif acceptance == "null_sd":
+        background = null_background(null_im)
+    if info is not None:
+        info.update(peak_th=float(peak_th), background=background)
+    return background, peak_th
 
 
 def sources_from_seeds(

@@ -89,3 +89,30 @@ def test_kinetics_edge_cases():
     assert test.keep.all() and np.isnan(test.score).all()
     test = reject_fast_sources([trace], 3, 0.024, 200.0, 0.0)
     assert test.keep.all()
+
+
+def test_weak_sources_and_mean_snr():
+    """The evidence test's criteria, each off at 0."""
+    from giant_python.extraction.raster.kinetics import (
+        mean_snr,
+        weak_sources,
+    )
+
+    snr = mean_snr(
+        [np.array([1.0, np.nan, 3.0]), None, np.array([3.0, np.nan, 5.0])], 3
+    )
+    np.testing.assert_allclose(snr, [2.0, np.nan, 4.0])
+    # only NaN is left out, as the summary's mean SNR
+    assert mean_snr([np.array([1.0]), np.array([np.inf])], 1)[0] == np.inf
+    events = np.array([0, 9, 2])
+    np.testing.assert_array_equal(
+        weak_sources(snr, events), [False, False, False]
+    )
+    np.testing.assert_array_equal(
+        weak_sources(snr, events, min_snr=3.0), [True, False, False]
+    )
+    np.testing.assert_array_equal(
+        weak_sources(snr, events, min_events=3), [True, False, True]
+    )
+    with pytest.raises(ValueError):
+        weak_sources(snr, events, min_snr=-1.0)

@@ -37,6 +37,7 @@ stage checks that the stage before it used the same baseline.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import contextlib
 import json
 import logging
 import math
@@ -44,7 +45,7 @@ import os
 import threading
 import time
 import warnings
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePath
 from typing import Iterable, Optional, Sequence
 
@@ -201,6 +202,18 @@ def check_plan_support(what: str, plan, params: SiloParams) -> None:
     )
 
 
+def trial_null_seed(base: int, d: int, t: int, draws: int = 1) -> int:
+    """The first null seed of trial-path ``(d, t)`` (zero-based) when the
+    run keeps its null images: ``base`` plus a trial-path offset, so that
+    the trials' null movies are independent draws (with one seed for all
+    trials the same random stream recurs in every trial, and the combined
+    null keeps much of one trial's spread). A trial-path's ``draws`` seeds
+    (``seed .. seed + draws - 1``) never overlap another's: offsets are
+    ``max(1000, draws)`` apart."""
+    width = max(1000, int(draws))
+    return int(base) + width * (1 + int(t) + 100000 * int(d))
+
+
 def _localize_job(job: dict) -> dict:
     """Localize one trial-path and write its file (a pool task)."""
     from ..extraction.raster.peaks import get_act_im_peaks
@@ -209,11 +222,19 @@ def _localize_job(job: dict) -> dict:
 
     t0 = time.perf_counter()
     p = SiloParams(**job["params"])
+    lp = p.localization_params(job["align_hz"])
+    if p.localization_keep_null:
+        lp = replace(
+            lp,
+            null_seed=trial_null_seed(
+                lp.null_seed, *job["unit"], draws=lp.null_draws
+            ),
+        )
     loc, trial = localize_trial(
         job["moco_dir"],
         job["movie"],
         job["num_channels"],
-        p.localization_params(job["align_hz"]),
+        lp,
         baseline_dir=job["baseline_dir"],
         activity_channel=p.activity_channel,
         motion_thresh=p.motion_thresh,
@@ -233,6 +254,9 @@ def _localize_job(job: dict) -> dict:
             p.seed_fit,
             p.seed_merge_px,
         )
+    null_im = None
+    if p.localization_keep_null:
+        null_im = loc.info.get("null", {}).get("null_im")
     write_localization(
         job["out"],
         trial.mean_im,
@@ -242,6 +266,7 @@ def _localize_job(job: dict) -> dict:
         peaks,
         job["attrs"],
         trial.half_ims,
+        null_im,
     )
     return {
         "unit": job["unit"],
@@ -1190,6 +1215,122 @@ def _save_container(
         f.attrs["settings_hash"] = chash
 
 
+def _held_bytes(subs, record) -> int:
+    """Bytes of the arrays a loaded trial keeps until its results are
+    written: its subproblems' data, variance multipliers and baselines,
+    and its traces."""
+    total = 0
+    for s in subs:
+        for a in (s.y, s.finv, s.baseline):
+            if a is not None:
+                total += int(np.asarray(a).nbytes)
+    for a in (record.global_f, record.roi_f, record.roi_fsvd):
+        total += int(np.asarray(a).nbytes)
+    return total
+
+
+@dataclass
+class _Unit:
+    """A trial-path the streaming driver extracts: where its results go
+    and the hashes they get."""
+
+    d: int
+    t: int
+    base: Optional[Path]
+    chash: str
+    rhash: str
+    out: Path
+    skip: Path
+    lines: float = 1.0
+
+
+def _loaded(units, load, execution: SiloExecution):
+    """``(unit, load(unit))`` in the units' order.
+
+    ``units`` is an iterable, taken from only when a unit is about to be
+    loaded (a generator can check each unit then). With
+    ``execution.load_workers`` 1 each unit is taken and loaded when the
+    caller asks for it (after it has handed on the previous one). With
+    more, later units are loaded ahead in threads of this process, at most
+    ``load_workers`` at a time and, with ``load_memory_gb``, only while the
+    data of the trials loaded and not yet handed on is estimated below it
+    (from the bytes per line of the loads that reported their bytes,
+    ``nbytes``, so far; until one has, one load at a time). The loads are
+    the same either way: one process, the same threads per operation. An
+    error raised while taking a unit (its check) reaches the caller after
+    the units before it, as with one worker.
+    """
+    if execution.load_workers <= 1:
+        for u in units:
+            yield u, load(u)
+        return
+    limit = execution.load_memory_gb
+    yield from _loaded_ahead(
+        iter(units),
+        load,
+        execution.load_workers,
+        None if limit is None else limit * 1e9,
+    )
+
+
+def _fits(queued: list, unit: _Unit, per_line: list, limit) -> bool:
+    """Whether ``unit`` may load while the ``queued`` units wait: always
+    when none waits or without a limit (bytes); otherwise only once a load
+    has given a bytes-per-line estimate and the estimate fits."""
+    if not queued or limit is None:
+        return True
+    if not per_line:
+        return False
+    lines = sum(u.lines for u in queued) + unit.lines
+    return max(per_line) * lines <= limit
+
+
+def _take(source) -> tuple:
+    """``(unit, None)`` for the source's next unit, ``(None, None)`` at its
+    end, or ``(None, error)`` if taking it raised (its check failed)."""
+    try:
+        return next(source, None), None
+    except Exception as exc:  # handed on after the earlier units
+        return None, exc
+
+
+def _loaded_ahead(source, load, workers: int, limit):
+    """:func:`_loaded` with ``workers`` loader threads and a memory
+    ``limit`` in bytes (or None)."""
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    per_line = []  # bytes per line of the loads that reported their bytes
+    queue: deque = deque()
+    taken = None  # the next unit, taken from the source, not yet submitted
+    error = None  # a unit's failed check, raised after the loads before it
+    pool = ThreadPoolExecutor(workers, thread_name_prefix="giant-load")
+    try:
+        while True:
+            while len(queue) < workers:
+                if taken is None and error is None:
+                    taken, error = _take(source)
+                if taken is None or not _fits(
+                    [v for v, _ in queue], taken, per_line, limit
+                ):
+                    break
+                queue.append((taken, pool.submit(load, taken)))
+                taken = None
+            if not queue:
+                if error is not None:
+                    raise error
+                return
+            u, fut = queue.popleft()
+            item = fut.result()
+            if "nbytes" in item:
+                per_line.append(item["nbytes"] / u.lines)
+            yield u, item
+    finally:
+        for _, fut in queue:
+            fut.cancel()
+        pool.shutdown(wait=True)
+
+
 def stream(  # noqa: C901
     session: SiloSession,
     params: SiloParams,
@@ -1228,7 +1369,9 @@ def stream(  # noqa: C901
     -------
     list of dict
         Per trial: ``unit``, ``load`` and ``wait`` seconds (the wait is
-        for the previous trial's solve), ``submitted`` and ``solved``
+        for the previous trial's solve), ``load_phases`` (the loader's
+        wall seconds per phase: ``setup``, ``frames``, ``roi_svd``,
+        ``finish``), ``submitted`` and ``solved``
         (seconds since ``clock0`` when its subproblems went to the solver
         and when the last was solved; a trial solved in this process, with
         one solver process or batches, is solved when that returns), or
@@ -1246,122 +1389,187 @@ def stream(  # noqa: C901
     pending: Optional[_Pending] = None
     if paths is None:
         paths = range(session.n_paths)
-    for d in paths:
-        pf = session.plan_file(d)
-        if not pf.exists():
-            continue
-        plan = read_plan(pf)
-        rois = read_user_rois(pf)[1]
-        ph = _attr(pf, "settings_hash")
-        check_plan_localizations(session, d)
-        _check_same(
-            f"the plan {pf.name}",
-            _recorded(pf, "baseline_source"),
-            params.baseline_source,
-            "baseline_source",
-        )
-        check_plan_support(f"the plan {pf.name}", plan, params)
-        check_plan_alignment(f"the plan {pf.name}", plan, params)
-        placements = [(g.pixels, g.sources) for g in plan.groups]
-        n_sub = len(plan.groups)
-        for t in (int(x) for x in plan.valid_trials):
-            base = _extraction_baseline(session, params, d, t, baseline_dir)
-            chash = _prepare_hash(session, params, ph, d, t, base)
-            rhash = solve_hash(params, options, chash, (0, n_sub))
-            out = session.results_file(d, t)
-            skip = session.skip_file(d, t)
-            if not execution.overwrite and (
-                _attr(out, "settings_hash") == rhash
-                or skip_hash(skip) == chash
-            ):
-                report.append({"unit": (d, t), "skipped": "up to date"})
+    try:
+        for d in paths:
+            pf = session.plan_file(d)
+            if not pf.exists():
                 continue
-            t0 = time.perf_counter()
-            try:
-                trial = load_trial_for(
-                    session, params, plan, d, t, rois, execution.loader_device
-                )
-            except ValueError as exc:
-                if NO_DATA not in str(exc):
-                    raise
-                _mark_skipped(session, d, t, str(exc), chash, ph)
-                report.append({"unit": (d, t), "skipped": str(exc)})
-                continue
-            if skip.exists():
-                skip.unlink()
-            tb = (
-                None
-                if base is None
-                else load_trial_baseline(session, params, trial, base, d, t)
+            plan = read_plan(pf)
+            rois = read_user_rois(pf)[1]
+            ph = _attr(pf, "settings_hash")
+            check_plan_localizations(session, d)
+            _check_same(
+                f"the plan {pf.name}",
+                _recorded(pf, "baseline_source"),
+                params.baseline_source,
+                "baseline_source",
             )
-            load_s = time.perf_counter() - t0
-            record = TrialRecord.from_trial(trial)
-            if save_subproblems is not None:
-                _save_container(
-                    save_subproblems,
-                    session,
+            check_plan_support(f"the plan {pf.name}", plan, params)
+            check_plan_alignment(f"the plan {pf.name}", plan, params)
+            placements = [(g.pixels, g.sources) for g in plan.groups]
+            n_sub = len(plan.groups)
+
+            def units(d=d, ph=ph, n_sub=n_sub):
+                """The path's trial-paths to extract, each checked (baseline,
+                hashes) when the loader takes it, so that a later trial's
+                missing file does not stop the earlier ones."""
+                for t in (int(x) for x in plan.valid_trials):
+                    base = _extraction_baseline(
+                        session, params, d, t, baseline_dir
+                    )
+                    chash = _prepare_hash(session, params, ph, d, t, base)
+                    rhash = solve_hash(params, options, chash, (0, n_sub))
+                    out = session.results_file(d, t)
+                    skip = session.skip_file(d, t)
+                    if not execution.overwrite and (
+                        _attr(out, "settings_hash") == rhash
+                        or skip_hash(skip) == chash
+                    ):
+                        report.append(
+                            {"unit": (d, t), "skipped": "up to date"}
+                        )
+                        continue
+                    lines = session.last_line[d, t] - session.first_line[d, t]
+                    yield _Unit(
+                        d, t, base, chash, rhash, out, skip, float(lines + 1)
+                    )
+
+            def load(u: _Unit) -> dict:
+                """Load one trial and make its subproblems (a loader task)."""
+                t0 = time.perf_counter()
+                try:
+                    trial = load_trial_for(
+                        session,
+                        params,
+                        plan,
+                        u.d,
+                        u.t,
+                        rois,
+                        execution.loader_device,
+                    )
+                except ValueError as exc:
+                    if NO_DATA not in str(exc):
+                        raise
+                    _mark_skipped(session, u.d, u.t, str(exc), u.chash, ph)
+                    return {"skipped": str(exc)}
+                if u.skip.exists():
+                    u.skip.unlink()
+                tb = (
+                    None
+                    if u.base is None
+                    else load_trial_baseline(
+                        session, params, trial, u.base, u.d, u.t
+                    )
+                )
+                load_s = time.perf_counter() - t0
+                phases = {
+                    k: round(float(v), 3) for k, v in trial.timings.items()
+                }
+                record = TrialRecord.from_trial(trial)
+                if save_subproblems is not None:
+                    _save_container(
+                        save_subproblems,
+                        session,
+                        params,
+                        plan,
+                        ph,
+                        u.chash,
+                        trial,
+                        u.d,
+                        u.t,
+                        tb,
+                    )
+                extracted = trial.frame_lines.size >= params.min_frames
+                subs = (
+                    trial_subproblems(plan, trial, sp, tb) if extracted else []
+                )
+                attrs = results_attrs(
+                    _ContainerView(
+                        trial,
+                        plan,
+                        u.d,
+                        u.t,
+                        ph,
+                        None if tb is None else tb.identity,
+                    ),
+                    session.container_file(u.d, u.t).name,
+                    u.chash,
+                    (0, n_sub),
+                    n_sub,
+                    extracted,
+                    u.rhash,
                     params,
-                    plan,
-                    ph,
-                    chash,
-                    trial,
-                    d,
-                    t,
-                    tb,
+                    options,
                 )
-            extracted = trial.frame_lines.size >= params.min_frames
-            subs = trial_subproblems(plan, trial, sp, tb) if extracted else []
-            attrs = results_attrs(
-                _ContainerView(
-                    trial,
-                    plan,
-                    d,
-                    t,
-                    ph,
-                    None if tb is None else tb.identity,
-                ),
-                session.container_file(d, t).name,
-                chash,
-                (0, n_sub),
-                n_sub,
-                extracted,
-                rhash,
-                params,
-                options,
-            )
-            del trial, tb
-            submitted = time.perf_counter() - clock0
-            done = _Done()
-            futures, results = _submit(subs, sp, options, pool, done)
-            del subs
-            if pending is not None:
-                wait_s = _finish(pending)
-                solve_times[(pending.d, pending.t)] = _solve_span(
-                    pending, clock0
+                del trial, tb
+                item = {
+                    "load": load_s,
+                    "load_phases": phases,
+                    "record": record,
+                    "placements": placements if extracted else [],
+                    "subs": subs,
+                    "attrs": attrs,
+                }
+                if subs:
+                    # a trial too short to extract holds its traces only: its
+                    # bytes per line would underestimate the next trials'
+                    item["nbytes"] = _held_bytes(subs, record)
+                return item
+
+            for u, item in _loaded(units(), load, execution):
+                if "skipped" in item:
+                    report.append(
+                        {"unit": (u.d, u.t), "skipped": item["skipped"]}
+                    )
+                    continue
+                subs = item.pop("subs")
+                submitted = time.perf_counter() - clock0
+                done = _Done()
+                futures, results = _submit(subs, sp, options, pool, done)
+                del subs
+                if pending is not None:
+                    wait_s = _finish(pending)
+                    solve_times[(pending.d, pending.t)] = _solve_span(
+                        pending, clock0
+                    )
+                else:
+                    wait_s = 0.0
+                u.out.parent.mkdir(parents=True, exist_ok=True)
+                pending = _Pending(
+                    u.d,
+                    u.t,
+                    item["record"],
+                    item["placements"],
+                    futures,
+                    results,
+                    item["attrs"],
+                    u.out,
+                    submitted,
+                    done,
                 )
-            else:
-                wait_s = 0.0
-            out.parent.mkdir(parents=True, exist_ok=True)
-            pending = _Pending(
-                d,
-                t,
-                record,
-                placements if extracted else [],
-                futures,
-                results,
-                attrs,
-                out,
-                submitted,
-                done,
-            )
-            report.append({"unit": (d, t), "load": load_s, "wait": wait_s})
-            if execution.verbose:
-                print(
-                    f"SILo path {d + 1} trial {t + 1}: loaded in "
-                    f"{load_s:.1f} s (waited {wait_s:.1f} s for the "
-                    "previous trial)",
-                    flush=True,
+                load_s = item["load"]
+                report.append(
+                    {
+                        "unit": (u.d, u.t),
+                        "load": load_s,
+                        "load_phases": item["load_phases"],
+                        "wait": wait_s,
+                    }
                 )
+                if execution.verbose:
+                    print(
+                        f"SILo path {u.d + 1} trial {u.t + 1}: loaded in "
+                        f"{load_s:.1f} s (waited {wait_s:.1f} s for the "
+                        "previous trial)",
+                        flush=True,
+                    )
+    except Exception:
+        # write what was solved before the error (a later trial's check
+        # or load failed): the trial waiting for its results file
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                _finish(pending)
+        raise
     if pending is not None:
         report.append(
             {"unit": (pending.d, pending.t), "wait": _finish(pending)}

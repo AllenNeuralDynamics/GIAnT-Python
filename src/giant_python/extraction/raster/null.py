@@ -402,8 +402,9 @@ def null_calibration(
     linear in between, constant beyond the outer bins'
     centres): with ``params.null_scale`` "tail" the median and
     ``(q99.5 - median) / 2.576``, with "sd" the mean and SD. Also returns
-    the noise model, bin brightness (photons per frame), ``m0``, ``s0`` and
-    the seconds taken.
+    the noise model, bin brightness (photons per frame), ``m0``, ``s0``,
+    the null images calibrated the same way (``null_im``, ``(draws, rows,
+    cols)`` float32, NaN outside the valid pixels) and the seconds taken.
     """
     from .localization import activity_score
 
@@ -473,6 +474,9 @@ def null_calibration(
         s0=s0,
         counts=np.array(used),
         draws=params.null_draws,
+        # the null movies' activity images, calibrated like the trial's:
+        # what the calibrated image would be if the trial held only noise
+        null_im=((null_ims - m_map) / s_map).astype(np.float32),
         seconds=time.time() - t0,
     )
     return out, info
