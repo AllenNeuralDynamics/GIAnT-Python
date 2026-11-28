@@ -987,17 +987,21 @@ def test_recording_layout_follows_segments_and_metadata(
     second.unlink()  # a segment removed
     read(first)
     assert len(calls) == 4
+    # a missing segment of an existing group is read every time
+    for _ in range(2):
+        read(second)
+    assert len(calls) == 6
     # the same absolute path is the same key; a link to the file is not
     (folder / "sub").mkdir()
     read(str(folder / "sub" / ".." / first.name))
-    assert len(calls) == 4
+    assert len(calls) == 6
     link = folder / "link_DMD1-TRIAL000001.dat"
     try:
         os.symlink(first, link)
     except (OSError, NotImplementedError):
         return  # no symbolic links here
     read(link)
-    assert len(calls) == 5
+    assert len(calls) == 7
 
 
 def test_load_trial_without_selected_pixels(recording, monkeypatch):

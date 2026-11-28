@@ -1442,6 +1442,8 @@ def recording_layout(dat_path) -> RasterLayout:
     loads of one recording read it once. A ``.dat`` file that cannot be
     found is read every time (the reader reports it).
     """
+    if not os.path.isfile(dat_path):
+        return raster_layout(dat_path)  # the reader reports it
     try:
         inputs = _layout_inputs(dat_path)
     except OSError:
