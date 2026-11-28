@@ -118,11 +118,13 @@ class Store:
                     f"{self.paths}, {r.name} {r.paths}"
                 )
             # the movie is read once, as the first run's activity channel
-            for key in ("numChannels", "activityChannel"):
-                if r.param(key, 1) != runs[0].param(key, 1):
+            # with the trial loader's defaults (trial._settings)
+            for key, default in (("numChannels", 2), ("activityChannel", 1)):
+                v0, v = runs[0].param(key, default), r.param(key, default)
+                if int(v) != int(v0):
                     raise ValueError(
-                        f"runs differ in {key}: {runs[0].name} "
-                        f"{runs[0].param(key, 1)}, {r.name} {r.param(key, 1)}"
+                        f"runs differ in {key}: {runs[0].name} {v0}, "
+                        f"{r.name} {v}"
                     )
         self._cache: OrderedDict = OrderedDict()
         self._loading: dict = {}

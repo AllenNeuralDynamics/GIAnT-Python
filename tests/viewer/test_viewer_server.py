@@ -113,6 +113,14 @@ def test_runs_must_share_the_activity_channel(tmp_path):
     session = Session(syn["run"] / "trial_table.h5", syn["moco"])
     with pytest.raises(ValueError, match="activityChannel"):
         Store([a, b], session)
+    # a run without numChannels counts as 2 channels, as the loader reads it
+    b.params["activityChannel"] = 1
+    a.params["numChannels"] = 2
+    b.params.pop("numChannels")
+    Store([a, b], session)
+    a.params["numChannels"] = 1
+    with pytest.raises(ValueError, match="numChannels"):
+        Store([a, b], session)
 
 
 def test_large_valid_kernel_is_reported(tmp_path):
