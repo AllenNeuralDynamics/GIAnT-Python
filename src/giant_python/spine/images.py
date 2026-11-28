@@ -34,6 +34,22 @@ from ..extraction.raster.trial import discard_frames
 ALIGNMENT_SUFFIX = "_ALIGNMENTDATA.h5"
 
 
+def trim_frames(trim_s: float, align_hz: float) -> int:
+    """Frames left out at each end of a trial: ``round(trim_s *
+    align_hz)``."""
+    return int(math.floor(trim_s * align_hz + 0.5))
+
+
+def trim_dropped(keep: np.ndarray, n_trim: int) -> bool:
+    """Whether :func:`kept_frames` dropped the trim (a trial too short to
+    trim): a kept frame lies within ``n_trim`` frames of either end."""
+    keep = np.asarray(keep, bool).ravel()
+    if n_trim <= 0:
+        return False
+    tail = keep[max(0, keep.size - n_trim) :]
+    return bool(keep[:n_trim].any() or tail.any())
+
+
 def kept_frames(
     rec_neg_err: np.ndarray,
     align_hz: float,
@@ -65,7 +81,7 @@ def kept_frames(
     """
     rne = np.asarray(rec_neg_err, dtype=np.float64).ravel()
     keep = ~discard_frames(rne, align_hz, motion_thresh, discard_initial_s)
-    n_trim = int(math.floor(trim_s * align_hz + 0.5))
+    n_trim = trim_frames(trim_s, align_hz)
     trimmed = keep.copy()
     if n_trim > 0:
         trimmed[:n_trim] = False
@@ -185,6 +201,9 @@ class F0Stack:
         NaN for trials without a baseline or a map.
     n_frames : ndarray of int, shape (trials,)
         Frames averaged per trial (0 without an image).
+    untrimmed : ndarray of bool, shape (trials,)
+        Trials averaged without the trim, being too short to trim
+        (:func:`kept_frames`); their images include the trial's ends.
     inputs : list of dict
         Per trial, the identities of the baseline and alignment files (None
         without an image).
@@ -195,6 +214,7 @@ class F0Stack:
 
     images: np.ndarray
     n_frames: np.ndarray
+    untrimmed: np.ndarray = field(default_factory=lambda: np.zeros(0, bool))
     inputs: list = field(default_factory=list)
     attrs: dict = field(default_factory=dict)
 
@@ -238,6 +258,8 @@ def network_f0_stack(
     n = len(stems)
     images = np.full((n,) + tuple(shape), np.nan, np.float32)
     n_frames = np.zeros(n, np.int64)
+    untrimmed = np.zeros(n, bool)
+    n_trim = trim_frames(trim_s, align_hz)
     inputs: list = [None] * n
     attrs: dict = {
         "align_hz": float(align_hz),
@@ -265,6 +287,7 @@ def network_f0_stack(
         mean, used = baseline_trial_mean(bpath, keep)
         images[t] = to_consensus(mean, trial_map, t, shape)
         n_frames[t] = used
+        untrimmed[t] = used > 0 and trim_dropped(keep, n_trim)
         inputs[t] = {
             "baseline": file_identity(bpath),
             "alignment": file_identity(apath),
@@ -275,7 +298,7 @@ def network_f0_stack(
                     if key in f.attrs:
                         v = f.attrs[key]
                         attrs[key] = v.item() if hasattr(v, "item") else v
-    return F0Stack(images, n_frames, inputs, attrs)
+    return F0Stack(images, n_frames, untrimmed, inputs, attrs)
 
 
 def stack_key(*parts) -> str:

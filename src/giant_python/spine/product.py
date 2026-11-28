@@ -20,7 +20,9 @@ run's consensus frame, zero-based coordinates)::
       images/<name>       (T, H, W) float32 per-trial images; attrs: source,
                           units, covers ('field': sets the windows;
                           'fitted': values only at the pixels SILo
-                          fitted); n_frames (T,) where known. ``mean_ch<c>``
+                          fitted); n_frames (T,) where known; for f0_net
+                          untrimmed (T,): trials averaged whole, too short
+                          for the trim. ``mean_ch<c>``
                           and ``f0_silo_ch<c>`` are of file channel <c>
                           (one-based; the activity channel is the group's
                           activity_channel); ``f0_net`` and ``f0_gain`` are

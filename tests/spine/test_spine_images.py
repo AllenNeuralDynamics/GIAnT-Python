@@ -184,3 +184,15 @@ def test_network_f0_stack_reads_the_aligned_flags_once(tmp_path):
         s["baselines"], s["moco"], stems, CountingMap(affine), (syn.H, syn.W)
     )
     assert len(calls) == 1
+
+
+def test_trim_dropped_flags_untrimmed_trials():
+    """trim_dropped says whether kept_frames had to drop the trim."""
+    from giant_python.spine.images import trim_dropped
+
+    rne = np.zeros(20)
+    keep = kept_frames(rne, 10.0, trim_s=0.3)
+    assert not trim_dropped(keep, 3)
+    keep = kept_frames(rne, 10.0, trim_s=1.0)  # 10 + 10 frames: nothing left
+    assert keep.all() and trim_dropped(keep, 10)
+    assert not trim_dropped(keep, 0)

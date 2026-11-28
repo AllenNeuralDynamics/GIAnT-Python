@@ -423,3 +423,76 @@ def test_no_shared_trial_reads_nothing():
     assert used.size == 0 and window == ["mean_ch1", "f0_net"]
     assert any("nothing is read out" in m for m in notes)
     assert not common_valid([a, b], used).any()
+
+
+def test_acquisition_numbers_from_the_file_name(tmp_path):
+    """The acquisition number is read from the raw file's own name (not a
+    folder that also says TRIAL, with either separator), and a table whose
+    raw and registered lists differ in length is refused."""
+    from giant_python.io.hdf5 import save_struct_h5
+
+    reg = np.array(
+        [[f"E1T{t}DMD1_REGISTERED_DOWNSAMPLED-80Hz.tif" for t in (1, 2)]],
+        dtype=object,
+    )
+    raw = np.array(
+        [
+            [
+                "C:\\TRIAL09\\activity_x_DMD1-TRIAL000002.dat",
+                "/data/TRIAL09/activity_x_DMD1-TRIAL000003.dat",
+            ]
+        ],
+        dtype=object,
+    )
+    table = tmp_path / "trial_table.h5"
+    save_struct_h5(
+        table,
+        {
+            "datadr": str(tmp_path),
+            "savedr": str(tmp_path),
+            "filename": raw,
+            "motion_correction": {"fn_reg_ds": reg},
+        },
+    )
+    stems, acq = table_trials(table, 1)
+    assert stems == ["E1T1DMD1", "E1T2DMD1"]
+    np.testing.assert_array_equal(acq, [2, 3])
+    save_struct_h5(
+        table,
+        {
+            "datadr": str(tmp_path),
+            "savedr": str(tmp_path),
+            "filename": raw[:, :1],
+            "motion_correction": {"fn_reg_ds": reg},
+        },
+    )
+    with pytest.raises(ValueError, match="1 raw files but 2"):
+        table_trials(table, 1)
+
+
+def test_untrimmed_trials_are_reported(session, tmp_path):
+    """A trial too short for the trim is averaged whole, as GIAnT-MATLAB
+    does, and the product, the report and a note say so."""
+    notes = []
+    kw = dict(baseline_dir=session["baselines"], moco_dir=session["moco"])
+    # 160 frames: a 1 s trim at 80 Hz leaves nothing
+    rep = make_spine_summary(
+        session["run"],
+        session["table"],
+        tmp_path / "long",
+        trim_s=1.0,
+        progress=notes.append,
+        **kw,
+    )
+    p = read_product(rep["output"])["paths"][1]
+    attrs = p["image_attrs"]["f0_net"]
+    assert attrs["untrimmed"].astype(bool).all()
+    assert (attrs["n_frames"] == syn.N_FRAMES).all()
+    assert rep["paths"][1]["f0_untrimmed"] == [1, 2, 3, 4]
+    assert sum("too short for the trim" in m for m in notes) == 2
+    rep = make_spine_summary(
+        session["run"], session["table"], tmp_path / "short", trim_s=0.1, **kw
+    )
+    p = read_product(rep["output"])["paths"][1]
+    assert not p["image_attrs"]["f0_net"]["untrimmed"].any()
+    assert "f0_untrimmed" not in rep["paths"][1]

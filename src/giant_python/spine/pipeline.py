@@ -60,8 +60,7 @@ def _stem(name) -> str | None:
         return None
     # tables written on Windows keep backslashes, which Linux paths do not
     # split
-    base = PurePosixPath(name.replace("\\", "/")).name
-    return base.split(_REGISTERED)[0]
+    return _base_name(name).split(_REGISTERED)[0]
 
 
 def _replay_report(out: Path, report: dict, say) -> None:
@@ -185,11 +184,24 @@ def table_trials(table_path, path: int) -> tuple[list, np.ndarray]:
     if fn.shape[0] < path:
         raise ValueError(f"the trial table has no registered path {path}")
     stems = [_stem(x) for x in fn[path - 1]]
+    names = raw[path - 1] if raw.shape[0] >= path else [""] * len(stems)
+    if len(names) != len(stems):
+        raise ValueError(
+            f"the trial table lists {len(names)} raw files but {len(stems)} "
+            f"registered movies for path {path}"
+        )
     acq = []
-    for x in raw[path - 1] if raw.shape[0] >= path else [""] * len(stems):
-        m = _TRIAL_RE.search(str(x))
+    for x in names:
+        # the file's own name: a folder may also say TRIAL
+        m = _TRIAL_RE.search(_base_name(x))
         acq.append(int(m.group(1)) if m else -1)
     return stems, np.asarray(acq, np.int64)
+
+
+def _base_name(name) -> str:
+    """The last part of a path written on any system."""
+    name = str(name) if name is not None else ""
+    return PurePosixPath(name.replace("\\", "/")).name
 
 
 def _write_atomic(dest, write) -> None:
@@ -278,13 +290,18 @@ def cached_f0_stack(
     cache = Path(cache_dir) / f"f0net_Path{path}_{key}.h5"
     if cache.is_file():
         with h5py.File(cache, "r") as f:
-            st = F0Stack(
-                f["images"][()],
-                f["n_frames"][()],
-                json.loads(f.attrs["inputs"]),
-                json.loads(f.attrs["attrs"]),
-            )
-        return st, key, True
+            # caches written before the untrimmed flags are made again
+            st = None
+            if "untrimmed" in f:
+                st = F0Stack(
+                    f["images"][()],
+                    f["n_frames"][()],
+                    f["untrimmed"][()].astype(bool),
+                    json.loads(f.attrs["inputs"]),
+                    json.loads(f.attrs["attrs"]),
+                )
+        if st is not None:
+            return st, key, True
     st = network_f0_stack(
         baseline_dir,
         moco_dir,
@@ -310,6 +327,7 @@ def cached_f0_stack(
                 shuffle=True,
             )
             f["n_frames"] = st.n_frames
+            f["untrimmed"] = st.untrimmed.astype(np.uint8)
             f.attrs["inputs"] = json.dumps(st.inputs)
             f.attrs["attrs"] = json.dumps(st.attrs, default=str)
 
@@ -558,9 +576,20 @@ def make_spine_summary(  # noqa: C901
                     "units": "counts",
                     "covers": "field",
                     "n_frames": st.n_frames,
+                    "untrimmed": st.untrimmed.astype(np.uint8),
                     "settings": st.attrs,
                 },
             )
+            short = np.flatnonzero(st.untrimmed)
+            if short.size:
+                report["paths"].setdefault(n, {})["f0_untrimmed"] = [
+                    int(t) + 1 for t in short
+                ]
+                note(
+                    f"Path{n}: f0_net of trial(s) "
+                    f"{', '.join(str(t + 1) for t in short)} averages the "
+                    "whole trial, too short for the trim"
+                )
         if not images:
             raise ValueError(f"Path{n}: no per-trial images in the run")
         used, window = _trials_and_window(n, images, nfr, note)
