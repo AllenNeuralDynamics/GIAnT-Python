@@ -173,7 +173,7 @@ cases (62% at threshold 8) and dim neighbours of bright sources at 0.28 /
 0.5 x in 42% / 75% (0% / 50%), at 5 false sources per path on the GFP
 control (none at threshold 8; 22 at threshold 3 without the evidence
 test, 3 without the exemption). On the recordings they keep 2.1-3.0 times
-the sources of threshold 8, every one of those among them, at 1.6-3.0
+the sources of threshold 8 (the rule removes none of those), at 1.6-3.0
 times the extraction CPU. Without the exemption of strong seeds the rate
 would remove 10 / 3 of threshold 8's sources on the dense recording
 (780125), whose events their new neighbours share; the exemption keeps
