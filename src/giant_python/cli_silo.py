@@ -97,22 +97,31 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Baseline of the run (SiloParams.baseline_source): MATLAB's "
         "moving median and baseline fit, or the F0 network's baselines "
-        "(no surround, bootstrap null, peak-th 8, network baseline times "
-        "one gain per pixel). Default: network with --baseline-dir or "
-        "--f0-ckpt, median otherwise.",
+        "(no surround, bootstrap null, peak-th 5, min-source-events 5, "
+        "network baseline times one gain per pixel). Default: network with "
+        "--baseline-dir or --f0-ckpt, median otherwise.",
     )
     g.add_argument(
         "--peak-th",
         type=float,
         default=None,
-        help="Seed threshold, robust SDs (MATLAB peakth; default 3, 8 with "
-        "the network's baseline).",
+        help="Seed threshold, robust SDs (MATLAB peakth; default 3, 5 with "
+        "the network's baseline; 8 was that default before "
+        "GIAnT-Python#51).",
     )
     g.add_argument(
         "--min-kinetic-score",
         type=float,
         default=None,
         help="Kinetics test threshold (default 0.2; 0 keeps all sources).",
+    )
+    g.add_argument(
+        "--min-source-events",
+        type=int,
+        default=None,
+        help="Remove sources with fewer kinetics-test events (default 0, "
+        "off; 5 with the network's baseline). --peak-th 8 "
+        "--min-source-events 0 gives the network's earlier defaults.",
     )
     g.add_argument(
         "--footprint-variance",
@@ -441,6 +450,7 @@ def params_from_args(args: argparse.Namespace) -> SiloParams:
         "activity_channel",
         "peak_th",
         "min_kinetic_score",
+        "min_source_events",
         "footprint_variance",
         "valid_kernel",
         "localization_baseline",

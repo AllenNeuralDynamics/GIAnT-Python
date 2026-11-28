@@ -507,17 +507,21 @@ class SiloParams:
     ``localization_baseline``     ``'median'``     ``'network'``
     ``localization_surround``     True             False
     ``localization_null``         ``'none'``       ``'bootstrap'``
-    ``peak_th``                   3                8
+    ``peak_th``                   3                5
+    ``min_source_events``         0                5
     ``baseline_mode``             ``'fit'`` (R0)   ``'gain'`` (N1)
     ============================  ===============  =====================
 
     ``'median'`` is MATLAB's SILo. ``'network'`` uses the F0 network's
     baselines (``slap2-f0 predict-registered``): localization with the
     settings recommended in slap2-F0-network#6 (no surround, the bootstrap
-    null, the variance floor kept, ``peak_th`` 8) and extraction with the
-    network's baseline times one gain per pixel (N1), the variant that the
-    baseline test of the SILo port (WP6) found within tolerance of
-    refitting the baseline from the network's.
+    null, the variance floor kept), seeding at ``peak_th`` 5 with the
+    evidence test ``min_source_events`` 5 (GIAnT-Python#51: more of the dim
+    sources, at 0.5 false sources per path on the GFP control;
+    ``peak_th=8, min_source_events=0`` gives the earlier defaults), and
+    extraction with the network's baseline times one gain per pixel (N1),
+    the variant that the baseline test of the SILo port (WP6) found within
+    tolerance of refitting the baseline from the network's.
 
     Attributes
     ----------
@@ -571,7 +575,7 @@ class SiloParams:
         Seed threshold, robust SDs of the activity image (``peakth``; 3 for
         SLAP2). Used by the plan's seeding and, unless
         ``localization_peak_th`` is set, by the per-trial peaks. None takes
-        the default of ``baseline_source`` (3, or 8 with the network).
+        the default of ``baseline_source`` (3, or 5 with the network).
     min_peak_distance : int
         Minimum Chebyshev distance of seeds (``minPeakDistance``).
     localization_baseline : {'median', 'network'} or None
@@ -688,9 +692,11 @@ class SiloParams:
         trials) is below this are removed after extraction with those the
         kinetics test rejects. Meant for permissive seeding (a lower
         ``peak_th`` or a larger ``seed_false_per_field``).
-    min_source_events : int
-        The evidence test's other criterion (0: off): sources with fewer
-        events than this in the kinetics test are removed.
+    min_source_events : int or None
+        The evidence test's other criterion (0: off; not in MATLAB):
+        sources with fewer events than this in the kinetics test are
+        removed. None takes the default of ``baseline_source`` (0, or 5
+        with the network, where it goes with the lower ``peak_th``).
     min_frames : int
         Trials with fewer frames are loaded but not source-extracted
         (MATLAB's ``minFrames``).
@@ -753,7 +759,7 @@ class SiloParams:
     baseline_penalty: float = 30.0
     min_kinetic_score: float = 0.2
     min_source_snr: float = 0.0
-    min_source_events: int = 0
+    min_source_events: Optional[int] = None
     min_frames: int = 100
     user_rois: bool = True
 
@@ -1279,13 +1285,15 @@ BASELINE_SOURCE_DEFAULTS = {
         "localization_surround": True,
         "localization_null": "none",
         "peak_th": 3.0,
+        "min_source_events": 0,
         "baseline_mode": "fit",
     },
     "network": {
         "localization_baseline": "network",
         "localization_surround": False,
         "localization_null": "bootstrap",
-        "peak_th": 8.0,
+        "peak_th": 5.0,
+        "min_source_events": 5,
         "baseline_mode": "gain",
     },
 }

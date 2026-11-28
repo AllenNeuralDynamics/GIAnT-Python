@@ -55,7 +55,7 @@ default, and
 ``to_matlab()`` gives the ``params`` struct that the summary and the trial
 table record. On the command line a few fields
 have their own options (``--peak-th``, ``--min-kinetic-score``,
-``--footprint-variance``, ``--valid-kernel``, ``--localization-baseline``,
+``--min-source-events``, ``--footprint-variance``, ``--valid-kernel``, ``--localization-baseline``,
 ``--no-trial-peaks``, ``--activity-channel``); any field can be set with
 ``--set name=value`` or a JSON file (``--params``).
 :class:`~giant_python.models.params.SiloExecution` says how to run (worker
@@ -99,13 +99,17 @@ these options existed (with MATLAB's fit); ``seed_fit='matlab'`` with
 :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks`, and the
 standalone per-trial localization, keep MATLAB's fit as their own default.
 
-Seed thresholds for dim sources (options, off by default)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Seed thresholds for dim sources
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 MATLAB's seed threshold counts in robust SDs of the combined activity
 image itself (``peak_th``), so it rises with the number of pixels that
-carry real activity. Two options for seeding more of the dim sources
-(GIAnT-Python#51) are not MATLAB's and are off by default:
+carry real activity. GIAnT-Python#51 added options for seeding more of the
+dim sources; none is MATLAB's. With the network baseline two of them are
+the defaults since 2026-11-28, ``peak_th`` 5 (it was 8) and
+``min_source_events`` 5 (below); ``--peak-th 8 --min-source-events 0``
+gives the earlier defaults. With the moving median (MATLAB's SILo) all
+are off, and the others are off with either baseline:
 
 * ``seed_acceptance='null'`` sets the plan's threshold from the null of
   the combined image instead: each trial's bootstrap null image (the noise
@@ -135,6 +139,8 @@ carry real activity. Two options for seeding more of the dim sources
   test rejects (``sources/rejected/weak`` marks them in the summary). It is
   meant for permissive seeding (a lower ``peak_th``): the kinetics test
   cannot judge a source with fewer than 5 events and keeps it.
+  ``min_source_events`` is 5 by default with the network baseline (0, off,
+  with the moving median); ``min_source_snr`` is off with both.
 
 The bootstrap null holds the photon noise of each trial's model only: on
 the GFP control (no activity, registered with older code) the calibrated
@@ -149,10 +155,13 @@ Evaluated on injected dim-source ground truth (GFP session 847983) and on
 three recordings (GIAnT-Python#58): with the network baseline, ``peak_th``
 5 with ``min_source_events`` 5 raised the recall of sources near the
 detection limit (isolated, 0.28 x the standard event sizes: 62% to 92%) at
-0.5 false sources per path on the GFP control and 17-49% more extraction
-CPU; ``peak_th`` 6 alone gave no false source. The null modes behaved like
-a lower ``peak_th``, since the image's robust SD was 1.0-1.7 times its
-null's on every set.
+0.5 false sources per path on the GFP control, 37-63% more sources on the
+real recordings and 17-49% more extraction CPU; ``peak_th`` 6 alone gave
+no false source. These became the network baseline's defaults. The null
+modes behaved like a lower ``peak_th``, since the image's robust SD was
+1.0-1.7 times its null's on every set. Dim sources 2-4 pixels from a much
+brighter one mostly have no maximum of their own in the activity image,
+and no threshold seeds them.
 
 Footprint support
 ~~~~~~~~~~~~~~~~~
@@ -229,13 +238,16 @@ setting                       ``'median'``     ``'network'``
 ``localization_baseline``     ``'median'``     ``'network'``
 ``localization_surround``     True             False
 ``localization_null``         ``'none'``       ``'bootstrap'``
-``peak_th``                   3                8
+``peak_th``                   3                5
+``min_source_events``         0                5
 ``baseline_mode``             ``'fit'`` (R0)   ``'gain'`` (N1)
 ============================  ===============  ======================
 
 The localization settings are those recommended for the network's baseline
 (slap2-F0-network#6: no surround, the bootstrap null, the variance floor
-kept, threshold 8). ``baseline_mode`` is the solver's: 'gain' holds the
+kept). The seed threshold was 8 there; since 2026-11-28 it is 5, with the
+evidence test ``min_source_events`` 5 (above, "Seed thresholds for dim
+sources"). ``baseline_mode`` is the solver's: 'gain' holds the
 network's baseline times one gain per pixel, fitted once after the first
 activity fit (N1 of the SILo port's baseline test, within its tolerances
 of refitting MATLAB's baseline model starting from the network's, at

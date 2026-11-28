@@ -252,11 +252,17 @@ def test_silo_params_null_acceptance():
 
 
 def test_silo_params_evidence_test():
-    """The evidence test is off by default and reaches only the collect
+    """The evidence test is off by default with MATLAB's baseline (on with
+    the network's: min_source_events 5) and reaches only the collect
     stage's settings when on."""
     default = SiloParams()
     assert default.min_source_snr == 0 and default.min_source_events == 0
     assert "min_source_snr" not in default.stage_settings("collect")
+    assert "min_source_events" not in default.stage_settings("collect")
+    net = SiloParams(baseline_source="network")
+    assert net.min_source_snr == 0 and net.min_source_events == 5
+    assert net.stage_settings("collect")["min_source_events"] == 5
+    assert "min_source_events" not in net.stage_settings("plan")
     on = SiloParams(min_source_snr=2.0, min_source_events=3)
     assert on.stage_settings("collect")["min_source_snr"] == 2.0
     assert on.to_matlab(2, 80.0)["minSourceSNR"] == 2.0
