@@ -594,9 +594,10 @@ class SpineStore:
                 }
         return {"by_source": by, "unattached": off}
 
-    def set_mark(self, i: int, n: int, k: int, label: str, note: str):
-        """Mark source ``k`` (``label`` '' clears its marks), keyed by its
-        position; returns the path's marks."""
+    def set_mark(self, i: int, n: int, k: int, label, note: str):
+        """Mark source ``k`` (``label`` '' clears its marks; None keeps the
+        label the source has, Unsure if none, and sets the note), keyed by
+        its position; returns the path's marks."""
         if self.marks_path is None:
             raise ValueError("no marks file (give --marks)")
         if label and label not in MARK_LABELS:
@@ -614,7 +615,17 @@ class SpineStore:
                 [m["Col0"] for m in here],
                 MARK_RADIUS,
             )
-            drop = {id(m) for m, s in zip(here, at) if s == k}
+            mine = [m for m, s in zip(here, at) if s == k]
+            if label is None:
+                # the newest of the source's marks (the later row on ties)
+                label = "Unsure"
+                best = None
+                for m in mine:
+                    if best is None or m.get("Updated", "") >= best:
+                        best, label = m.get("Updated", ""), m["Label"]
+                if label not in MARK_LABELS:
+                    label = "Unsure"
+            drop = {id(m) for m in mine}
             marks = [m for m in marks if id(m) not in drop]
             if label:
                 marks.append(

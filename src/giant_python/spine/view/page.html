@@ -325,7 +325,9 @@ async function init() {
     r.dataset.theme = dark ? "light" : "dark"; redrawAll(); };
   document.querySelectorAll(".marks button").forEach(b => b.onclick = () => setMark(b.dataset.l));
   $("note").oninput = () => { S.noteDirty = true; };
-  $("note").onchange = () => { const m = markOf(S.src); setMark(m ? m.label : "Unsure"); };
+  // a note alone keeps the source's label as the server has it when the note is saved
+  // (a label change queued before it is not undone), Unsure if it has none
+  $("note").onchange = () => setMark(null);
   document.addEventListener("keydown", onKey);
   setupField();
   setupCharts();
@@ -496,8 +498,8 @@ async function drawField(refetch, fit) {
   const view = $("fview").value, image = $("fimg").value, vs = $("vs").value;
   syncControls();
   const key = [S.prod, S.path, image, S.trial, view, vs].join("|");
+  const g = ++S.gen.field; // also on a cache hit: a pending older request must not land after it
   if (refetch || key !== S.fieldKey) {
-    const g = ++S.gen.field;
     let f = null, err = null;
     try { f = await api.field(S.prod, S.path, image, S.trial, view, vs); } catch (e) { err = e; }
     if (g !== S.gen.field) return; // superseded by a newer field request
@@ -610,8 +612,8 @@ async function loadCrops() {
   if (S.src < 0) return;
   const image = $("cimg").value, view = $("cview").value, vs = $("vs").value;
   const key = [S.prod, S.path, S.src, image, view, vs].join("|");
+  const g = ++S.gen.crops; // also on a cache hit
   if (key !== S.cropsKey) {
-    const g = ++S.gen.crops;
     let c = null, err = null;
     try { c = await api.crops(S.prod, S.path, S.src, image, view, vs); } catch (e) { err = e; }
     const now = [S.prod, S.path, S.src, $("cimg").value, $("cview").value, $("vs").value].join("|");
@@ -944,14 +946,14 @@ function setMark(label) {
   // marks go to the server one at a time, in the order they are made, each with
   // the product, path, source and note of the moment it was made
   if (S.src < 0 || S.loading) return markQueue;
-  const req = { prod: S.prod, path: S.path, src: S.src, label, note: label ? $("note").value : "", data: S.data };
+  const req = { prod: S.prod, path: S.path, src: S.src, label, note: label === "" ? "" : $("note").value, data: S.data };
   markQueue = markQueue.then(async () => {
     try {
       const marks = await api.mark(req.prod, req.path, req.src, req.label, req.note);
       req.data.marks = marks;
       if (`${req.prod}|${req.path}|${req.src}` === S.noteFor && $("note").value === req.note) S.noteDirty = false;
       if (req.data === S.data) { showMark(); drawOverlay(); buildTable(); }
-      status(req.label ? `marked ${req.label}` : "mark cleared");
+      status(req.label === null ? "note saved" : req.label ? `marked ${req.label}` : "mark cleared");
     } catch (e) { status(e.message, true); }
   });
   return markQueue;
@@ -968,13 +970,14 @@ function setTrial(t, quiet) {
   drawField(false); drawCrops(); drawSize(); drawAct();
 }
 function onKey(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return; // browser shortcuts (copy, save, ...) are not marks
   if (e.target.tagName === "INPUT" && e.target.type !== "range" && e.target.type !== "checkbox") return;
   if (e.target.tagName === "SELECT") return;
   const k = e.key;
   if (k === "ArrowLeft") { setTrial(S.trial - 1); e.preventDefault(); }
   else if (k === "ArrowRight") { setTrial(S.trial + 1); e.preventDefault(); }
   else if (k === "a") setTrial(-1);
-  else if (k === "n" || k === "p") { const i = S.order.indexOf(S.src); const j = i < 0 ? 0 : Math.max(0, Math.min(S.order.length - 1, i + (k === "n" ? 1 : -1))); selectSource(S.order[j]); }
+  else if ((k === "n" || k === "p") && S.order.length) { const i = S.order.indexOf(S.src); const j = i < 0 ? 0 : Math.max(0, Math.min(S.order.length - 1, i + (k === "n" ? 1 : -1))); selectSource(S.order[j]); }
   else if (k === "r" && S.meta.products.length > 1) switchProduct((S.prod + 1) % S.meta.products.length);
   else if (k in MARK_KEYS && S.meta.marks_file) setMark(MARK_KEYS[k]);
 }

@@ -566,3 +566,19 @@ def test_server_on_ipv6_loopback_and_port_80_names(product):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_a_note_alone_keeps_the_label(product, tmp_path):
+    """A note saved on its own keeps the label the source has at that
+    moment (Unsure without one)."""
+    store = SpineStore([(None, product)], tmp_path / "marks.csv")
+    got = store.set_mark(0, 1, 0, None, "first note")
+    assert got["by_source"][0]["label"] == "Unsure"
+    store.set_mark(0, 1, 0, "Growing", "first note")
+    got = store.set_mark(0, 1, 0, None, "second note")
+    assert got["by_source"][0] == {
+        "label": "Growing",
+        "note": "second note",
+        "updated": got["by_source"][0]["updated"],
+    }
+    assert len(read_marks(tmp_path / "marks.csv")) == 1

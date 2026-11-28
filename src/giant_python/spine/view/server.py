@@ -14,7 +14,8 @@ API (used by the page): GET ``/api/meta``, ``/api/sources?prod=&path=``,
 (float32 ``layers x rows x cols``, shape in ``X-Shape``),
 ``/api/roi?prod=&path=&id=`` (JSON), ``/api/crops?prod=&path=&id=&image=
 &view=&vs=`` (float32 ``layers x tiles x s x s``); POST ``/api/mark``
-(JSON ``{prod, path, id, label, note}``).
+(JSON ``{prod, path, id, label, note}``; ``label`` null keeps the
+source's label and sets the note).
 """
 
 from __future__ import annotations
@@ -197,7 +198,11 @@ class _Handler(BaseHTTPRequestHandler):
                 int(body.get("prod", 0)),
                 int(body["path"]),
                 int(body["id"]),
-                str(body.get("label", "")),
+                (
+                    None
+                    if body.get("label", "") is None
+                    else str(body.get("label", ""))
+                ),
                 str(body.get("note", "")),
             )
             self._json(marks)
