@@ -1449,8 +1449,10 @@ def recording_layout(dat_path) -> RasterLayout:
     modification time of every file the reader opens (the group's segments
     and their metadata, :func:`_layout_inputs`), so that a changed, added
     or removed file is read again. One reader at a time, so concurrent
-    loads of one recording read it once. A ``.dat`` file that cannot be
-    found is read every time (the reader reports it).
+    loads of one recording read it once. The layout is read through that
+    absolute path, so its file names do not depend on the working
+    directory. A ``.dat`` file that cannot be found is read every time (the
+    reader reports it).
     """
     if not os.path.isfile(dat_path):
         return raster_layout(dat_path)  # the reader reports it
@@ -1460,15 +1462,14 @@ def recording_layout(dat_path) -> RasterLayout:
         return raster_layout(dat_path)
     if any(size is None for f, size, _ in inputs if f.endswith(".dat")):
         return raster_layout(dat_path)
-    key = (
-        raster_layout,  # the reader (tests replace it)
-        _layout_path(dat_path),
-        inputs,
-    )
+    path = _layout_path(dat_path)
+    key = (raster_layout, path, inputs)  # the reader too: tests replace it
     with _LAYOUTS_LOCK:
         layout = _LAYOUTS.get(key)
         if layout is None:
-            layout = raster_layout(dat_path)
+            # read through the absolute path, so that the layout's files
+            # stay right if the working directory changes
+            layout = raster_layout(path)
             _LAYOUTS[key] = layout
             while len(_LAYOUTS) > _LAYOUTS_KEPT:
                 _LAYOUTS.pop(next(iter(_LAYOUTS)))

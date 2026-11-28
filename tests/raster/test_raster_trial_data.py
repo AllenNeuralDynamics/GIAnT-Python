@@ -924,7 +924,7 @@ def test_recording_layout_is_read_once_per_file(
 
     a = load(10.0, 2000.0)
     b = load(1500.0, 3000.0)
-    assert calls == [str(path)]
+    assert calls == [trial_data._layout_path(path)]  # read once, absolute
     assert a.timings["layout"] <= a.timings["setup"]
     # concurrent loads of a new key read it once
     other = tmp_path / "copy_DMD1-TRIAL000001.dat"
@@ -933,12 +933,27 @@ def test_recording_layout_is_read_once_per_file(
     with ThreadPoolExecutor(3) as pool:
         got = list(pool.map(lambda k: trial_data.recording_layout(other),
                             range(3)))  # fmt: skip
-    assert calls == [str(other)] and all(g is layout for g in got)
+    assert calls == [trial_data._layout_path(other)]
+    assert all(g is layout for g in got)
     # a changed file is read again; a missing one every time
     stat = other.stat()
     os.utime(other, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
     trial_data.recording_layout(other)
-    assert calls == [str(other)] * 2
+    assert calls == [trial_data._layout_path(other)] * 2
+    # a relative path is read through its absolute path (and is the same
+    # key as the absolute one)
+    rel = tmp_path / "rel_DMD1-TRIAL000001.dat"
+    rel.write_bytes(b"r")
+    calls.clear()
+    here = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        trial_data.recording_layout(rel.name)
+    finally:
+        os.chdir(here)
+    trial_data.recording_layout(rel)
+    assert calls == [trial_data._layout_path(rel)]
+    assert os.path.isabs(calls[0])
     calls.clear()
     for _ in range(2):
         trial_data.recording_layout(tmp_path / "missing.dat")
