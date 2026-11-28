@@ -30,7 +30,7 @@ API (GET; used by the page): ``/api/meta``, ``/api/sources?path=``,
 ``/api/trial?path=&trial=`` (JSON),
 ``/api/frame?path=&trial=&t=&avg=&kernel=`` (float32 layers x valid
 pixels), ``/api/trace?path=&trial=&r=&c=&rad=&kernel=`` (float32 layers x
-frames; ``kernel`` exporter or matched, default ``--kernel``),
+frames; ``kernel`` exporter, matched or exact, default ``--kernel``),
 ``/api/progress?key=``.
 """
 
@@ -516,12 +516,13 @@ def add_arguments(p) -> None:
     )
     p.add_argument(
         "--kernel",
-        choices=("matched", "exporter"),
+        choices=("matched", "exporter", "exact"),
         default="matched",
         help="how SILo's 200 Hz traces become the movie's 80 Hz "
         "frames: matched (default; sqrt(dt80^2 - dt200^2), for the "
-        "200 Hz frames' own smoothing), or the exporter's weights (the "
-        "movie's dt); the page switches between them",
+        "200 Hz frames' own smoothing), the exporter's weights (the "
+        "movie's dt), or exact (r x200 + (1 - r) exporter's, r = "
+        "(dt200/dt80)^2); the page switches between them",
     )
     p.add_argument(
         "--cache-trials",
