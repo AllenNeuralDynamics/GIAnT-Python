@@ -58,6 +58,7 @@ def test_register_movie_format(monkeypatch, flags, save_tif):
     seen = {}
 
     def fake(table, params, **kwargs):
+        """A registration that records its parameters and writes nothing."""
         seen["params"] = params
         return {
             "registration_failed": np.array([[False]]),
