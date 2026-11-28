@@ -507,17 +507,23 @@ class SiloParams:
     ``localization_baseline``     ``'median'``     ``'network'``
     ``localization_surround``     True             False
     ``localization_null``         ``'none'``       ``'bootstrap'``
-    ``peak_th``                   3                8
+    ``peak_th``                   3                3
+    ``min_source_event_rate``     0                2
     ``baseline_mode``             ``'fit'`` (R0)   ``'gain'`` (N1)
     ============================  ===============  =====================
 
     ``'median'`` is MATLAB's SILo. ``'network'`` uses the F0 network's
     baselines (``slap2-f0 predict-registered``): localization with the
     settings recommended in slap2-F0-network#6 (no surround, the bootstrap
-    null, the variance floor kept, ``peak_th`` 8) and extraction with the
-    network's baseline times one gain per pixel (N1), the variant that the
-    baseline test of the SILo port (WP6) found within tolerance of
-    refitting the baseline from the network's.
+    null, the variance floor kept), seeding at ``peak_th`` 3 with the
+    evidence test ``min_source_event_rate`` 2 events per minute for the
+    sources seeded below ``peak_th`` + ``evidence_margin`` (2)
+    (GIAnT-Python#51: more of the dim sources; until 2026-11-28 ``peak_th``
+    was 8 with no evidence test, ``peak_th=8, min_source_event_rate=0``),
+    and
+    extraction with the network's baseline times one gain per pixel (N1),
+    the variant that the baseline test of the SILo port (WP6) found within
+    tolerance of refitting the baseline from the network's.
 
     Attributes
     ----------
@@ -571,7 +577,8 @@ class SiloParams:
         Seed threshold, robust SDs of the activity image (``peakth``; 3 for
         SLAP2). Used by the plan's seeding and, unless
         ``localization_peak_th`` is set, by the per-trial peaks. None takes
-        the default of ``baseline_source`` (3, or 8 with the network).
+        the default of ``baseline_source`` (3 with both; it was 8 with the
+        network until 2026-11-28).
     min_peak_distance : int
         Minimum Chebyshev distance of seeds (``minPeakDistance``).
     localization_baseline : {'median', 'network'} or None
@@ -688,9 +695,22 @@ class SiloParams:
         trials) is below this are removed after extraction with those the
         kinetics test rejects. Meant for permissive seeding (a lower
         ``peak_th`` or a larger ``seed_false_per_field``).
-    min_source_events : int
-        The evidence test's other criterion (0: off): sources with fewer
-        events than this in the kinetics test are removed.
+    min_source_event_rate : float or None
+        The evidence test's other criterion (0: off; not in MATLAB):
+        sources whose trace has fewer kinetics-test events per minute than
+        this (events over the minutes of the trace's frames that were not
+        discarded) are removed. A rate, so that it means the same in short
+        and long recordings. None takes the default of ``baseline_source``
+        (0, or 2 with the network, where it goes with the seed threshold).
+    evidence_margin : float or None
+        The evidence test judges only the sources seeded below ``peak_th``
+        + ``evidence_margin`` robust SDs (their seed height,
+        :func:`~giant_python.extraction.raster.seeding.seed_heights`):
+        stronger seeds are kept whatever their evidence. Default 2; None
+        judges every source, as do the null seed thresholds
+        (``seed_acceptance`` 'null' or 'null_sd', which do not count in
+        the combined image's robust SDs above ``peak_th``). Matters only
+        when the evidence test is on. Not a MATLAB option.
     min_frames : int
         Trials with fewer frames are loaded but not source-extracted
         (MATLAB's ``minFrames``).
@@ -753,7 +773,8 @@ class SiloParams:
     baseline_penalty: float = 30.0
     min_kinetic_score: float = 0.2
     min_source_snr: float = 0.0
-    min_source_events: int = 0
+    min_source_event_rate: Optional[float] = None
+    evidence_margin: Optional[float] = 2.0
     min_frames: int = 100
     user_rois: bool = True
 
@@ -797,7 +818,7 @@ class SiloParams:
             "baseline_penalty",
             "min_kinetic_score",
             "min_source_snr",
-            "min_source_events",
+            "min_source_event_rate",
             "wmf_peak_th",
             "wmf_dip",
             "wmf_deblend_th",
@@ -806,8 +827,8 @@ class SiloParams:
             _nonnegative(name, getattr(self, name))
         if self.localization_peak_th is not None:
             _positive("localization_peak_th", self.localization_peak_th)
-        if not isinstance(self.min_source_events, Integral):
-            raise ValueError("min_source_events must be an integer")
+        if self.evidence_margin is not None:
+            _nonnegative("evidence_margin", self.evidence_margin)
         for name in (
             "localization_surround",
             "localization_variance_floor",
@@ -926,6 +947,22 @@ class SiloParams:
             raise ValueError(
                 "localization_null_seed must be a nonnegative integer"
             )
+
+    @property
+    def evidence_test(self) -> bool:
+        """Whether the evidence test runs (``min_source_snr`` or
+        ``min_source_event_rate`` above 0)."""
+        return self.min_source_snr > 0 or self.min_source_event_rate > 0
+
+    @property
+    def evidence_judge_below(self) -> Optional[float]:
+        """Seed height below which the evidence test judges a source
+        (``peak_th + evidence_margin``); None judges every source: without
+        a margin, and with the null seed thresholds (their threshold and
+        scale are not the combined image's ``peak_th`` and robust SD)."""
+        if self.evidence_margin is None or self.seed_acceptance != "image":
+            return None
+        return float(self.peak_th) + float(self.evidence_margin)
 
     @property
     def sel_radius(self) -> int:
@@ -1059,6 +1096,10 @@ class SiloParams:
         for n, before in _STAGE_FIELDS_ADDED.get(stage, {}).items():
             if getattr(self, n) != before:
                 out[n] = getattr(self, n)
+        if stage == "collect" and self.evidence_test:
+            # which sources the evidence test judges (an option added
+            # with it; without the test it changes nothing)
+            out["evidence_margin"] = self.evidence_margin
         return out
 
     def to_matlab(
@@ -1160,6 +1201,11 @@ class SiloParams:
                 (self.valid_kernel, self.valid_kernel), dtype=np.bool_
             ),
         }
+        if self.evidence_test:
+            margin = self.evidence_margin
+            out["evidenceMargin"] = float(
+                np.inf if margin is None else margin
+            )
         for name, (key, matlab) in _PYTHON_ONLY.items():
             value = getattr(self, name)
             if value == matlab:
@@ -1268,7 +1314,7 @@ _STAGE_FIELDS_ADDED = {
     },
     "prepare": {"baseline_source": "median"},
     "solve": {"baseline_mode": "fit", "valid_kernel": 3},
-    "collect": {"min_source_snr": 0.0, "min_source_events": 0},
+    "collect": {"min_source_snr": 0.0, "min_source_event_rate": 0.0},
 }
 
 # the settings that SiloParams.baseline_source sets, per source (see the
@@ -1279,13 +1325,15 @@ BASELINE_SOURCE_DEFAULTS = {
         "localization_surround": True,
         "localization_null": "none",
         "peak_th": 3.0,
+        "min_source_event_rate": 0.0,
         "baseline_mode": "fit",
     },
     "network": {
         "localization_baseline": "network",
         "localization_surround": False,
         "localization_null": "bootstrap",
-        "peak_th": 8.0,
+        "peak_th": 3.0,
+        "min_source_event_rate": 2.0,
         "baseline_mode": "gain",
     },
 }
@@ -1311,7 +1359,7 @@ _PYTHON_ONLY = {
     "seed_merge_px": ("seedMergePx", 0.0),
     "localization_keep_null": ("localizationKeepNull", False),
     "min_source_snr": ("minSourceSNR", 0.0),
-    "min_source_events": ("minSourceEvents", 0),
+    "min_source_event_rate": ("minSourceEventRate", 0.0),
     "seed_acceptance": ("seedAcceptance", "image"),
     "seed_amplitude_rule": ("seedAmplitudeRule", "matlab"),
     "seed_false_per_field": ("seedFalsePerField", 1.0),

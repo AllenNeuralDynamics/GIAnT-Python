@@ -418,6 +418,53 @@ def test_evidence_test_removes_weak_sources(tmp_path):
     assert off.weak is None and off.keep.all()
 
 
+def test_evidence_test_event_rate(tmp_path):
+    """min_event_rate compares each source's kinetics events per minute of
+    its frames with the rate, and the summary records the rejected
+    sources' rates."""
+    plan = make_plan()
+    result = PathResult(
+        plan=plan,
+        trials=[None, outcome(1, plan.n_pixels), outcome(2, plan.n_pixels)],
+        alignment=[None, alignment(1), alignment(2)],
+    )
+    minutes = (FRAMES[1] + FRAMES[2]) / 200.0 / 60.0
+    kin = kinetics_test(result, 0.024, 200.0, 0.0, min_event_rate=1e6)
+    np.testing.assert_allclose(kin.event_rate, kin.n_events / minutes)
+    assert kin.weak.all() and not kin.keep.any()
+    exp, per = tmp_path / "e.h5", tmp_path / "p.h5"
+    write_summaries(exp, per, [result], {"x": 1.0}, N_TRIALS, C, 1)
+    rej = load_struct_h5(exp)["Path1"]["sources"]["rejected"]
+    np.testing.assert_allclose(rej["event_rate"].ravel(), kin.event_rate)
+    np.testing.assert_array_equal(rej["weak"].ravel(), [1, 1, 1, 1])
+    kin = kinetics_test(result, 0.024, 200.0, 0.0, min_event_rate=1e-9)
+    np.testing.assert_array_equal(kin.weak, kin.n_events == 0)
+
+
+def test_evidence_test_judges_weak_seeds_only():
+    """With judge_below the evidence test judges only the sources whose
+    seed height in the plan's combined image is below it."""
+    from giant_python.extraction.raster.seeding import seed_heights
+
+    plan = make_plan()
+    result = PathResult(
+        plan=plan,
+        trials=[None, outcome(1, plan.n_pixels), outcome(2, plan.n_pixels)],
+        alignment=[None, alignment(1), alignment(2)],
+    )
+    h = seed_heights(plan.act_im, plan.source_rows, plan.source_cols)
+    cut = float(np.median(h))
+    kin = kinetics_test(
+        result, 0.024, 200.0, 0.0, min_event_rate=1e6, judge_below=cut
+    )
+    np.testing.assert_allclose(kin.seed_height, h)
+    np.testing.assert_array_equal(kin.weak, ~(h >= cut))
+    assert kin.weak.any() and not kin.weak.all()
+    np.testing.assert_array_equal(kin.keep, h >= cut)
+    every = kinetics_test(result, 0.024, 200.0, 0.0, min_event_rate=1e6)
+    assert every.weak.all() and every.seed_height is None
+
+
 def test_evidence_events_skipped_without_counts():
     """The event criterion judges nothing when the kinetics test cannot
     count events (decay under 3 frames); the SNR criterion still does."""
@@ -427,7 +474,8 @@ def test_evidence_events_skipped_without_counts():
         trials=[None, outcome(1, plan.n_pixels), outcome(2, plan.n_pixels)],
         alignment=[None, alignment(1), alignment(2)],
     )
-    kin = kinetics_test(result, 0.005, 200.0, 0.0, min_events=3)
+    kin = kinetics_test(result, 0.005, 200.0, 0.0, min_event_rate=3.0)
     assert not kin.weak.any() and kin.keep.all()
-    kin = kinetics_test(result, 0.005, 200.0, 0.0, 3.5, 3)
+    assert np.isnan(kin.event_rate).all()
+    kin = kinetics_test(result, 0.005, 200.0, 0.0, 3.5, 3.0)
     np.testing.assert_array_equal(kin.weak, [True, True, False, False])

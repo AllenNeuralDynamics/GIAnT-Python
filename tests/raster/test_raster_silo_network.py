@@ -114,26 +114,38 @@ def test_params_baseline_source():
         "fit",
     )
     assert m.localization_surround and m.localization_null == "none"
+    assert m.min_source_event_rate == 0
     assert not m.needs_network_baseline
     n = SiloParams(baseline_source="network")
-    assert n.peak_th == 8.0 and n.localization_baseline == "network"
+    assert n.peak_th == 3.0 and n.localization_baseline == "network"
+    assert n.min_source_event_rate == 2.0 and n.min_source_snr == 0
     assert not n.localization_surround and n.localization_null == "bootstrap"
     assert n.localization_variance_floor
     assert n.baseline_mode == "gain" == n.solver_params().baseline_mode
     assert n.needs_network_baseline
-    o = SiloParams(baseline_source="network", peak_th=5, baseline_mode="fixed")
-    assert o.peak_th == 5 and o.baseline_mode == "fixed"
+    o = SiloParams(baseline_source="network", peak_th=8, baseline_mode="fixed")
+    assert o.peak_th == 8 and o.baseline_mode == "fixed"
+    # the network's defaults before 2026-11-28 (GIAnT-Python#51)
+    old = SiloParams(
+        baseline_source="network", peak_th=8, min_source_event_rate=0
+    )
+    assert old.min_source_event_rate == 0
+    assert "min_source_event_rate" not in old.stage_settings("collect")
+    assert n.stage_settings("collect")["min_source_event_rate"] == 2.0
+    assert n.stage_settings("plan")["peak_th"] == 3.0
     assert SiloParams(**asdict(n)) == n
     assert SiloParams(**json.loads(json.dumps(asdict(n)))) == n
     # MATLAB's algorithm: no new fields in the hashes or the params struct
     assert "baseline_mode" not in m.stage_settings("solve")
+    assert "min_source_event_rate" not in m.stage_settings("collect")
     assert n.stage_settings("solve")["baseline_mode"] == "gain"
     pm = m.to_matlab(2, 80.0)
     assert "baselineSource" not in pm and "baselineMode" not in pm
-    assert pm["peakth"] == 3.0
+    assert pm["peakth"] == 3.0 and "minSourceEventRate" not in pm
     pn = n.to_matlab(2, 80.0)
     assert pn["baselineSource"] == "network" and pn["baselineMode"] == "gain"
-    assert pn["peakth"] == 8.0 and pn["localizationNull"] == "bootstrap"
+    assert pn["peakth"] == 3.0 and pn["localizationNull"] == "bootstrap"
+    assert pn["minSourceEventRate"] == 2.0
     with pytest.raises(ValueError, match="baseline_source"):
         SiloParams(baseline_source="spline")
     with pytest.raises(ValueError, match="baseline_mode"):
@@ -384,7 +396,21 @@ def test_cli_baseline_default():
     p = params_from_args(_args("silo", "t.h5"))
     assert p.baseline_source == "median" and p.peak_th == 3.0
     p = params_from_args(_args("silo", "t.h5", "--baseline-dir", "b"))
-    assert p.baseline_source == "network" and p.peak_th == 8.0
+    assert p.baseline_source == "network" and p.peak_th == 3.0
+    assert p.min_source_event_rate == 2.0
+    p = params_from_args(
+        _args(
+            "silo",
+            "t.h5",
+            "--baseline-dir",
+            "b",
+            "--peak-th",
+            "8",
+            "--min-source-event-rate",
+            "0",
+        )
+    )
+    assert (p.peak_th, p.min_source_event_rate) == (8.0, 0.0)
     p = params_from_args(_args("silo", "t.h5", "--f0-ckpt", "x.pt"))
     assert p.baseline_source == "network"
     p = params_from_args(
@@ -596,9 +622,10 @@ def test_source_alone_redoes_plan_and_containers(tmp_path, fake):
         localization_baseline="network",
         localization_surround=False,
         localization_null="bootstrap",
-        peak_th=8.0,
+        peak_th=3.0,
         baseline_mode="gain",
         min_kinetic_score=0.0,
+        min_source_event_rate=2.0,
     )
     for stage in ("localize", "solve", "collect"):
         assert alt.stage_settings(stage) == NET.stage_settings(stage)
@@ -617,6 +644,63 @@ def test_source_alone_redoes_plan_and_containers(tmp_path, fake):
     assert len(silo.prepare(s, alt, EX, baseline_dir=bdir)) == 6
     with pytest.raises(ValueError, match="baseline_source='median'"):
         silo.prepare(s, NET, EX, baseline_dir=bdir)
+
+
+def test_earlier_network_defaults_are_localized_again(tmp_path, fake):
+    """Files made with the network's defaults before 2026-11-28 (peak_th 8,
+    no evidence test) are localized again with the current ones (peak_th
+    is also the per-trial peaks' threshold, and every later stage checks
+    the hash of the one before), so a run never mixes the two; the earlier
+    defaults given as options keep the files."""
+    old = replace(NET, peak_th=8.0, min_source_event_rate=0.0)
+    s = SiloSession.open(make_session(tmp_path / "s"))
+    bdir = write_baselines(tmp_path / "s", tmp_path / "b")
+    silo.localize(s, old, EX, baseline_dir=bdir)
+    assert silo.localize_jobs(s, old, baseline_dir=bdir) == []
+    every = silo.localize_jobs(s, NET, baseline_dir=bdir, overwrite=True)
+    assert len(silo.localize_jobs(s, NET, baseline_dir=bdir)) == len(every)
+    assert old.stage_settings("collect") != NET.stage_settings("collect")
+    assert old.stage_settings("solve") == NET.stage_settings("solve")
+
+
+def test_collect_refuses_another_seed_threshold(tmp_path, fake):
+    """A standalone collect of a folder seeded with the network's earlier
+    default (peak_th 8) is refused under today's (3), which would record
+    peakth 3 and judge the sources' evidence against it; the earlier
+    settings collect it."""
+    old = replace(NET, peak_th=8.0, min_source_event_rate=0.0)
+    s = SiloSession.open(make_session(tmp_path / "s"))
+    bdir = write_baselines(tmp_path / "s", tmp_path / "b")
+    silo.localize(s, old, EX, baseline_dir=bdir)
+    silo.plan(s, old, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, old, EX, baseline_dir=bdir)
+    for job in silo_solve.dispatch(s, old, 3, EX):
+        silo_solve.solve_job(job, execution=EX)
+    with pytest.raises(ValueError, match="seeded with peak_th=8.*--peak-th 8"):
+        silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+    record = silo_collect.collect(s, old, EX, baseline_dir=bdir)
+    assert record is not None
+    with h5py.File(s.out_dir / "experiment_summary.h5", "r") as f:
+        assert float(np.ravel(f["params/peakth"][()])[0]) == 8.0
+
+
+def test_collect_refuses_another_seed_acceptance(tmp_path, fake):
+    """A standalone collect of a plan seeded with the null threshold is
+    refused under the image threshold (whose evidence test would exempt
+    strong seeds that the null mode judges); its own settings collect
+    it."""
+    null = replace(NET, seed_acceptance="null_sd", localization_keep_null=True)
+    assert null.evidence_judge_below is None
+    s = SiloSession.open(make_session(tmp_path / "s"))
+    bdir = write_baselines(tmp_path / "s", tmp_path / "b")
+    silo.localize(s, null, EX, baseline_dir=bdir)
+    silo.plan(s, null, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, null, EX, baseline_dir=bdir)
+    for job in silo_solve.dispatch(s, null, 3, EX):
+        silo_solve.solve_job(job, execution=EX)
+    with pytest.raises(ValueError, match="seed_acceptance='null_sd'"):
+        silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+    assert silo_collect.collect(s, null, EX, baseline_dir=bdir) is not None
 
 
 def test_unrecorded_network_localization_is_redone(tmp_path, fake):

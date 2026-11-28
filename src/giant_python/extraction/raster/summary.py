@@ -33,10 +33,12 @@ from .kinetics import (
     KineticsTest,
     mean_snr,
     reject_fast_sources,
+    source_minutes,
     weak_sources,
 )
 from .plan import ExtractionPlan
 from .results import TrialOutcome
+from .seeding import seed_heights
 from .trial_data import upsample_motion
 
 TrialSource = Union[None, TrialOutcome, Callable[[], TrialOutcome]]
@@ -154,17 +156,24 @@ def kinetics_test(
     analyze_hz: float,
     min_score: float,
     min_snr: float = 0.0,
-    min_events: int = 0,
+    min_event_rate: float = 0.0,
+    judge_below: Optional[float] = None,
 ) -> KineticsTest:
     """Run the kinetics test on a path (``rejectFastSources``).
 
     The activity channel's least-squares traces of every extracted trial
     are scored; the result is stored in ``result.kinetics``. With
-    ``min_snr`` or ``min_events`` above 0 the evidence test
+    ``min_snr`` or ``min_event_rate`` (events per minute) above 0 the
+    evidence test
     (:func:`~giant_python.extraction.raster.kinetics.weak_sources`, not in
     MATLAB) removes the weak sources too. The event criterion is skipped
     when the kinetics test counts no events at all: no trial has traces,
-    or the sensor's decay is under 3 frames.
+    or the sensor's decay is under 3 frames. With ``judge_below`` the
+    evidence test judges only the sources whose seed height in the plan's
+    combined image
+    (:func:`~giant_python.extraction.raster.seeding.seed_heights`, robust
+    SDs) is below it, or unknown; stronger seeds are kept whatever their
+    evidence.
     """
     traces, snrs = [], []
     for t in range(len(result.trials)):
@@ -174,14 +183,28 @@ def kinetics_test(
             snrs.append(out.activity.snr)
     n = result.plan.n_sources
     kin = reject_fast_sources(traces, n, tau_s, analyze_hz, min_score)
-    if min_snr > 0 or min_events > 0:
+    if min_snr > 0 or min_event_rate > 0:
         counted = any(np.size(t) for t in traces) and (
             int(np.floor(tau_s * analyze_hz + 0.5)) >= 3
         )
         kin.snr = mean_snr(snrs, n)
+        kin.event_rate = np.full(n, np.nan)
+        if counted:
+            minutes = source_minutes(traces, n, analyze_hz)
+            ok = minutes > 0
+            kin.event_rate[ok] = kin.n_events[ok] / minutes[ok]
         kin.weak = weak_sources(
-            kin.snr, kin.n_events, min_snr, min_events if counted else 0
+            kin.snr,
+            kin.event_rate,
+            min_snr,
+            min_event_rate if counted else 0.0,
         )
+        if judge_below is not None:
+            plan = result.plan
+            kin.seed_height = seed_heights(
+                plan.act_im, plan.source_rows, plan.source_cols
+            )
+            kin.weak &= ~(kin.seed_height >= judge_below)
         kin.keep = kin.keep & ~kin.weak
     result.kinetics = kin
     return result.kinetics
@@ -336,6 +359,10 @@ def _write_path(  # noqa: C901
             ew.put(
                 f"{name}/sources/rejected/SNR",
                 kin.snr[rej].reshape(-1, 1).astype(np.float64),
+            )
+            ew.put(
+                f"{name}/sources/rejected/event_rate",
+                kin.event_rate[rej].reshape(-1, 1).astype(np.float64),
             )
 
     # frame_info, global and user-ROI traces, and the sources' traces

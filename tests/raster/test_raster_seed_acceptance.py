@@ -252,17 +252,75 @@ def test_silo_params_null_acceptance():
 
 
 def test_silo_params_evidence_test():
-    """The evidence test is off by default and reaches only the collect
-    stage's settings when on."""
+    """The evidence test is off by default with MATLAB's baseline (on with
+    the network's: min_source_event_rate 2 per minute) and reaches only the
+    collect stage's settings when on."""
     default = SiloParams()
-    assert default.min_source_snr == 0 and default.min_source_events == 0
+    assert default.min_source_snr == 0 and default.min_source_event_rate == 0
     assert "min_source_snr" not in default.stage_settings("collect")
-    on = SiloParams(min_source_snr=2.0, min_source_events=3)
+    assert "min_source_event_rate" not in default.stage_settings("collect")
+    net = SiloParams(baseline_source="network")
+    assert net.min_source_snr == 0 and net.min_source_event_rate == 2.0
+    assert net.stage_settings("collect")["min_source_event_rate"] == 2.0
+    assert "min_source_event_rate" not in net.stage_settings("plan")
+    on = SiloParams(min_source_snr=2.0, min_source_event_rate=1.5)
     assert on.stage_settings("collect")["min_source_snr"] == 2.0
     assert on.to_matlab(2, 80.0)["minSourceSNR"] == 2.0
-    for bad in (dict(min_source_snr=-1.0), dict(min_source_events=1.5)):
+    assert on.to_matlab(2, 80.0)["minSourceEventRate"] == 1.5
+    for bad in (dict(min_source_snr=-1.0), dict(min_source_event_rate=-1)):
         with pytest.raises(ValueError):
             SiloParams(**bad)
+
+
+def test_seed_heights():
+    """A source's seed height: the second-largest 3 x 3 value around its
+    pixel, in robust SDs above the image's median (NaN left out)."""
+    from giant_python.extraction.raster.peaks import _MAD_SCALE
+    from giant_python.extraction.raster.seeding import seed_heights
+
+    rng = np.random.default_rng(3)
+    im = rng.standard_normal((40, 50))
+    mu = np.median(im)
+    sigma = np.median(np.abs(im - mu)) / _MAD_SCALE
+    im[10, 10], im[10, 11] = 50.0, 9.0 * sigma + mu  # second largest: 9 SDs
+    im[0, 0], im[0, 1], im[1, 0], im[1, 1] = 40.0, 30.0, np.nan, np.nan
+    h = seed_heights(im, np.array([10, 0, 25]), np.array([10, 0, 30]))
+    # the planted values barely move the image's median and MAD
+    vals = im[np.isfinite(im)]
+    mu = np.median(vals)
+    sigma = np.median(np.abs(vals - mu)) / _MAD_SCALE
+    win = np.sort(im[24:27, 29:32].ravel())
+    np.testing.assert_allclose(
+        h, [(im[10, 11] - mu) / sigma, (30.0 - mu) / sigma,
+            (win[-2] - mu) / sigma]
+    )
+    assert np.isnan(seed_heights(np.full((5, 5), np.nan), [2], [2])).all()
+    assert np.isnan(seed_heights(np.ones((5, 5)), [2], [2])).all()
+
+
+def test_silo_params_evidence_margin():
+    """The evidence test judges sources seeded below peak_th + 2 by
+    default; the margin enters the collect hash and the params struct only
+    when the test is on, so MATLAB's settings keep both."""
+    m = SiloParams()
+    assert m.evidence_margin == 2.0 and not m.evidence_test
+    assert "evidence_margin" not in m.stage_settings("collect")
+    assert "evidenceMargin" not in m.to_matlab(2, 80.0)
+    net = SiloParams(baseline_source="network")
+    assert net.evidence_test and net.evidence_judge_below == 5.0
+    assert net.stage_settings("collect")["evidence_margin"] == 2.0
+    assert net.to_matlab(2, 80.0)["evidenceMargin"] == 2.0
+    every = SiloParams(baseline_source="network", evidence_margin=None)
+    assert every.evidence_judge_below is None
+    assert every.to_matlab(2, 80.0)["evidenceMargin"] == np.inf
+    assert every.stage_settings("collect") != net.stage_settings("collect")
+    with pytest.raises(ValueError):
+        SiloParams(evidence_margin=-1.0)
+    # the null seed thresholds do not count in the image's robust SDs
+    # above peak_th: the evidence test then judges every source
+    for mode in ("null", "null_sd"):
+        p = SiloParams(baseline_source="network", seed_acceptance=mode)
+        assert p.evidence_test and p.evidence_judge_below is None
 
 
 def test_null_sd_acceptance():

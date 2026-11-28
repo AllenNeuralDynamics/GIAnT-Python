@@ -151,6 +151,7 @@ def path_result(
         _recorded,
         check_plan_alignment,
         check_plan_localizations,
+        check_plan_seeding,
         check_plan_support,
         read_user_rois,
     )
@@ -165,6 +166,7 @@ def path_result(
         "baseline_source",
     )
     plan = read_plan(pf)
+    check_plan_seeding(f"the plan {pf.name}", plan, params)
     check_plan_support(f"the plan {pf.name}", plan, params)
     check_plan_alignment(f"the plan {pf.name}", plan, params)
     labels, masks = read_user_rois(pf)
@@ -286,7 +288,8 @@ def collect(
             params.analyze_hz,
             params.min_kinetic_score,
             params.min_source_snr,
-            params.min_source_events,
+            params.min_source_event_rate,
+            params.evidence_judge_below,
         )
         kept[d + 1] = (int(kin.keep.sum()), int(kin.keep.size))
     t1 = time.perf_counter()

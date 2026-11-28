@@ -235,6 +235,13 @@ class KineticsTest:
         it was not run.
     snr : ndarray, shape (sources,), optional
         Every source's SNR averaged over trials, when the evidence test ran.
+    event_rate : ndarray, shape (sources,), optional
+        Every source's events per minute of its trace
+        (:func:`source_minutes`), when the evidence test ran.
+    seed_height : ndarray, shape (sources,), optional
+        Every source's seed height in robust SDs
+        (:func:`~giant_python.extraction.raster.seeding.seed_heights`),
+        when the evidence test judged only the weaker seeds.
     """
 
     keep: np.ndarray
@@ -242,6 +249,8 @@ class KineticsTest:
     n_events: np.ndarray
     weak: Optional[np.ndarray] = None
     snr: Optional[np.ndarray] = None
+    event_rate: Optional[np.ndarray] = None
+    seed_height: Optional[np.ndarray] = None
 
     @property
     def kept_score(self) -> np.ndarray:
@@ -323,32 +332,56 @@ def mean_snr(
         return np.where(count > 0, total / count, np.nan)
 
 
+def source_minutes(
+    traces: Sequence[Optional[np.ndarray]], n_sources: int, analyze_hz: float
+) -> np.ndarray:
+    """Minutes of each source's trace in which the kinetics test looks for
+    events: its frames that were not discarded (not NaN) in the trials with
+    traces (as for :func:`source_kinetics`), at ``analyze_hz``.
+
+    Returns
+    -------
+    ndarray, shape (sources,)
+    """
+    frames = np.zeros(n_sources)
+    for t in traces:
+        if t is None or np.size(t) == 0:
+            continue
+        t = np.asarray(t, dtype=np.float64)
+        frames += (~np.isnan(t)).sum(axis=1)
+    return frames / float(analyze_hz) / 60.0
+
+
 def weak_sources(
     snr: np.ndarray,
-    n_events: np.ndarray,
+    event_rate: np.ndarray,
     min_snr: float = 0.0,
-    min_events: int = 0,
+    min_event_rate: float = 0.0,
 ) -> np.ndarray:
     """Sources whose extracted activity is too weak (the evidence test).
 
     A source is weak when its SNR averaged over trials (:func:`mean_snr`) is
     below ``min_snr`` or when the kinetics test found fewer than
-    ``min_events`` events in its trace (:func:`source_kinetics`); 0 turns
-    either criterion off. A source without an SNR (no extracted trial) is
-    not judged by it; the caller turns the event criterion off where the
-    kinetics test could not count events (see
+    ``min_event_rate`` events per minute of its trace (its events,
+    :func:`source_kinetics`, over :func:`source_minutes`); 0 turns either
+    criterion off. A rate rather than a count, so that the criterion means
+    the same in short and long recordings. A source without an SNR or a
+    rate (NaN: no extracted trial, no valid frame) is not judged by it; the
+    caller turns the event criterion off where the kinetics test could not
+    count events (see
     :func:`~giant_python.extraction.raster.summary.kinetics_test`).
 
     Returns
     -------
     ndarray of bool, shape (sources,)
     """
-    if min_snr < 0 or min_events < 0:
-        raise ValueError("min_snr and min_events must be nonnegative")
+    if min_snr < 0 or min_event_rate < 0:
+        raise ValueError("min_snr and min_event_rate must be nonnegative")
     weak = np.zeros(np.shape(snr), bool)
     if min_snr > 0:
         with np.errstate(invalid="ignore"):
             weak |= np.asarray(snr, dtype=np.float64) < min_snr
-    if min_events > 0:
-        weak |= np.asarray(n_events) < min_events
+    if min_event_rate > 0:
+        with np.errstate(invalid="ignore"):
+            weak |= np.asarray(event_rate, dtype=np.float64) < min_event_rate
     return weak
