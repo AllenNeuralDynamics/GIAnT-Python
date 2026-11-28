@@ -21,6 +21,9 @@ orientation, zero-based coordinates)::
     /half_ims     (2, rows, cols, channels) float32: mean images of two
                   halves of the frames (MATLAB's halfIMs), when the run's
                   across-trial alignment is patchwise
+    /null_im      (draws, rows, cols) float32: the bootstrap null's activity
+                  images, calibrated like act_im, when the run's seeding
+                  needs them (``seed_acceptance='null'``)
 
 Peaks fitted later (``giant silo`` fits them in the background) go to a
 sidecar ``<name>.peaks.h5`` (``/peaks``), so that the localization file is
@@ -64,6 +67,8 @@ class LocalizationRecord:
         The file's attributes.
     half_ims : ndarray of shape (2, rows, cols, channels) or None
         Mean images of two halves of the frames, when stored.
+    null_im : ndarray of shape (draws, rows, cols) or None
+        The calibrated null activity images, when stored.
     """
 
     mean_im: np.ndarray
@@ -73,6 +78,7 @@ class LocalizationRecord:
     peaks: Optional[np.ndarray]
     attrs: dict
     half_ims: Optional[np.ndarray] = None
+    null_im: Optional[np.ndarray] = None
 
     def trial_images(self):
         """The plan stage's input
@@ -80,7 +86,12 @@ class LocalizationRecord:
         from .plan import TrialImages
 
         return TrialImages(
-            self.mean_im, self.act_im, self.peaks, self.discard, self.half_ims
+            self.mean_im,
+            self.act_im,
+            self.peaks,
+            self.discard,
+            self.half_ims,
+            self.null_im,
         )
 
 
@@ -102,6 +113,7 @@ def write_localization(
     peaks: Optional[np.ndarray],
     attrs: dict,
     half_ims: Optional[np.ndarray] = None,
+    null_im: Optional[np.ndarray] = None,
 ) -> Path:
     """Write a localization file (written whole, then moved into place).
 
@@ -109,9 +121,9 @@ def write_localization(
     ----------
     path : str or Path
         Destination (replaced).
-    mean_im, act_im, summary, discard, peaks, half_ims :
+    mean_im, act_im, summary, discard, peaks, half_ims, null_im :
         See :class:`LocalizationRecord`; ``peaks`` None if not fitted,
-        ``half_ims`` None if not computed.
+        ``half_ims`` and ``null_im`` None if not kept.
     attrs : dict
         Attributes (``settings_hash``, ``movie``, ``path``, ``trial``,
         ``align_hz``, ``num_channels``, ``z_depth``).
@@ -141,6 +153,14 @@ def write_localization(
             if half_ims is not None:
                 f.create_dataset(
                     "half_ims", data=np.asarray(half_ims, np.float32), **opts
+                )
+            if null_im is not None:
+                f.attrs["null_im"] = 1
+                null = np.asarray(null_im, np.float32)
+                f.create_dataset(
+                    "null_im",
+                    data=null.reshape((-1,) + null.shape[-2:]),
+                    **opts,
                 )
         side = peaks_file(path)
         if side.exists():  # peaks of an earlier localization
@@ -226,6 +246,7 @@ def read_localization(
             half_ims=(
                 f["half_ims"][()] if half_ims and "half_ims" in f else None
             ),
+            null_im=f["null_im"][()] if "null_im" in f else None,
         )
     if rec.peaks is None and peaks:
         rec.peaks = _sidecar_peaks(path)

@@ -48,6 +48,9 @@ _SQRT2 = np.sqrt(2.0)
 
 #: Seed fits: MATLAB's (``"matlab"``) and the local variant (``"local"``).
 SEED_FITS = ("matlab", "local")
+#: The final amplitude test of a fitted peak: MATLAB's (``"matlab"``) or its
+#: value on its own pixel (``"pixel"``); see :func:`get_act_im_peaks`.
+AMPLITUDE_RULES = ("matlab", "pixel")
 # the local fit: pixels (Chebyshev) around its start pixel a Gaussian is
 # evaluated at (its centre stays within 1.5 px of it, and activity-image
 # peaks are narrower than a pixel); peaks within this distance of a new
@@ -236,6 +239,8 @@ def get_act_im_peaks(  # noqa: C901
     min_peak_distance: int = 1,
     fit: str = "matlab",
     merge_px: float = 0.0,
+    background: tuple[float, float] | None = None,
+    amplitude_rule: str = "matlab",
 ) -> np.ndarray:
     """Seed sources in a 2-D activity image (port of ``getActImPeaks.m``).
 
@@ -265,6 +270,18 @@ def get_act_im_peaks(  # noqa: C901
         that does not move). An activity image's peak that falls between
         pixels is otherwise often fitted as two peaks less than a pixel
         apart.
+    background : (float, float), optional
+        The centre and scale that ``peak_th`` counts from, in place of the
+        image's median and robust SD (MATLAB's); e.g. those of a null image
+        (:func:`~giant_python.extraction.raster.seeding.null_threshold`).
+        The centre is also the level the Gaussians are fitted above.
+    amplitude_rule : {'matlab', 'pixel'}
+        The final test of every fitted peak. ``'matlab'``: its amplitude
+        times ``pi/2 s^2 erf(1/(sqrt(2) s))^2`` (the Gaussian's mean over a
+        2 x 2 pixel square) must reach the threshold, which a peak narrower
+        than a pixel (the activity image's usual peak) fails at up to about
+        four times the threshold. ``'pixel'`` (not in MATLAB): the fitted
+        Gaussian's own value on the pixel its centre falls in must reach it.
 
     Returns
     -------
@@ -274,6 +291,11 @@ def get_act_im_peaks(  # noqa: C901
     """
     if fit not in SEED_FITS:
         raise ValueError(f"fit must be one of {SEED_FITS}, not {fit!r}")
+    if amplitude_rule not in AMPLITUDE_RULES:
+        raise ValueError(
+            f"amplitude_rule must be one of {AMPLITUDE_RULES}, "
+            f"not {amplitude_rule!r}"
+        )
     if not merge_px >= 0:
         raise ValueError("merge_px must be nonnegative")
     act = np.asarray(act_im, dtype=float)
@@ -286,9 +308,16 @@ def get_act_im_peaks(  # noqa: C901
     min_peak_distance = max(1, int(min_peak_distance))
     buffer_se = np.ones((2 * min_peak_distance - 1,) * 2, bool)
     finite = ~np.isnan(act)
-    vals = act[finite]
-    mu_bg = float(np.median(vals))
-    sigma_bg = float(np.median(np.abs(vals - mu_bg))) / _MAD_SCALE
+    if background is None:
+        vals = act[finite]
+        mu_bg = float(np.median(vals))
+        sigma_bg = float(np.median(np.abs(vals - mu_bg))) / _MAD_SCALE
+    else:
+        mu_bg, sigma_bg = (float(v) for v in background)
+        if not (np.isfinite(mu_bg) and sigma_bg > 0):
+            raise ValueError(
+                "background must be a finite centre and scale > 0"
+            )
     peak_thresh = mu_bg + peak_th * sigma_bg
 
     explored = act * ~excl
@@ -301,7 +330,15 @@ def get_act_im_peaks(  # noqa: C901
     if fit == "local":
         local = _LocalFit(act, (mu_bg, sigma_bg), peak_th, excl, buffer_se)
         theta = local.run(p_tmp, merge_px)
-        return _finish(theta, peak_thresh, excl, exclusion_mask is not None)
+        return _finish(
+            theta,
+            peak_thresh,
+            excl,
+            exclusion_mask is not None,
+            amplitude_rule,
+            mu_bg,
+            _pixel_bounds(finite) if amplitude_rule == "pixel" else None,
+        )
 
     p_y, p_x = _find_f(p_tmp)
     amp = act[(p_y - 1).astype(int), (p_x - 1).astype(int)] * _AMP_SCALE
@@ -393,7 +430,15 @@ def get_act_im_peaks(  # noqa: C901
                 res_im, buffer_mask, excl, reject, fit_support, sel, peak_th
             )
 
-    return _finish(theta, peak_thresh, excl, exclusion_mask is not None)
+    return _finish(
+        theta,
+        peak_thresh,
+        excl,
+        exclusion_mask is not None,
+        amplitude_rule,
+        mu_bg,
+        _pixel_bounds(finite) if amplitude_rule == "pixel" else None,
+    )
 
 
 def _next_to_another(theta, idx, merge_px):
@@ -405,14 +450,55 @@ def _next_to_another(theta, idx, merge_px):
     return bool(d.min() < merge_px)
 
 
-def _finish(theta, peak_thresh, excl, masked):
+def _pixel_bounds(finite: np.ndarray):
+    """1-based ``(lo, hi)`` edges of every row and of every column, as the
+    local fit integrates them: from the rows and columns that hold data
+    (:func:`_edges`, so a pixel beside a gap is wider), unit pixels
+    elsewhere. (MATLAB's fit takes the edges of the pixels it fits, a
+    subset; they differ only beside gaps of that subset.)"""
+    out = []
+    for axis in (1, 0):  # rows (any column finite), then columns
+        n = finite.shape[1 - axis]
+        lo = np.arange(n) + 0.5
+        hi = lo + 1.0
+        used = np.flatnonzero(finite.any(axis=axis))
+        if used.size:
+            e = _edges(used + 1.0)
+            lo[used], hi[used] = e[:-1], e[1:]
+        out.append((lo, hi))
+    return out
+
+
+def _finish(
+    theta, peak_thresh, excl, masked, rule="matlab", mu_bg=0.0, bounds=None
+):
     """Drop peaks too small for the threshold and (if ``masked``) peaks
-    whose centre ended in the exclusion mask; 0-based ``N x 4``."""
-    s = theta[:, 3]
-    adj_thresh = peak_thresh / (
-        np.pi / 2 * s**2 * erf(1.0 / (_SQRT2 * s)) ** 2
-    )
-    theta = theta[~(theta[:, 0] < adj_thresh)]
+    whose centre ended in the exclusion mask; 0-based ``N x 4``.
+
+    ``rule`` 'matlab': getActImPeaks' test; 'pixel': the peak's own value
+    (above ``mu_bg``, the level it was fitted above) on the pixel its centre
+    falls in, integrated over that pixel's edges in the fits (``bounds``
+    from :func:`_pixel_bounds`; unit pixels when None; see
+    :func:`get_act_im_peaks`)."""
+    s = np.maximum(theta[:, 3], np.finfo(float).eps)
+    if rule == "pixel":
+        iy, ix = _rounded_index(theta, excl.shape)
+        if bounds is None:
+            (ylo, yhi), (xlo, xhi) = (
+                (np.arange(n) + 0.5, np.arange(n) + 1.5) for n in excl.shape
+            )
+        else:
+            (ylo, yhi), (xlo, xhi) = bounds
+        own = theta[:, 0] * (
+            _integral(ylo[iy], yhi[iy], theta[:, 1], s)
+            * _integral(xlo[ix], xhi[ix], theta[:, 2], s)
+        )
+        theta = theta[~(own + mu_bg < peak_thresh)]
+    else:
+        adj_thresh = peak_thresh / (
+            np.pi / 2 * s**2 * erf(1.0 / (_SQRT2 * s)) ** 2
+        )
+        theta = theta[~(theta[:, 0] < adj_thresh)]
     if masked and theta.shape[0]:
         # a fit may move a centre up to 1.5 px into the mask (not in MATLAB)
         iy, ix = _rounded_index(theta, excl.shape)
