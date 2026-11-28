@@ -26,6 +26,11 @@ take pixels or trials away from the other images; the report counts those
 windows and trials. User ROIs are also read out as GIAnT-MATLAB's
 ``user_rois/per_trial_F0`` (``readout/user_any``), whose windows can differ
 between trials and images.
+
+Each image's normalized source sizes then go through the trend tests of
+:mod:`~giant_python.spine.trends` (step, brief, and step beyond the shared
+trend, with permutation p-values and Benjamini-Hochberg q-values per
+path), over the trials in which the image has values.
 """
 
 from __future__ import annotations
@@ -48,9 +53,17 @@ from .product import FORMAT_VERSION, _code_version, write_product
 from .readout import common_valid, mask_mean, norm_log, project
 from .rois import masks_roiset, sources_roiset
 from .summary_io import RunSummary
+from .trends import (
+    check_trend_settings,
+    image_blocks,
+    trend_tests,
+    trial_blocks,
+)
 
 _TRIAL_RE = re.compile(r"TRIAL0*(\d+)")
 _REGISTERED = "_REGISTERED"
+# version of the network F0 cache's layout (part of its key)
+_F0_CACHE_FORMAT = 1
 
 
 def _stem(name) -> str | None:
@@ -165,6 +178,95 @@ def _normalize(r: dict, images: dict, window: list, used) -> dict:
             full[used[rows]] = norm_log(r[name][used[rows]], ok & cov)
         norm[name] = full
     return norm
+
+
+def _trends(n, norm: dict, acq, opts: dict, workers, say, note) -> tuple:
+    """The trend tests of every image's normalized source sizes
+    (:func:`~giant_python.spine.trends.trend_tests`), over the trials in
+    which the image has values. ``say`` gets progress lines, ``note`` the
+    notes stored with the summary (trials without acquisition numbers).
+
+    Returns
+    -------
+    trends : dict
+        Per image, the arrays of the product's ``trends`` group (trial
+        positions as zero-based trial-table indices, -1 where untested or
+        where a test found no split or run) and its attributes.
+    summary : dict
+        Per image, the tested sources, the shared mode's variance share and
+        the counts of the tests.
+    """
+    trends: dict = {}
+    summary: dict = {}
+    n_trials = len(acq)
+    unknown = np.asarray(acq) < 0
+    # without any acquisition number, the trial table's order stands in for
+    # it; with some, an unnumbered trial stays a block of its own in every
+    # image, whichever trials the image covers
+    numbers = np.arange(n_trials) if unknown.all() else np.asarray(acq)
+    # blocks of the whole path; an image's trials split them further where
+    # it skips a trial (image_blocks)
+    path_blocks = trial_blocks(numbers, unknown_consecutive=False)
+    if unknown.all():
+        note(
+            f"Path{n}: no trial has an acquisition number; the brief test "
+            "takes the trial table's order"
+        )
+    elif unknown.any():
+        note(
+            f"Path{n}: trial(s) "
+            f"{', '.join(str(t + 1) for t in np.flatnonzero(unknown))} have "
+            "no acquisition number; the brief test leaves them out of its "
+            "runs and their neighbours"
+        )
+    for name, vals in norm.items():
+        if name == "ok":
+            continue
+        rows = np.flatnonzero(np.isfinite(vals).any(axis=1))
+        if rows.size < 3:
+            continue
+        say(
+            f"Path{n}: trend tests of {name} ({int(norm['ok'].sum())} "
+            f"sources, {opts['n_perm']} trial orders)"
+        )
+        r = trend_tests(
+            vals[rows],
+            norm["ok"],
+            numbers[rows],
+            n_perm=opts["n_perm"],
+            fdr_q=opts["fdr_q"],
+            max_brief=opts["max_brief"],
+            seed=opts["seed"],
+            workers=workers,
+            blocks=image_blocks(path_blocks, rows),
+        )
+        skip = ("counts", "var_share", "shared_v", "blocks", "brief_start")
+        arrays = {
+            k: r[k] for k in r if k not in skip and not k.endswith("_k")
+        }
+        # trial positions as trial-table indices
+        for test in ("step", "resid"):
+            k = r[f"{test}_k"]
+            arrays[f"{test}_after"] = np.where(
+                k > 0, rows[np.maximum(k - 1, 0)], -1
+            )
+        bs = r["brief_start"]
+        arrays["brief_first"] = np.where(bs >= 0, rows[np.maximum(bs, 0)], -1)
+        v = np.full(n_trials, np.nan)
+        v[rows] = r["shared_v"]
+        blocks = np.full(n_trials, -1, np.int64)
+        blocks[rows] = r["blocks"]
+        arrays.update({"shared_v": v, "blocks": blocks, "trials": rows})
+        trends[name] = {
+            "arrays": arrays,
+            "attrs": dict(opts, var_share=r["var_share"]),
+        }
+        summary[name] = {
+            "tested": int(r["tested"].sum()),
+            "var_share": round(float(r["var_share"]), 4),
+            "counts": r["counts"],
+        }
+    return trends, summary
 
 
 def table_trials(table_path, path: int) -> tuple[list, np.ndarray]:
@@ -351,6 +453,11 @@ def make_spine_summary(  # noqa: C901
     images_only: bool = False,
     affine_base=None,
     gain_work_dir=None,
+    n_perm: int = 20000,
+    fdr_q: float = 0.1,
+    max_brief: int = 3,
+    seed: int = 1,
+    workers: int | None = None,
     progress=None,
 ) -> dict:
     """Read out spine sizes from a run and write a ``spine_summary`` file.
@@ -391,6 +498,12 @@ def make_spine_summary(  # noqa: C901
     affine_base : {0, 1, None}
         Index base of the run's affine trial maps (see
         :meth:`~giant_python.spine.summary_io.RunSummary.trial_map`).
+    n_perm, fdr_q, max_brief, seed : int, float, int, int
+        The trend tests' random trial orders per source (0: statistics
+        only), FDR level, longest brief run and seed
+        (:func:`~giant_python.spine.trends.trend_tests`).
+    workers : int, optional
+        Threads for the permutations (the results do not depend on it).
     progress : callable, optional
         Called with a message string.
 
@@ -405,6 +518,7 @@ def make_spine_summary(  # noqa: C901
     """
     if (baseline_dir is None) != (moco_dir is None):
         raise ValueError("give both --baseline-dir and --moco-dir, or neither")
+    check_trend_settings(n_perm, fdr_q, max_brief, seed)
     if gain_work_dir is not None and baseline_dir is None:
         raise ValueError("--gain-work-dir needs --baseline-dir")
     run = RunSummary(run_dir)
@@ -418,13 +532,22 @@ def make_spine_summary(  # noqa: C901
     out_dir = Path(out_dir)
     cache_dir = Path(cache_dir) if cache_dir else out_dir / "cache"
     paths = list(paths) if paths else run.paths
-    settings = {
+    f0_settings = {
         "trim_s": float(trim_s),
         "align_hz": float(align_hz),
         "motion_thresh": float(motion_thresh),
         "discard_initial_s": float(discard_initial_s),
-        "format_version": FORMAT_VERSION,
+        "format_version": _F0_CACHE_FORMAT,
     }
+    trend_opts = {
+        "n_perm": int(n_perm),
+        "fdr_q": float(fdr_q),
+        "max_brief": int(max_brief),
+        "seed": int(seed),
+    }
+    settings = dict(
+        f0_settings, format_version=FORMAT_VERSION, trends=trend_opts
+    )
     say = progress or (lambda msg: None)
     report: dict = {"paths": {}}
     inputs: dict = {
@@ -467,7 +590,7 @@ def make_spine_summary(  # noqa: C901
                 moco_dir,
                 run.trial_map(n, affine_base),
                 shape,
-                settings,
+                f0_settings,
                 prog,
             )
             stacks[n] = st
@@ -602,6 +725,7 @@ def make_spine_summary(  # noqa: C901
             rois["user"] = masks_roiset(masks, labels)
         readout: dict = {}
         normalized: dict = {}
+        trends: dict = {}
         for set_name, rs in rois.items():
             r: dict = {}
             if set_name == "user":
@@ -639,6 +763,10 @@ def make_spine_summary(  # noqa: C901
             if set_name != "sources" or used.size == 0:
                 continue
             normalized[set_name] = _normalize(r, images, window, used)
+            trends[set_name], summ = _trends(
+                n, normalized[set_name], acq, trend_opts, workers, say, note
+            )
+            report["paths"].setdefault(n, {})["trends"] = summ
         activity = {}
         if "sources" in rois:
             activity["sources"] = run.activity(n)
@@ -657,6 +785,7 @@ def make_spine_summary(  # noqa: C901
             "rois": rois,
             "readout": readout,
             "normalized": normalized,
+            "trends": trends,
             "activity": activity,
         }
         report["paths"].setdefault(n, {}).update(
