@@ -20,6 +20,7 @@ import sys
 from typing import Optional, Sequence
 
 from .cli_silo import SILO_COMMANDS, add_silo_commands, run_silo_command
+from .cli_spine import SPINE_COMMANDS, add_spine_commands, run_spine_command
 from .models.params import (
     AnnotationOptions,
     BandSiloParams,
@@ -304,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_silo_options(extract)
 
     add_silo_commands(subparsers)
+    add_spine_commands(subparsers)
     _add_view_command(subparsers)
     return parser
 
@@ -545,6 +547,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "view": _cmd_view,
     }
     handlers.update({name: run_silo_command for name in SILO_COMMANDS})
+    handlers.update({name: run_spine_command for name in SPINE_COMMANDS})
     if args.command is None:
         parser.print_help()
         return 2

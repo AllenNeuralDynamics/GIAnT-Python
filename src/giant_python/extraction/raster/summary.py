@@ -29,7 +29,12 @@ import h5py
 import numpy as np
 
 from ...io.hdf5 import write_matlab_value
-from .kinetics import KineticsTest, reject_fast_sources
+from .kinetics import (
+    KineticsTest,
+    mean_snr,
+    reject_fast_sources,
+    weak_sources,
+)
 from .plan import ExtractionPlan
 from .results import TrialOutcome
 from .trial_data import upsample_motion
@@ -144,21 +149,41 @@ class PathResult:
 
 
 def kinetics_test(
-    result: PathResult, tau_s: float, analyze_hz: float, min_score: float
+    result: PathResult,
+    tau_s: float,
+    analyze_hz: float,
+    min_score: float,
+    min_snr: float = 0.0,
+    min_events: int = 0,
 ) -> KineticsTest:
     """Run the kinetics test on a path (``rejectFastSources``).
 
     The activity channel's least-squares traces of every extracted trial
-    are scored; the result is stored in ``result.kinetics``.
+    are scored; the result is stored in ``result.kinetics``. With
+    ``min_snr`` or ``min_events`` above 0 the evidence test
+    (:func:`~giant_python.extraction.raster.kinetics.weak_sources`, not in
+    MATLAB) removes the weak sources too. The event criterion is skipped
+    when the kinetics test counts no events at all: no trial has traces,
+    or the sensor's decay is under 3 frames.
     """
-    traces = []
+    traces, snrs = [], []
     for t in range(len(result.trials)):
         out = result.outcome(t)
         if out is not None and out.activity is not None:
             traces.append(np.asarray(out.activity.ls[0], dtype=np.float64))
-    result.kinetics = reject_fast_sources(
-        traces, result.plan.n_sources, tau_s, analyze_hz, min_score
-    )
+            snrs.append(out.activity.snr)
+    n = result.plan.n_sources
+    kin = reject_fast_sources(traces, n, tau_s, analyze_hz, min_score)
+    if min_snr > 0 or min_events > 0:
+        counted = any(np.size(t) for t in traces) and (
+            int(np.floor(tau_s * analyze_hz + 0.5)) >= 3
+        )
+        kin.snr = mean_snr(snrs, n)
+        kin.weak = weak_sources(
+            kin.snr, kin.n_events, min_snr, min_events if counted else 0
+        )
+        kin.keep = kin.keep & ~kin.weak
+    result.kinetics = kin
     return result.kinetics
 
 
@@ -301,6 +326,17 @@ def _write_path(  # noqa: C901
             f"{name}/sources/rejected/kinetic_n_events",
             kin.n_events[rej].reshape(-1, 1).astype(np.int32),
         )
+        if kin.weak is not None:
+            # not in MATLAB's schema: which were removed by the evidence
+            # test (1) rather than the kinetics test (0), and their SNR
+            ew.put(
+                f"{name}/sources/rejected/weak",
+                kin.weak[rej].reshape(-1, 1).astype(np.int8),
+            )
+            ew.put(
+                f"{name}/sources/rejected/SNR",
+                kin.snr[rej].reshape(-1, 1).astype(np.float64),
+            )
 
     # frame_info, global and user-ROI traces, and the sources' traces
     fi = {
