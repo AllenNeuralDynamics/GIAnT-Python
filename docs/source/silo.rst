@@ -170,14 +170,15 @@ minutes) and on three recordings (180 s each; GIAnT-Python#58 and #51):
 with the network baseline, threshold 3 and 2 events per minute below
 height 5 find isolated sources at 0.28 x the standard event sizes in all
 cases (62% at threshold 8) and dim neighbours of bright sources at 0.28 /
-0.5 x in 33% / 75% (0% / 50%), at 3.5 false sources per path on the GFP
+0.5 x in 42% / 75% (0% / 50%), at 5 false sources per path on the GFP
 control (none at threshold 8; 22 at threshold 3 without the evidence
-test). On the recordings they keep 2.0-3.0 times the sources of threshold
-8, at 1.6-3.0 times the extraction CPU. Without the exemption of strong
-seeds the rate would also remove 10 / 3 of threshold 8's sources on the
-dense recording (780125; with it 1 / 0), whose events their new
-neighbours share; the exemption keeps about 6 more seeds per path beside
-bright injected sources on the dim copy.
+test, 3 without the exemption). On the recordings they keep 2.1-3.0 times
+the sources of threshold 8, every one of those among them, at 1.6-3.0
+times the extraction CPU. Without the exemption of strong seeds the rate
+would remove 10 / 3 of threshold 8's sources on the dense recording
+(780125), whose events their new neighbours share; the exemption keeps
+about 6 more seeds per path beside bright injected sources on the dim
+copy.
 The null modes behaved like a lower ``peak_th``, since the image's robust
 SD was 1.0-1.7 times its null's on every set. Dim sources 2-4 pixels from
 a much brighter one mostly have no maximum of their own in the activity
