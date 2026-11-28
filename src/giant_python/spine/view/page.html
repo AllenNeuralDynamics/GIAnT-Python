@@ -83,6 +83,8 @@ canvas { display: block; }
 #srctable { border-collapse: collapse; width: 100%; font-size: 12px; background: var(--surface-1); }
 #srctable th, #srctable td { padding: 3px 6px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #srctable th { cursor: pointer; color: var(--text-muted); font-weight: 500; position: sticky; top: 0; background: var(--surface-1); }
+#srctable th button { all: unset; cursor: pointer; }
+#srctable th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
 #srctable th.grp { cursor: default; text-align: center; border-bottom: 0; }
 #srctable td:nth-child(2), #srctable th:nth-child(2) { text-align: left; }
 #srctable tr:hover td { background: var(--surface-2); cursor: pointer; }
@@ -353,6 +355,9 @@ function fillSelect(sel, items, keep) {
 
 async function loadPath(n, near, view) {
   const g = ++S.gen.path;
+  // until this path's sources and selection are in place, the old source's
+  // marks and selection must not reach the new path
+  S.loading = true; showMark();
   S.path = n; status("loading…");
   const pm = pmeta();
   const imgs = pm.images.map(x => [x.name, x.name]);
@@ -374,7 +379,7 @@ async function loadPath(n, near, view) {
   let data;
   try {
     data = await api.sources(S.prod, n);
-  } catch (e) { if (g === S.gen.path) status(e.message, true); return; }
+  } catch (e) { if (g === S.gen.path) { S.loading = false; status(e.message, true); } return; }
   if (g !== S.gen.path) return; // a newer path or product was chosen meanwhile
   S.data = data;
   S.src = Math.min(S.src, data.n - 1);
@@ -390,7 +395,8 @@ async function loadPath(n, near, view) {
   if (g !== S.gen.path) return;
   if (view) { S.view = view; drawOverlay(); }
   setTrial(S.trial, true);
-  if (S.data.n) await selectSource(s, true); else { clearSource(); status("no sources on this path"); }
+  if (S.data.n) await selectSource(s, true, true); else { clearSource(); status("no sources on this path"); }
+  if (g === S.gen.path) { S.loading = false; showMark(); }
 }
 function clearSource() {
   // no source selected: pending source requests are dropped and the source panels emptied
@@ -564,8 +570,8 @@ function drawOverlay() {
 }
 
 // ---------------------------------------------------------------- source selection, crops
-async function selectSource(k, keepTable) {
-  if (!S.data || k < 0 || k >= S.data.n) return;
+async function selectSource(k, keepTable, fromLoad) {
+  if (!S.data || k < 0 || k >= S.data.n || (S.loading && !fromLoad)) return;
   S.src = k;
   // pan only if the source is outside the view
   const [w, h] = fieldSize(); const x = (S.data.cols[k] + 0.5) * S.view.s + S.view.ox, y = (S.data.rows[k] + 0.5) * S.view.s + S.view.oy;
@@ -834,7 +840,8 @@ function buildTable() {
   const tb = $("srctable");
   const q = tr ? tr.attrs.fdr_q : 0.1;
   let html = `<thead><tr><th class="grp" colspan="3"></th><th class="grp" colspan="4">step</th><th class="grp" colspan="4">brief</th><th class="grp" colspan="4">beyond shared trend</th><th class="grp" colspan="2"></th></tr><tr>`;
-  for (const [key, name] of COLS) html += `<th data-k="${key}">${name}${S.sortKey === key ? (S.sortDir > 0 ? " ▲" : " ▼") : ""}</th>`;
+  // a button in each header, so that sorting works from the keyboard too
+  for (const [key, name] of COLS) html += `<th data-k="${key}"><button type="button" title="Sort by this column">${name}${S.sortKey === key ? (S.sortDir > 0 ? " ▲" : " ▼") : ""}</button></th>`;
   html += "</tr></thead><tbody>";
   const idx = [...Array(S.data.n).keys()];
   const key = S.sortKey;
@@ -888,14 +895,14 @@ function showMark() {
   const m = markOf(S.src); const st = $("markstate");
   if (m && m.label) { st.textContent = m.label; st.style.color = MARK_VAR[m.label] ? css(MARK_VAR[m.label]) : ""; } else { st.textContent = "not marked"; st.style.color = css("--text-muted"); }
   $("note").value = m ? m.note || "" : "";
-  $("mtitle").innerHTML = S.src >= 0 ? `Mark <b>source ${S.data.ids[S.src] + 1}</b> (saved at once; attaches to its position)` : "Mark";
-  document.querySelectorAll(".marks button, #note").forEach(b => b.disabled = !S.meta.marks_file);
+  $("mtitle").innerHTML = S.src >= 0 && S.data && !S.loading ? `Mark <b>source ${S.data.ids[S.src] + 1}</b> (saved at once; attaches to its position)` : "Mark";
+  document.querySelectorAll(".marks button, #note").forEach(b => b.disabled = !S.meta.marks_file || !!S.loading || S.src < 0);
 }
 let markQueue = Promise.resolve();
 function setMark(label) {
   // marks go to the server one at a time, in the order they are made, each with
   // the product, path, source and note of the moment it was made
-  if (S.src < 0) return markQueue;
+  if (S.src < 0 || S.loading) return markQueue;
   const req = { prod: S.prod, path: S.path, src: S.src, label, note: label ? $("note").value : "", data: S.data };
   markQueue = markQueue.then(async () => {
     try {

@@ -455,6 +455,53 @@ def test_export_refuses_unknown_paths(product, tmp_path):
     assert not (tmp_path / "p.html").exists()
 
 
+def test_pick_sources_uses_the_strongest_test_at_the_smallest_q():
+    """Among tests tied at a source's smallest q, the largest statistic
+    breaks ties between sources."""
+    from giant_python.spine.view.export import pick_sources
+
+    tr = {
+        "step_q": [1e-3, 1e-3],
+        "step_t": [2.0, 6.0],
+        "brief_q": [1e-3, 0.5],
+        "brief_t": [20.0, 1.0],
+        "resid_q": [0.9, 0.9],
+        "resid_t": [1.0, 1.0],
+    }
+    src = {"n": 2, "trends": {"f0": tr}, "marks": {}}
+    assert pick_sources(src, "f0", 1) == [0]
+
+
+def test_marks_keep_their_order_within_a_path(product, tmp_path):
+    """Two marks with the same time that land on one source: the one
+    written later wins, whatever their rows."""
+    from giant_python.spine.rois import write_marks
+
+    store = SpineStore([(None, product)], tmp_path / "marks.csv")
+    rs = read_product(product)["paths"][1]["rois"]["sources"]
+    r, c = float(rs.rows[0]), float(rs.cols[0])
+    base = {
+        "Path": 1,
+        "Source": 1,
+        "Note": "",
+        "Col0": c,
+        "Updated": "2026-01-01 00:00:00",
+    }
+    write_marks(
+        tmp_path / "marks.csv",
+        [
+            dict(base, Label="Growing", Row0=r + 0.5),
+            dict(base, Label="Shrinking", Row0=r - 0.5),
+        ],
+    )
+    assert store.marks_for(0, 1)["by_source"][0]["label"] == "Shrinking"
+    # a write through the store keeps the order within the path
+    store.set_mark(0, 1, 1, "Unsure", "")
+    rows = read_marks(tmp_path / "marks.csv")
+    assert [m["Label"] for m in rows] == ["Growing", "Shrinking", "Unsure"]
+    assert store.marks_for(0, 1)["by_source"][0]["label"] == "Shrinking"
+
+
 def test_pick_sources_keeps_infinite_statistics_first():
     """An infinite statistic (a change without noise) ranks first among
     equal q-values."""

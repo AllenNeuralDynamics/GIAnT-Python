@@ -94,7 +94,7 @@ def pick_sources(src: dict, image: str | None, top: int) -> list:
     """Source indices for the crops: the marked ones and the ``top`` with
     the smallest q over the step, brief and beyond-trend tests of
     ``image``; ties (q at the floor of the permutations) go to the larger
-    statistic of the test that gives that q."""
+    statistic among the tests that give that q."""
     picked = [int(k) for k in src.get("marks", {}).get("by_source", {})]
     tr = src.get("trends", {}).get(image) if image else None
     if tr and top > 0:
@@ -108,9 +108,9 @@ def pick_sources(src: dict, image: str | None, top: int) -> list:
         tests = ("step", "brief", "resid")
         q = np.stack([arr(f"{t}_q", np.inf) for t in tests])
         t_abs = np.stack([np.abs(arr(f"{t}_t", 0.0)) for t in tests])
-        best = np.argmin(q, axis=0)
-        cols = np.arange(q.shape[1])
-        q_best, t_best = q[best, cols], t_abs[best, cols]
+        # the smallest q, and the largest statistic among the tests at it
+        q_best = q.min(axis=0)
+        t_best = np.where(q == q_best[None, :], t_abs, -np.inf).max(axis=0)
         order = np.lexsort((-t_best, q_best))
         picked += [int(k) for k in order if np.isfinite(q_best[k])][:top]
     seen: list = []

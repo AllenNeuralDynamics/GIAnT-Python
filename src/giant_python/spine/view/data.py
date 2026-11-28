@@ -628,7 +628,9 @@ class SpineStore:
                         "Updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                     }
                 )
-            marks.sort(key=lambda m: (m["Path"], float(m["Row0"])))
+            # by path, in the order written within it (stable), so that of
+            # two marks with the same time the later one still wins
+            marks.sort(key=lambda m: m["Path"])
             _write_marks_atomic(self.marks_path, marks)
         return self.marks_for(i, n)
 
