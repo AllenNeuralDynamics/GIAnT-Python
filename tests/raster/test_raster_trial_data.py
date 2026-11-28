@@ -1002,6 +1002,21 @@ def test_recording_layout_follows_segments_and_metadata(
         return  # no symbolic links here
     read(link)
     assert len(calls) == 7
+    # a directory link followed by ".." is resolved before the key
+    elsewhere = tmp_path / "elsewhere" / "deep"
+    elsewhere.mkdir(parents=True)
+    (tmp_path / "elsewhere" / first.name).write_bytes(b"other")
+    dir_link = folder / "dlink"
+    try:
+        os.symlink(elsewhere, dir_link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return
+    via = str(dir_link) + os.sep + ".." + os.sep + first.name
+    assert trial_data._layout_path(via) == os.path.join(
+        os.path.realpath(tmp_path / "elsewhere"), first.name
+    )
+    read(via)
+    assert len(calls) == 8  # not the cached layout of folder/first
 
 
 def test_load_trial_without_selected_pixels(recording, monkeypatch):

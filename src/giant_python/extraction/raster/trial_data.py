@@ -1389,6 +1389,15 @@ _LAYOUTS_KEPT = 4
 """Recording layouts read by :func:`recording_layout` (the last few)."""
 
 
+def _layout_path(dat_path) -> str:
+    """The ``.dat`` path a layout is kept under: its directory resolved
+    (links followed before any ``..``, as the system opens it) and its
+    name as given (the name decides whether the reader opens one file or
+    the CYCLE group)."""
+    folder, name = os.path.split(os.fspath(dat_path))
+    return os.path.join(os.path.realpath(folder or os.curdir), name)
+
+
 def _layout_inputs(dat_path) -> tuple:
     """``(name, size, modification time)`` of every file the reader of
     ``dat_path`` opens, as ``slap2_utils`` finds them: the ``.dat`` file or,
@@ -1400,7 +1409,7 @@ def _layout_inputs(dat_path) -> tuple:
 
     from ...io.slap2 import is_cycle_split
 
-    path = os.path.abspath(dat_path)
+    path = _layout_path(dat_path)
     folder, name = os.path.split(path)
     stem = os.path.splitext(name)[0]
     names = [name]
@@ -1434,8 +1443,9 @@ def recording_layout(dat_path) -> RasterLayout:
     the same ``.dat`` file, and reading its layout opens every file of the
     recording and parses its metadata: tens of seconds per trial on a
     network mount, the same for every trial. The layout is kept for the
-    last few recordings, keyed by the path as given (its name decides
-    whether the reader takes one file or the group) and the name, size and
+    last few recordings, keyed by the path (its directory resolved, its
+    name as given: the name decides whether the reader takes one file or
+    the group) and the name, size and
     modification time of every file the reader opens (the group's segments
     and their metadata, :func:`_layout_inputs`), so that a changed, added
     or removed file is read again. One reader at a time, so concurrent
@@ -1452,7 +1462,7 @@ def recording_layout(dat_path) -> RasterLayout:
         return raster_layout(dat_path)
     key = (
         raster_layout,  # the reader (tests replace it)
-        os.path.abspath(dat_path),
+        _layout_path(dat_path),
         inputs,
     )
     with _LAYOUTS_LOCK:
