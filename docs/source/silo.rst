@@ -107,8 +107,9 @@ image itself (``peak_th``), so it rises with the number of pixels that
 carry real activity. GIAnT-Python#51 added options for seeding more of the
 dim sources; none is MATLAB's. Since 2026-11-28 the network baseline
 seeds at MATLAB's threshold 3 (it was 8) with the evidence test
-``min_source_event_rate`` 2 (below); ``--peak-th 8
---min-source-event-rate 0`` gives the earlier defaults. With the moving
+``min_source_event_rate`` 2 for the sources seeded below ``peak_th`` + 2
+(``evidence_margin``; below); ``--peak-th 8 --min-source-event-rate 0``
+gives the earlier defaults. With the moving
 median (MATLAB's SILo) the evidence test is off, and the other options
 are off with either baseline:
 
@@ -266,7 +267,8 @@ The localization settings are those recommended for the network's baseline
 (slap2-F0-network#6: no surround, the bootstrap null, the variance floor
 kept). The seed threshold was 8 there; since 2026-11-28 it is 3, as with
 the moving median, with the evidence test ``min_source_event_rate`` 2
-(above, "Seed thresholds for dim sources"). ``baseline_mode`` is the
+for the sources seeded below ``peak_th`` + 2 (above, "Seed thresholds for
+dim sources"). ``baseline_mode`` is the
 solver's: 'gain' holds the
 network's baseline times one gain per pixel, fitted once after the first
 activity fit (N1 of the SILo port's baseline test, within its tolerances

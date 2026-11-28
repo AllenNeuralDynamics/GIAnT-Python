@@ -97,9 +97,10 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Baseline of the run (SiloParams.baseline_source): MATLAB's "
         "moving median and baseline fit, or the F0 network's baselines "
-        "(no surround, bootstrap null, min-source-event-rate 2, network "
-        "baseline times one gain per pixel). Default: network with "
-        "--baseline-dir or --f0-ckpt, median otherwise.",
+        "(no surround, bootstrap null, min-source-event-rate 2 for seeds "
+        "below peak-th + 2, network baseline times one gain per pixel). "
+        "Default: network with --baseline-dir or --f0-ckpt, median "
+        "otherwise.",
     )
     g.add_argument(
         "--peak-th",

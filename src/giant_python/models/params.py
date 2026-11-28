@@ -516,7 +516,8 @@ class SiloParams:
     baselines (``slap2-f0 predict-registered``): localization with the
     settings recommended in slap2-F0-network#6 (no surround, the bootstrap
     null, the variance floor kept), seeding at ``peak_th`` 3 with the
-    evidence test ``min_source_event_rate`` 2 events per minute
+    evidence test ``min_source_event_rate`` 2 events per minute for the
+    sources seeded below ``peak_th`` + ``evidence_margin`` (2)
     (GIAnT-Python#51: more of the dim sources; until 2026-11-28 ``peak_th``
     was 8 with no evidence test, ``peak_th=8, min_source_event_rate=0``),
     and
