@@ -1243,60 +1243,72 @@ class _Unit:
     lines: float = 1.0
 
 
-def _loaded(units: list, load, execution: SiloExecution):
+def _loaded(units, load, execution: SiloExecution):
     """``(unit, load(unit))`` in the units' order.
 
-    With ``execution.load_workers`` 1 each unit is loaded when the caller
-    asks for it (after it has handed on the previous one). With more,
-    later units are loaded ahead in threads of this process, at most
+    ``units`` is an iterable, taken from only when a unit is about to be
+    loaded (a generator can check each unit then). With
+    ``execution.load_workers`` 1 each unit is taken and loaded when the
+    caller asks for it (after it has handed on the previous one). With
+    more, later units are loaded ahead in threads of this process, at most
     ``load_workers`` at a time and, with ``load_memory_gb``, only while the
     data of the trials loaded and not yet handed on is estimated below it
-    (from the bytes per line of the trials loaded so far; always at least
-    one). The loads are the same either way: one process, the same
-    threads per operation.
+    (from the bytes per line of the loads that reported their bytes,
+    ``nbytes``, so far; until one has, one load at a time). The loads are
+    the same either way: one process, the same threads per operation.
     """
-    workers = execution.load_workers
-    if workers <= 1 or len(units) <= 1:
+    if execution.load_workers <= 1:
         for u in units:
             yield u, load(u)
         return
+    limit = execution.load_memory_gb
+    yield from _loaded_ahead(
+        iter(units),
+        load,
+        execution.load_workers,
+        None if limit is None else limit * 1e9,
+    )
+
+
+def _fits(queued: list, unit: _Unit, per_line: list, limit) -> bool:
+    """Whether ``unit`` may load while the ``queued`` units wait: always
+    when none waits or without a limit (bytes); otherwise only once a load
+    has given a bytes-per-line estimate and the estimate fits."""
+    if not queued or limit is None:
+        return True
+    if not per_line:
+        return False
+    lines = sum(u.lines for u in queued) + unit.lines
+    return max(per_line) * lines <= limit
+
+
+def _loaded_ahead(source, load, workers: int, limit):
+    """:func:`_loaded` with ``workers`` loader threads and a memory
+    ``limit`` in bytes (or None)."""
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor
 
-    limit = (
-        None
-        if execution.load_memory_gb is None
-        else execution.load_memory_gb * 1e9
-    )
-    per_line = []  # bytes per line of the trials loaded so far
-
-    def estimate(u: _Unit) -> float:
-        """Estimated bytes of a unit's loaded data (0 before any load)."""
-        return max(per_line, default=0.0) * u.lines
-
-    def measured(u: _Unit, item: dict) -> dict:
-        """Record a finished load's bytes per line."""
-        if "nbytes" in item:
-            per_line.append(item["nbytes"] / u.lines)
-        return item
-
+    per_line = []  # bytes per line of the loads that reported their bytes
     queue: deque = deque()
-    nxt = 0
+    taken = None  # the next unit, taken from the source, not yet submitted
     pool = ThreadPoolExecutor(workers, thread_name_prefix="giant-load")
     try:
-        while nxt < len(units) or queue:
-            while nxt < len(units) and len(queue) < workers:
-                held = sum(estimate(v) for v, _ in queue)
-                if (
-                    queue
-                    and limit is not None
-                    and (not per_line or held + estimate(units[nxt]) > limit)
+        while True:
+            while len(queue) < workers:
+                taken = next(source, None) if taken is None else taken
+                if taken is None or not _fits(
+                    [v for v, _ in queue], taken, per_line, limit
                 ):
                     break
-                queue.append((units[nxt], pool.submit(load, units[nxt])))
-                nxt += 1
+                queue.append((taken, pool.submit(load, taken)))
+                taken = None
+            if not queue:
+                return
             u, fut = queue.popleft()
-            yield u, measured(u, fut.result())
+            item = fut.result()
+            if "nbytes" in item:
+                per_line.append(item["nbytes"] / u.lines)
+            yield u, item
     finally:
         for _, fut in queue:
             fut.cancel()
@@ -1379,23 +1391,29 @@ def stream(  # noqa: C901
         check_plan_alignment(f"the plan {pf.name}", plan, params)
         placements = [(g.pixels, g.sources) for g in plan.groups]
         n_sub = len(plan.groups)
-        units = []
-        for t in (int(x) for x in plan.valid_trials):
-            base = _extraction_baseline(session, params, d, t, baseline_dir)
-            chash = _prepare_hash(session, params, ph, d, t, base)
-            rhash = solve_hash(params, options, chash, (0, n_sub))
-            out = session.results_file(d, t)
-            skip = session.skip_file(d, t)
-            if not execution.overwrite and (
-                _attr(out, "settings_hash") == rhash
-                or skip_hash(skip) == chash
-            ):
-                report.append({"unit": (d, t), "skipped": "up to date"})
-                continue
-            n_lines = session.last_line[d, t] - session.first_line[d, t] + 1
-            units.append(
-                _Unit(d, t, base, chash, rhash, out, skip, float(n_lines))
-            )
+
+        def units(d=d, ph=ph, n_sub=n_sub):
+            """The path's trial-paths to extract, each checked (baseline,
+            hashes) when the loader takes it, so that a later trial's
+            missing file does not stop the earlier ones."""
+            for t in (int(x) for x in plan.valid_trials):
+                base = _extraction_baseline(
+                    session, params, d, t, baseline_dir
+                )
+                chash = _prepare_hash(session, params, ph, d, t, base)
+                rhash = solve_hash(params, options, chash, (0, n_sub))
+                out = session.results_file(d, t)
+                skip = session.skip_file(d, t)
+                if not execution.overwrite and (
+                    _attr(out, "settings_hash") == rhash
+                    or skip_hash(skip) == chash
+                ):
+                    report.append({"unit": (d, t), "skipped": "up to date"})
+                    continue
+                lines = session.last_line[d, t] - session.first_line[d, t]
+                yield _Unit(
+                    d, t, base, chash, rhash, out, skip, float(lines + 1)
+                )
 
         def load(u: _Unit) -> dict:
             """Load one trial and make its subproblems (a loader task)."""
@@ -1461,17 +1479,21 @@ def stream(  # noqa: C901
                 options,
             )
             del trial, tb
-            return {
+            item = {
                 "load": load_s,
                 "load_phases": phases,
                 "record": record,
                 "placements": placements if extracted else [],
                 "subs": subs,
                 "attrs": attrs,
-                "nbytes": _held_bytes(subs, record),
             }
+            if subs:
+                # a trial too short to extract holds its traces only: its
+                # bytes per line would underestimate the next trials'
+                item["nbytes"] = _held_bytes(subs, record)
+            return item
 
-        for u, item in _loaded(units, load, execution):
+        for u, item in _loaded(units(), load, execution):
             if "skipped" in item:
                 report.append({"unit": (u.d, u.t), "skipped": item["skipped"]})
                 continue

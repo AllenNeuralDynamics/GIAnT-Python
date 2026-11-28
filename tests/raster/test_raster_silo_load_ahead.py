@@ -67,6 +67,75 @@ def test_loaded_keeps_order_and_limits(monkeypatch):
     assert started == [0]
 
 
+def test_loaded_waits_for_a_measured_load_and_takes_units_lazily():
+    """A load without ``nbytes`` (a trial too short to extract) gives no
+    estimate: with a memory limit the loads stay one at a time until a load
+    reports its bytes. Units are taken from the iterable only when they are
+    about to be loaded."""
+    active, most, taken = [0], [0], []
+    lock = threading.Lock()
+
+    def load(u):
+        """The first unit is short (no subproblems, no bytes)."""
+        with lock:
+            active[0] += 1
+            most[0] = max(most[0], active[0])
+        time.sleep(0.2)
+        with lock:
+            active[0] -= 1
+            if u.t == 0:
+                return {}
+            return {"nbytes": 1000}
+
+    def lazy(units):
+        """The units, noting when each is taken."""
+        for u in units:
+            taken.append(u.t)
+            yield u
+
+    # 10 bytes per line from the second load on; the limit holds two
+    ex = SiloExecution(load_workers=4, load_memory_gb=2.5e-6)
+    gen = silo._loaded(lazy(_units(6)), load, ex)
+    first = next(gen)
+    assert first[0].t == 0 and most[0] == 1
+    assert taken == [0, 1]  # the second is taken, waiting for an estimate
+    rest = [u.t for u, _ in gen]
+    assert rest == [1, 2, 3, 4, 5] and most[0] == 2
+    # one worker: a unit is taken when it is asked for
+    taken.clear()
+    gen = silo._loaded(lazy(_units(3)), load, SiloExecution())
+    next(gen)
+    assert taken == [0]
+
+
+def test_streamed_run_checks_later_trials_when_it_reaches_them(
+    tmp_path, fake, monkeypatch  # noqa: F811
+):
+    """A later trial whose check fails (here its baseline) does not stop
+    the earlier trials from being extracted and written."""
+    s = make_session(tmp_path / "s")
+    real = silo._extraction_baseline
+    calls = []
+
+    def failing(session, params, d, t, baseline_dir):
+        """Fails for the last trial of the first path."""
+        calls.append((d, t))
+        if (d, t) == (0, session.n_trials - 1):
+            raise FileNotFoundError("no baseline for this trial")
+        return real(session, params, d, t, baseline_dir)
+
+    monkeypatch.setattr(silo, "_extraction_baseline", failing)
+    with pytest.raises(FileNotFoundError, match="no baseline"):
+        silo.run_silo(s, PARAMS, EX)
+    session = SiloSession.open(s)
+    written = [
+        t
+        for t in range(session.n_trials - 2)
+        if session.results_file(0, t).exists()
+    ]
+    assert written == list(range(session.n_trials - 2))
+
+
 def test_loaded_passes_on_errors():
     """A load's error reaches the caller at its unit; later loads are not
     waited for beyond the running ones."""
