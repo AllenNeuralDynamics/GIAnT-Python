@@ -684,6 +684,25 @@ def test_collect_refuses_another_seed_threshold(tmp_path, fake):
         assert float(np.ravel(f["params/peakth"][()])[0]) == 8.0
 
 
+def test_collect_refuses_another_seed_acceptance(tmp_path, fake):
+    """A standalone collect of a plan seeded with the null threshold is
+    refused under the image threshold (whose evidence test would exempt
+    strong seeds that the null mode judges); its own settings collect
+    it."""
+    null = replace(NET, seed_acceptance="null_sd", localization_keep_null=True)
+    assert null.evidence_judge_below is None
+    s = SiloSession.open(make_session(tmp_path / "s"))
+    bdir = write_baselines(tmp_path / "s", tmp_path / "b")
+    silo.localize(s, null, EX, baseline_dir=bdir)
+    silo.plan(s, null, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, null, EX, baseline_dir=bdir)
+    for job in silo_solve.dispatch(s, null, 3, EX):
+        silo_solve.solve_job(job, execution=EX)
+    with pytest.raises(ValueError, match="seed_acceptance='null_sd'"):
+        silo_collect.collect(s, NET, EX, baseline_dir=bdir)
+    assert silo_collect.collect(s, null, EX, baseline_dir=bdir) is not None
+
+
 def test_unrecorded_network_localization_is_redone(tmp_path, fake):
     """A localization file without the record of its baseline (made before
     it was recorded) counts as the moving median's: with the network's

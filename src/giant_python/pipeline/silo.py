@@ -190,10 +190,11 @@ def check_plan_alignment(what: str, plan, params: SiloParams) -> None:
 
 
 def check_plan_seeding(what: str, plan, params: SiloParams) -> None:
-    """Refuse to collect with another seed threshold than the plan's: the
-    summary records ``peakth``, and the evidence test judges the sources
-    by their height above it (a folder made with the network's earlier
-    default, 8, is not collected with today's, 3)."""
+    """Refuse to collect with another seed threshold or seed acceptance
+    than the plan's: the summary records them, and the evidence test
+    judges the sources by their height above the threshold, or all of
+    them after the null seed thresholds (a folder made with the network's
+    earlier default, 8, is not collected with today's, 3)."""
     used, given = float(plan.params.peak_th), float(params.peak_th)
     if used != given:
         raise ValueError(
@@ -201,6 +202,14 @@ def check_plan_seeding(what: str, plan, params: SiloParams) -> None:
             f"{given:g}: run the stages again from localization with these "
             f"settings (giant silo redoes them), or collect with "
             f"--peak-th {used:g}"
+        )
+    used, given = plan.params.seed_acceptance, params.seed_acceptance
+    if used != given:
+        raise ValueError(
+            f"{what} was seeded with seed_acceptance={used!r}, these "
+            f"settings have {given!r}: run the stages again from the plan "
+            f"with these settings, or collect with --set "
+            f"seed_acceptance={used}"
         )
 
 
