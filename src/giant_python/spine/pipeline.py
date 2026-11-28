@@ -30,6 +30,7 @@ between trials and images.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path, PurePosixPath
 
@@ -61,6 +62,23 @@ def _stem(name) -> str | None:
     # split
     base = PurePosixPath(name.replace("\\", "/")).name
     return base.split(_REGISTERED)[0]
+
+
+def _replay_report(out: Path, report: dict, say) -> None:
+    """Fill ``report`` from the report stored in a reused summary file
+    (keeping what this call already found, such as the network images'
+    cache keys) and pass its notes to ``say`` again."""
+    with h5py.File(out, "r") as f:
+        v = f.attrs.get("report")
+    if v is None:
+        return
+    stored = json.loads(v.decode() if isinstance(v, bytes) else v)
+    for n, rec in stored.get("paths", {}).items():
+        mine = report["paths"].setdefault(int(n), {})
+        for k, val in rec.items():
+            mine.setdefault(k, val)
+    for msg in stored.get("notes", []):
+        say(msg)
 
 
 def _trials_and_window(n: int, images: dict, nfr, say):
@@ -362,7 +380,10 @@ def make_spine_summary(  # noqa: C901
     -------
     dict
         A report: the output file, its key, and per path the images, trial
-        and window counts.
+        and window counts and the windows that images leave without a
+        value. The file stores this report and its notes; when an existing
+        file is reused, they are read back and the notes passed to
+        ``progress`` again.
     """
     if (baseline_dir is None) != (moco_dir is None):
         raise ValueError("give both --baseline-dir and --moco-dir, or neither")
@@ -461,9 +482,17 @@ def make_spine_summary(  # noqa: C901
     report["key"] = key
     if out.is_file() and not overwrite:
         report["reused"] = True
+        _replay_report(out, report, say)
         return report
 
     content: dict = {}
+    notes: list = []
+
+    def note(msg):
+        """A note about the readout: shown, and stored with it."""
+        notes.append(msg)
+        say(msg)
+
     for n in paths:
         stems, acq = table_trials(table_path, n)
         shape = run.shape(n)
@@ -534,7 +563,7 @@ def make_spine_summary(  # noqa: C901
             )
         if not images:
             raise ValueError(f"Path{n}: no per-trial images in the run")
-        used, window = _trials_and_window(n, images, nfr, say)
+        used, window = _trials_and_window(n, images, nfr, note)
         valid = common_valid([images[k][0] for k in window], used)
         rois = {}
         if run.has(n, "sources/spatial/profiles"):
@@ -574,7 +603,7 @@ def make_spine_summary(  # noqa: C901
                 rep_n = report["paths"].setdefault(n, {})
                 rep_n.setdefault("not_covered", {})[set_name] = gaps
                 for name, k in gaps.items():
-                    say(
+                    note(
                         f"Path{n}: {name} does not cover {k} of {len(rs)} "
                         f"{set_name} windows in every trial used (NaN there)"
                     )
@@ -611,8 +640,12 @@ def make_spine_summary(  # noqa: C901
             }
         )
     say(f"writing {out}")
+    stored = {"paths": report["paths"], "notes": notes}
     _write_atomic(
-        out, lambda tmp: write_product(tmp, content, settings, inputs, run_dir)
+        out,
+        lambda tmp: write_product(
+            tmp, content, settings, inputs, run_dir, report=stored
+        ),
     )
     report["reused"] = False
     return report

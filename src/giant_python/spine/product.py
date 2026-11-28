@@ -5,7 +5,10 @@ Layout (row-major, numpy orientation; images ``(trials, rows, cols)`` in the
 run's consensus frame, zero-based coordinates)::
 
     /                     attrs: format, format_version, code_version,
-                          created, run_dir, settings (JSON), inputs (JSON)
+                          created, run_dir, settings (JSON), inputs (JSON),
+                          report (JSON: per path the counts of the readout
+                          and the windows images leave without a value,
+                          and its notes)
     /Path<n>/             attrs: rows, cols, n_trials, activity_channel
                           (one-based file channel of the run's activity)
       trials/table_index  (T,) zero-based trial of the trial table
@@ -94,7 +97,23 @@ def read_roiset(g: h5py.Group, shape: tuple) -> RoiSet:
     )
 
 
-def write_product(path, paths: dict, settings: dict, inputs: dict, run_dir):
+def _write_root_attrs(f, settings, inputs, run_dir, report) -> None:
+    """The file's attributes (format, provenance, settings, inputs and the
+    readout's report)."""
+    f.attrs["format"] = FORMAT
+    f.attrs["format_version"] = FORMAT_VERSION
+    f.attrs["code_version"] = _code_version()
+    f.attrs["created"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    f.attrs["run_dir"] = str(run_dir)
+    f.attrs["settings"] = json.dumps(settings, sort_keys=True)
+    f.attrs["inputs"] = json.dumps(inputs, sort_keys=True, default=str)
+    if report is not None:
+        f.attrs["report"] = json.dumps(report, sort_keys=True, default=str)
+
+
+def write_product(
+    path, paths: dict, settings: dict, inputs: dict, run_dir, report=None
+):
     """Write a ``spine_summary`` file.
 
     Parameters
@@ -111,15 +130,11 @@ def write_product(path, paths: dict, settings: dict, inputs: dict, run_dir):
         JSON-serializable records of the settings and the input files.
     run_dir : str or Path
         The run the readout was made from.
+    report : dict, optional
+        JSON-serializable report of the readout (stored as is).
     """
     with h5py.File(path, "w") as f:
-        f.attrs["format"] = FORMAT
-        f.attrs["format_version"] = FORMAT_VERSION
-        f.attrs["code_version"] = _code_version()
-        f.attrs["created"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        f.attrs["run_dir"] = str(run_dir)
-        f.attrs["settings"] = json.dumps(settings, sort_keys=True)
-        f.attrs["inputs"] = json.dumps(inputs, sort_keys=True, default=str)
+        _write_root_attrs(f, settings, inputs, run_dir, report)
         for n, p in sorted(paths.items()):
             g = f.create_group(f"Path{n}")
             g.attrs["rows"], g.attrs["cols"] = p["shape"]
@@ -173,6 +188,7 @@ def read_product(path) -> dict:
         attrs = {k: f.attrs[k] for k in f.attrs}
         attrs["settings"] = json.loads(attrs.get("settings", "{}"))
         attrs["inputs"] = json.loads(attrs.get("inputs", "{}"))
+        attrs["report"] = json.loads(attrs.get("report", "{}"))
         out["attrs"] = attrs
         for key in f.keys():
             if not key.startswith("Path"):

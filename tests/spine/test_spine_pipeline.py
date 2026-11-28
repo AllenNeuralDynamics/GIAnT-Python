@@ -388,6 +388,21 @@ def test_fitted_images_do_not_shrink_the_windows(tmp_path):
     assert "not_covered" not in reps["full"]["paths"][1]
     assert b["image_attrs"]["f0_silo_ch1"]["covers"] == "fitted"
     assert b["image_attrs"]["f0_net"]["covers"] == "field"
+    # a reused file gives the same report and the same notes again
+    notes = []
+    again = make_spine_summary(
+        box["run"],
+        box["table"],
+        tmp_path / "box" / "out",
+        baseline_dir=box["baselines"],
+        moco_dir=box["moco"],
+        progress=notes.append,
+        **kw,
+    )
+    assert again["reused"]
+    for k in ("not_covered", "window_images", "trials_used", "valid_pixels"):
+        assert again["paths"][1][k] == reps["box"]["paths"][1][k]
+    assert sum("does not cover" in m for m in notes) == 4  # 2 images x 2 paths
 
 
 def test_no_shared_trial_reads_nothing():
