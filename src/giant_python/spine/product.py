@@ -6,7 +6,8 @@ run's consensus frame, zero-based coordinates)::
 
     /                     attrs: format, format_version, code_version,
                           created, run_dir, settings (JSON), inputs (JSON)
-    /Path<n>/             attrs: rows, cols, n_trials
+    /Path<n>/             attrs: rows, cols, n_trials, activity_channel
+                          (one-based file channel of the run's activity)
       trials/table_index  (T,) zero-based trial of the trial table
       trials/acquisition  (T,) acquisition trial number (from the raw file)
       trials/num_frames   (T,) extraction frames of the run (0 = not
@@ -14,7 +15,11 @@ run's consensus frame, zero-based coordinates)::
       reference/mean_im   (C, H, W) the run's mean image
       reference/act_im    (H, W) the run's activity image
       images/<name>       (T, H, W) float32 per-trial images; attrs: source,
-                          units; n_frames (T,) where known
+                          units; n_frames (T,) where known. ``mean_ch<c>``
+                          and ``f0_silo_ch<c>`` are of file channel <c>
+                          (one-based; the activity channel is the group's
+                          activity_channel); ``f0_net`` and ``f0_gain`` are
+                          of the channel the baselines were predicted from
       valid               (H, W) uint8 pixels the windows are restricted to
       rois/<set>/...      ids, labels, rows, cols, ptr, index, weight
                           (:class:`~giant_python.spine.rois.RoiSet`)
@@ -117,6 +122,7 @@ def write_product(path, paths: dict, settings: dict, inputs: dict, run_dir):
             g = f.create_group(f"Path{n}")
             g.attrs["rows"], g.attrs["cols"] = p["shape"]
             g.attrs["n_trials"] = len(p["trials"]["table_index"])
+            g.attrs["activity_channel"] = int(p.get("activity_channel", 1))
             for k, v in p["trials"].items():
                 g[f"trials/{k}"] = np.asarray(v)
             for k, v in p["reference"].items():
@@ -171,7 +177,10 @@ def read_product(path) -> dict:
                 continue
             g = f[key]
             shape = (int(g.attrs["rows"]), int(g.attrs["cols"]))
-            p: dict = {"shape": shape}
+            p: dict = {
+                "shape": shape,
+                "activity_channel": int(g.attrs.get("activity_channel", 1)),
+            }
             for grp in ("trials", "reference", "images"):
                 p[grp] = {k: g[grp][k][()] for k in g.get(grp, {})}
             p["image_attrs"] = {

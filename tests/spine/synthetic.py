@@ -84,6 +84,7 @@ def make_session(
     activity_channel: int = 1,
     missing_trial: int | None = None,
     discard_initial_s: float | None = None,
+    affine: np.ndarray | None = None,
 ) -> dict:
     """Write the synthetic session under ``root``; return its folders.
 
@@ -92,7 +93,8 @@ def make_session(
     ``params/activityChannel``. ``missing_trial`` (zero-based) gets NaN
     traces, as a trial without extracted sources. ``discard_initial_s``
     is recorded as the run's ``params/discardInitial_s`` (not recorded if
-    None).
+    None). ``affine`` replaces the trial maps (``(trials, 2, 3)``, written
+    as given; default: the shifts ``SHIFTS``).
     """
     root = Path(root)
     run = root / "run"
@@ -100,9 +102,10 @@ def make_session(
     base = root / "baselines"
     for d in (run, moco, base):
         d.mkdir(parents=True, exist_ok=True)
-    affine = np.zeros((N_TRIALS, 2, 3))
-    affine[:, :, :2] = np.eye(2)
-    affine[:, :, 2] = np.asarray(SHIFTS, float)
+    if affine is None:
+        affine = np.zeros((N_TRIALS, 2, 3))
+        affine[:, :, :2] = np.eye(2)
+        affine[:, :, 2] = np.asarray(SHIFTS, float)
     fp = footprints()
     exp: dict = {
         "params": {

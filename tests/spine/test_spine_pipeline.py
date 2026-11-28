@@ -262,3 +262,37 @@ def test_network_images_follow_the_runs_discards(tmp_path):
     )
     n0 = read_product(rep0["output"])["paths"][1]["image_attrs"]["f0_net"]
     assert (n0["n_frames"] == syn.N_FRAMES - 16).all()
+
+
+def test_affine_maps_convert_from_one_based(tmp_path):
+    """A true affine map written one-based (GIAnT-MATLAB) gives the same
+    zero-based positions as the zero-based map (GIAnT-Python)."""
+    lin = np.array([[1.01, 0.02], [-0.015, 0.99]])
+    b0 = np.array([1.5, -2.25])
+    a0 = np.zeros((syn.N_TRIALS, 2, 3))
+    a0[:, :, :2] = lin
+    a0[:, :, 2] = b0
+    # one-based: r1 = A r1' + b1 with r1 = r0 + 1 on both sides
+    a1 = a0.copy()
+    a1[:, :, 2] = b0 - lin[:, 0] - lin[:, 1] + 1
+    shape = (3, 4)
+    rr, cc = np.meshgrid(np.arange(3.0), np.arange(4.0), indexing="ij")
+    expect_r = lin[0, 0] * rr + lin[0, 1] * cc + b0[0]
+    expect_c = lin[1, 0] * rr + lin[1, 1] * cc + b0[1]
+    for base, a in ((0, a0), (1, a1)):
+        s = syn.make_session(tmp_path / f"base{base}", affine=a)
+        run = RunSummary(s["run"])
+        with pytest.raises(ValueError, match="index base"):
+            run.trial_map(1)
+        r, c = run.trial_map(1, affine_base=base).grid_coords(2, shape)
+        np.testing.assert_allclose(r, expect_r, atol=1e-12)
+        np.testing.assert_allclose(c, expect_c, atol=1e-12)
+
+
+def test_product_records_the_activity_channel(tmp_path):
+    """The product says which file channel is the run's activity."""
+    s = syn.make_session(tmp_path, activity_channel=2)
+    rep = make_spine_summary(s["run"], s["table"], tmp_path / "out")
+    prod = read_product(rep["output"])
+    assert prod["paths"][1]["activity_channel"] == 2
+    assert {"mean_ch1", "mean_ch2"} <= set(prod["paths"][1]["images"])

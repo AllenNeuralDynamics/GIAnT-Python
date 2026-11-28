@@ -484,6 +484,7 @@ def make_spine_summary(  # noqa: C901
             activity["sources"] = run.activity(n)
         content[n] = {
             "shape": shape,
+            "activity_channel": run.activity_channel(),
             "trials": {
                 "table_index": np.arange(len(stems)),
                 "acquisition": acq,
