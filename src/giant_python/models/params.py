@@ -1399,6 +1399,23 @@ class SiloExecution:
         settings.
     verbose : bool
         Print progress messages.
+    load_workers : int
+        Trials the streamed run loads at once (threads of this process):
+        1 loads each trial while the previous one is solved, as MATLAB's
+        ``processAllTrials_Async``; more load later trials ahead, so that
+        loading no longer sets the pace while the solver keeps up. Each
+        loaded trial waiting for the solver holds its data (about
+        ``(channels + 1) * pixels * frames * 4`` bytes, twice while its
+        subproblems are cut out). The prepare stage loads one at a time.
+    load_memory_gb : float or None
+        With ``load_workers`` above 1: load ahead only while the trials
+        loaded and not yet handed to the solver are estimated below this
+        many GB (from the bytes per line of the extracted trials loaded so
+        far; until one has been, and always when none waits, one trial
+        loads at a time). None: no limit.
+
+    The loader options come last, so that positional arguments keep
+    their earlier meaning.
     """
 
     workers: int = 6
@@ -1410,11 +1427,20 @@ class SiloExecution:
     loader_device: str = "cpu"
     overwrite: bool = False
     verbose: bool = False
+    load_workers: int = 1
+    load_memory_gb: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate the options."""
-        for name in ("workers", "solver_workers", "solver_threads"):
+        for name in (
+            "workers",
+            "solver_workers",
+            "solver_threads",
+            "load_workers",
+        ):
             _positive(name, getattr(self, name), integer=True)
+        if self.load_memory_gb is not None:
+            _positive("load_memory_gb", self.load_memory_gb)
         for name in ("device", "loader_device"):
             value = getattr(self, name)
             if not isinstance(value, str) or not _DEVICE.fullmatch(value):

@@ -61,16 +61,25 @@ def _normalised(m: dict) -> dict:
     return out
 
 
-def _resample(img: np.ndarray, warp, trial: int, shape) -> np.ndarray:
+def _resample(
+    img: np.ndarray, warp, trial: int, shape, coords=None
+) -> np.ndarray:
     """A trial's ``(channels, rows, cols)`` map in the consensus frame,
     placed at the top left of the ``shape`` canvas first (NaN elsewhere),
-    as SILo places trials of different sizes."""
+    as SILo places trials of different sizes. ``coords``: the map's
+    positions of the canvas (``warp.grid_coords(trial, shape)``), computed
+    once per trial by the caller (a patchwise field costs a blend over the
+    patch centres per pixel)."""
     from ...extraction.raster.alignment import warp_trial_image
 
     canvas = np.full((img.shape[0],) + tuple(shape), np.nan)
     canvas[:, : img.shape[1], : img.shape[2]] = img
     return np.moveaxis(
-        warp_trial_image(np.moveaxis(canvas, 0, -1), warp, trial), -1, 0
+        warp_trial_image(
+            np.moveaxis(canvas, 0, -1), warp, trial, coords=coords
+        ),
+        -1,
+        0,
     )
 
 
@@ -123,19 +132,22 @@ def combine_trials(stats: list, warp=None, shifts=None) -> dict:
     sums, wsum, out = {}, {}, {}
     for t in used:
         maps = stats[t]["maps"]
+        # the map's positions of the canvas, shared by the trial's maps
+        grid = warp.grid_coords(t, shape)
         for wname, names in WEIGHTS.items():
-            w = _resample(np.nan_to_num(maps[wname]), warp, t, shape)
+            w = _resample(np.nan_to_num(maps[wname]), warp, t, shape, grid)
             w = np.nan_to_num(w)
             out[wname] = out.get(wname, 0) + w
             for name in names:
                 if name not in maps:
                     continue
-                v = _resample(maps[name], warp, t, shape)
+                v = _resample(maps[name], warp, t, shape, grid)
                 ok = np.isfinite(v) & (w > 0)
                 sums[name] = sums.get(name, 0) + np.where(ok, w * v, 0)
                 wsum[name] = wsum.get(name, 0) + np.where(ok, w, 0)
         valid = np.isfinite(maps["mean"]).astype(float)
-        has = _resample(valid, warp, t, shape)
+        has = _resample(valid, warp, t, shape, grid)
+        del grid
         # every bilinear neighbour valid (up to the warp's rounding)
         full = np.nan_to_num(has) > 1 - 1e-6
         out["n_trials"] = out.get("n_trials", 0) + full

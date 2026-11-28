@@ -171,6 +171,38 @@ def half_mean_images(
     return out
 
 
+def _channel_means(stack: np.ndarray, nan_thresh: float) -> tuple:
+    """The mean image of each channel (NaN ignored) and the pixels missing
+    in more than ``nan_thresh`` of the frames, averaged over channels.
+
+    ``np.nanmean(stack, axis=0)`` and ``np.isnan(stack).mean(axis=(0, 1))``
+    one channel at a time: the same values (the frames are summed in the
+    same order per pixel; the missing samples are counted exactly), with a
+    copy of one channel at a time instead of all of them.
+
+    Parameters
+    ----------
+    stack : ndarray of shape (frames, channels, rows, cols)
+
+    Returns
+    -------
+    mean_im : ndarray of shape (rows, cols, channels)
+    missing : ndarray of bool, shape (rows, cols)
+    """
+    n_frames, n_ch, rows, cols = stack.shape
+    means = np.empty((rows, cols, n_ch), dtype=stack.dtype)
+    gaps = np.zeros((rows, cols), dtype=np.int64)
+    for ch in range(n_ch):
+        plane = stack[:, ch]
+        with np.errstate(invalid="ignore"):
+            means[:, :, ch] = np.nanmean(plane, axis=0)
+        gaps += np.isnan(plane).sum(axis=0)
+    total = np.float64(n_frames * n_ch)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        missing = gaps / total > nan_thresh
+    return means, missing
+
+
 def _check_channels(num_channels, activity_channel) -> None:
     """Reject channel arguments that would deinterleave or select wrongly."""
     for name, v in (
@@ -279,9 +311,7 @@ def load_registered_trial(
     stack = raw[: n_frames * num_channels].reshape(
         n_frames, num_channels, raw.shape[1], raw.shape[2]
     )
-    with np.errstate(invalid="ignore"):
-        mean_im = np.nanmean(stack, axis=0).transpose(1, 2, 0)
-    missing = np.isnan(stack).mean(axis=(0, 1)) > nan_thresh
+    mean_im, missing = _channel_means(stack, nan_thresh)
     mean_im[missing] = np.nan
     stem = fn[: fn.index("_REGISTERED")]
     halves = None
