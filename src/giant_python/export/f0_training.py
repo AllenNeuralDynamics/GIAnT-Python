@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor
@@ -733,8 +734,51 @@ def _network_records(run: SiloRun) -> dict:
         return {}
 
 
-def _path_jobs(run, session, d, out_dir, options, prov) -> list:
-    """The trial jobs of one path."""
+def _selection(options, run, session) -> tuple:
+    """The one-based paths and trials to export, each once (``None``
+    trials: SILo's own); refuses numbers the run or the trial table does
+    not have. A repeated selector would have two workers write the same
+    file."""
+    paths = sorted({int(d) for d in options.paths or run.paths})
+    bad = [d for d in paths if d not in run.paths]
+    if bad:
+        raise ValueError(
+            f"paths {bad} are not among the run's paths {run.paths}"
+        )
+    if not options.trials:
+        return paths, None
+    n = session.fn_reg_ds.shape[1]
+    trials = sorted({int(t) for t in options.trials})
+    bad = [t for t in trials if not 1 <= t <= n]
+    if bad:
+        raise ValueError(
+            f"trials {bad} are not among the trial table's trials 1..{n}"
+        )
+    return paths, trials
+
+
+_TRIAL_FILE = re.compile(r"trial_\d{3,}\.h5")
+
+
+def _remove_unscheduled(out_dir: Path, d: int, jobs: list) -> list:
+    """Remove the earlier ``trial_<NNN>.h5`` files of path ``d`` that a
+    default export does not write (a trial SILo no longer analyses):
+    the reader finds files, not summaries. Returns their names."""
+    keep = {Path(j.out_file).name for j in jobs}
+    removed = []
+    folder = Path(out_dir) / f"Path{d}"
+    if not folder.is_dir():
+        return removed
+    for f in sorted(folder.iterdir()):
+        if _TRIAL_FILE.fullmatch(f.name) and f.name not in keep:
+            f.unlink()
+            removed.append(f.name)
+    return removed
+
+
+def _path_jobs(run, session, d, out_dir, options, prov, trials=None) -> list:
+    """The trial jobs of one path (``trials``: one-based, checked by
+    :func:`_selection`; ``None``: the trials SILo analysed)."""
     p = run.path(d)
     st = _settings(run)
     n = 0 if options.ignore_sources else p.sources.n
@@ -742,8 +786,8 @@ def _path_jobs(run, session, d, out_dir, options, prov) -> list:
     x = _denoised(run, d) if n else None
     if n and x is None:
         n = 0
-    if options.trials:
-        trials = [t - 1 for t in options.trials]
+    if trials:
+        trials = [t - 1 for t in trials]
     elif (p.n_frames > 0).any():  # the trials SILo analysed
         trials = [t for t in range(p.n_frames.size) if p.n_frames[t] > 0]
     else:  # no frame counts (a path without sources): registered movies
@@ -862,9 +906,19 @@ def export_run(
         "options": asdict(options),
         "trials": [],
     }
+    paths, trials = _selection(options, run, session)
     jobs = []
-    for d in options.paths or run.paths:
-        jobs += _path_jobs(run, session, d, out_dir, options, prov)
+    for d in paths:
+        path_jobs = _path_jobs(run, session, d, out_dir, options, prov, trials)
+        if trials is None:  # a default export reconciles the path's files
+            removed = _remove_unscheduled(out_dir, d, path_jobs)
+            if removed:
+                summary.setdefault("removed", {})[f"Path{d}"] = removed
+                log(
+                    f"[export-f0] {label} path {d}: removed earlier files "
+                    f"of trials not exported now: {', '.join(removed)}"
+                )
+        jobs += path_jobs
     for q in _run_jobs(jobs, options.workers):
         summary["trials"].append(q)
         write_summary(out_dir, summary)
@@ -1009,7 +1063,9 @@ def add_arguments(p) -> None:
         type=int,
         nargs="+",
         default=None,
-        help="one-based trials (default: all SILo analysed)",
+        help="one-based trials (default: all SILo analysed; a default "
+        "export removes earlier trial files of the exported paths it does "
+        "not write)",
     )
     p.add_argument(
         "--workers",

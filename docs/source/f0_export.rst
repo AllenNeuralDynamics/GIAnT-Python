@@ -143,6 +143,12 @@ Differences from the MATLAB exporter
 * ``mean_image`` holds the written channels (the MATLAB exporter wrote every
   channel of the movie, which the reader indexes like ``movie``).
 * A trial that fails on a rerun loses its earlier file (the reader finds
-  files, not summaries).
+  files, not summaries). A default export (no ``--trials``) also removes the
+  earlier ``trial_<NNN>.h5`` files of the exported paths that it does not
+  write, such as a trial SILo no longer analyses, and lists them under
+  ``removed`` in ``export_summary.json``; an export with ``--trials`` leaves
+  the other trials' files alone. Repeated ``--paths`` or ``--trials`` are
+  exported once; numbers the run or the trial table does not have are
+  refused.
 * The labeled mask's median filter treats unimaged (NaN) pixels as the
   largest values; MATLAB's ``medfilt2`` behaviour with NaN is not documented.

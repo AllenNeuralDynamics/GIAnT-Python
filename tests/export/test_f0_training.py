@@ -150,6 +150,75 @@ def test_summary_and_skipped_trial(tmp_path):
     assert len(j["trials"]) == N_TRIALS and j["options"]["kernel"] == "exact"
 
 
+def test_default_export_reconciles_trial_files(tmp_path):
+    """A default export removes earlier trial files it does not write and
+    lists them; an export with chosen trials leaves other files alone."""
+    syn = write_session(tmp_path / "syn", "rigid", n80=200)
+    out = tmp_path / "out"
+    folder = out / "Path1"
+    folder.mkdir(parents=True)
+    for name in ("trial_009.h5", "trial_1000.h5", "notes.txt"):
+        (folder / name).write_bytes(b"old")
+    s = _export(syn, out, trials=(1,))
+    assert "removed" not in s
+    assert (folder / "trial_009.h5").exists()
+    s = _export(syn, out)
+    assert s["removed"] == {"Path1": ["trial_009.h5", "trial_1000.h5"]}
+    assert sorted(f.name for f in folder.iterdir()) == [
+        "notes.txt",
+        "trial_001.h5",
+        "trial_002.h5",
+    ]
+    j = json.loads((out / "export_summary.json").read_text())
+    assert j["removed"] == s["removed"]
+
+
+def test_repeated_selectors_export_once(tmp_path):
+    """Repeated paths and trials give one job each (two workers never
+    write the same file)."""
+    syn = write_session(tmp_path / "syn", "rigid", n80=200)
+    s = _export(
+        syn, tmp_path / "out", paths=(1, 1), trials=(2, 2, 1), workers=2
+    )
+    assert [(q["path"], q["trial"]) for q in s["trials"]] == [(1, 1), (1, 2)]
+    assert all("error" not in q for q in s["trials"])
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"trials": (0,)},
+        {"trials": (-1,)},
+        {"trials": (N_TRIALS + 1,)},
+        {"paths": (2,)},
+    ],
+)
+def test_selectors_outside_the_run_are_refused(tmp_path, kw):
+    """Trials outside 1..the table's trials and paths the run does not
+    have are refused before any job starts; the CLI reports a usage
+    error."""
+    syn = write_session(tmp_path / "syn", "rigid", n80=200)
+    with pytest.raises(ValueError, match="trials|paths"):
+        _export(syn, tmp_path / "out", **kw)
+    assert not (tmp_path / "out" / "Path1").exists()
+    flag, values = next(iter(kw.items()))
+    with pytest.raises(SystemExit) as e:
+        main(
+            [
+                "export-f0",
+                str(syn["run"]),
+                str(tmp_path / "o2"),
+                "--table",
+                str(syn["run"] / "trial_table.h5"),
+                "--moco-dir",
+                str(syn["moco"]),
+                f"--{flag}",
+                *[str(v) for v in values],
+            ]
+        )
+    assert e.value.code == 2
+
+
 def test_ignore_sources(tmp_path):
     """Without sources: zero activity, no sources group, no QC."""
     syn = write_session(tmp_path / "syn", "rigid", n80=200)
