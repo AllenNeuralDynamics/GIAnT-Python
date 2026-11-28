@@ -1,0 +1,1080 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SILo run viewer</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f4f2; --surface-1: #fcfcfb; --surface-2: #eceae6; --well: #121211;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974; --border: #d9d8d3; --grid: #e6e5e0;
+  --accent: #2a78d6; --mark: #eda100; --data: #b5b3ab; --target: #52514e;
+  --both: #16a34a; --onlyL: #ea580c; --onlyR: #7c3aed; --rej: #e34948; --seed: #8f8e86;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624; --well: #0b0b0a;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --border: #3a3a37; --grid: #2c2c2a;
+    --accent: #3987e5; --mark: #f2b52f; --data: #5e5d58; --target: #c3c2b7;
+    --both: #4ade80; --onlyL: #fb923c; --onlyR: #c4b5fd; --rej: #f87171; --seed: #a3a39c;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624; --well: #0b0b0a;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --border: #3a3a37; --grid: #2c2c2a;
+  --accent: #3987e5; --mark: #f2b52f; --data: #5e5d58; --target: #c3c2b7;
+  --both: #4ade80; --onlyL: #fb923c; --onlyR: #c4b5fd; --rej: #f87171; --seed: #a3a39c;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--surface-1); border-bottom: 1px solid var(--border);
+  padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+label { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+select, input, button { font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+input[type=number] { width: 78px; }
+input[type=range] { accent-color: var(--accent); }
+button { cursor: pointer; padding: 3px 9px; }
+button:hover { background: var(--surface-2); }
+button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.tab { font-weight: 600; }
+#tslider { flex: 1 1 320px; min-width: 200px; }
+#tlabel { font-variant-numeric: tabular-nums; min-width: 190px; color: var(--text-secondary); }
+.hint { color: var(--text-muted); font-size: 12px; }
+#status { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+#status.err { color: #d03b3b; }
+.sw { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; }
+main { padding: 10px 16px 24px; }
+.hidden { display: none !important; }
+#tiles { display: grid; gap: 8px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-width: 0; }
+.tile .tt { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; font-size: 12px;
+  color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+.tile .tt b { color: var(--text-primary); font-weight: 600; }
+.tile .tt span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tile canvas { display: block; width: 100%; background: var(--well); cursor: crosshair; touch-action: none; }
+.readout { font-variant-numeric: tabular-nums; color: var(--text-secondary); min-height: 18px; margin: 6px 0 2px; }
+.charts { margin-top: 10px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.charts .head { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-secondary); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.chart canvas { display: block; width: 100%; height: 200px; cursor: crosshair; touch-action: none; }
+.chart.small canvas { height: 120px; }
+.ctitle { color: var(--text-secondary); font-size: 12px; margin: 8px 0 0; }
+#tip { position: fixed; z-index: 10; pointer-events: none; display: none; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.18);
+  font-variant-numeric: tabular-nums; }
+#tip .r { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+#tip .r span:last-child { margin-left: 14px; }
+.agrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px; gap: 10px; align-items: start; }
+@media (max-width: 1150px) { .agrid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px; min-width: 0; }
+.panel .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; }
+.panel select { max-width: 100%; }
+canvas.view { width: 100%; display: block; background: var(--well); border-radius: 4px; cursor: grab; touch-action: none; }
+#detail h2 { font-size: 14px; margin: 0 0 6px; }
+#detail table { border-collapse: collapse; font-size: 12px; width: 100%; }
+#detail td { padding: 2px 4px; border-bottom: 1px solid var(--border); }
+#detail td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+#evlist { max-height: 180px; overflow: auto; margin-top: 6px; }
+#evlist table td { cursor: pointer; }
+.muted { color: var(--text-muted); font-size: 12px; }
+#tablewrap { margin-top: 10px; max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+#srctable { border-collapse: collapse; width: 100%; font-size: 12px; background: var(--surface-1); }
+#srctable th, #srctable td { padding: 3px 6px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+#srctable th { cursor: pointer; color: var(--text-muted); font-weight: 500; position: sticky; top: 0; background: var(--surface-1); }
+#srctable td:first-child, #srctable th:first-child { text-align: left; }
+#srctable tr:hover td { background: var(--surface-2); cursor: pointer; }
+details.defs { margin-top: 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; color: var(--text-secondary); }
+details.defs summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+details.defs li { margin: 3px 0; }
+#runinfo { color: var(--text-secondary); font-size: 12px; }
+@media (max-width: 700px) { header { padding: 8px; } main { padding: 8px; } #tlabel { min-width: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>SILo run viewer</h1>
+    <span id="label" class="hint"></span>
+    <button id="tabA" class="tab on" title="Activity images with the runs' sources">Sources</button>
+    <button id="tabB" class="tab" title="Aligned movie, fitted activity and residual">Movie</button>
+    <label>Path <select id="path"></select></label>
+    <span id="status">loading…</span>
+    <button id="btheme" title="Light / dark">◐</button>
+  </div>
+  <div class="row" id="runinfo"></div>
+  <!-- view A controls -->
+  <div class="row aonly">
+    <label>Trial <input id="atrial" type="range" min="1" max="1" value="1" style="width:120px"><span id="atrialv">1</span></label>
+    <label>Black <input id="ablack" type="range" min="0" max="100" value="0" style="width:90px"></label>
+    <label>White <input id="awhite" type="range" min="1" max="100" value="100" style="width:90px"></label>
+    <label>Gamma <input id="agamma" type="range" min="0.3" max="2.5" step="0.05" value="1" style="width:90px"></label>
+    <label><input id="mkept" type="checkbox" checked> kept</label>
+    <label><input id="mrej" type="checkbox" checked> kinetics-rejected</label>
+    <label id="mseedsL"><input id="mseeds" type="checkbox"> seeds without a source</label>
+    <button id="aflick" title="Show the right panel's image in the left panel while held">Flicker (hold)</button>
+    <button id="aflickauto" title="Alternate the left panel between both images">Flicker</button>
+    <button id="afit" title="Fit (double-click)">Fit</button>
+  </div>
+  <div class="hint aonly">Over the images: scroll zooms · drag pans · click a marker for the source · double-click fits.
+    Markers: <span id="alegend"></span></div>
+  <!-- view B controls -->
+  <div class="row bonly hidden">
+    <label>Trial <select id="btrial"></select></label>
+    <button id="btprev" title="Previous trial (Page Up)">‹</button><button id="btnext" title="Next trial (Page Down)">›</button>
+    <span id="binfo" class="hint"></span>
+  </div>
+  <div class="row bonly hidden">
+    <button id="bstart" title="First frame (Home)">⏮</button>
+    <button id="bprev" title="Previous frame (←, Shift: 10)">◀</button>
+    <button id="bplay" title="Play / pause (Space)">▶</button>
+    <button id="bnext" title="Next frame (→, Shift: 10)">▶▶</button>
+    <input id="tslider" type="range" min="0" max="0" value="0" step="1" aria-label="Frame">
+    <span id="tlabel"></span>
+    <label>Average <select id="avg"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option><option>32</option><option>64</option></select> frames</label>
+    <label>Play <select id="fps"><option value="5">5</option><option value="10">10</option><option value="20" selected>20</option><option value="40">40</option></select> fps,</label>
+    <label>step <select id="skip"><option selected>1</option><option>2</option><option>4</option><option>8</option></select></label>
+  </div>
+  <div class="row bonly hidden">
+    <span class="hint">Layers:</span><span id="layers" class="row"></span>
+  </div>
+  <div class="row bonly hidden">
+    <label>Display <select id="gamma"><option value="1">linear</option><option value="0.5" selected>square root</option></select></label>
+    <label>Data range <input id="lo" type="number" step="any"> – <input id="hi" type="number" step="any"></label>
+    <label>Activity 0 – <input id="ahi" type="number" step="any" min="0"></label>
+    <label>Residual − baseline ± <input id="rr" type="number" step="any" min="0"></label>
+    <button id="bauto" title="Set the ranges from the current frame">Auto range</button>
+    <label>Columns <select id="ncols"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>6</option></select></label>
+    <button id="zin" title="Zoom in (Ctrl + scroll)">＋</button><button id="zout" title="Zoom out">－</button><button id="zreset" title="Fit (double-click)">Fit</button>
+    <label><input id="bmarks" type="checkbox"> sources</label>
+    <label title="How SILo's 200 Hz traces become the movie's 80 Hz frames">Time kernel <select id="bkernel">
+      <option value="matched">matched (√(dt80² − dt200²))</option>
+      <option value="exporter">exporter's (dt of the movie)</option></select></label>
+  </div>
+  <div class="row bonly hidden">
+    <span id="evinfo" class="hint">No source picked: pick one in the Sources view to step through its largest events.</span>
+    <button id="evprev" disabled title="Previous (larger) event">◀ event</button><button id="evnext" disabled title="Next (smaller) event">event ▶</button>
+  </div>
+  <div class="hint bonly hidden">Over the images: scroll steps through time (Shift: 10 frames) · Ctrl + scroll zooms · drag pans · click picks the trace pixel · double-click fits. Keys: ← → Space Home End PageUp PageDown.</div>
+</header>
+<main>
+  <section id="viewA">
+    <div class="agrid">
+      <div class="panel"><div class="bar"><select id="selL"></select></div><canvas class="view" id="cL"></canvas></div>
+      <div class="panel"><div class="bar"><select id="selR"></select></div><canvas class="view" id="cR"></canvas></div>
+      <div class="panel" id="detail"><h2>Source</h2><p class="muted">Click a marker or a table row.</p></div>
+    </div>
+    <div class="readout" id="areadout"></div>
+    <section class="charts" id="acharts">
+      <div class="head"><b>Source traces</b><span id="asrcinfo" class="hint">pick a kept source</span>
+        <span class="hint">200 Hz, all trials (grey lines: trial boundaries) · scroll zooms time · drag pans · double-click shows everything</span></div>
+      <div class="legend" id="alegend2"></div>
+      <div class="ctitle">dF: least squares and denoised (the fit) (raw counts, footprint units)</div>
+      <div class="chart"><canvas id="ac1"></canvas></div>
+      <div class="ctitle">Events (the denoised dF is their convolution with the indicator kernel)</div>
+      <div class="chart small"><canvas id="ac3"></canvas></div>
+      <div class="ctitle">F0 (raw counts, footprint units)</div>
+      <div class="chart small"><canvas id="ac2"></canvas></div>
+    </section>
+    <div id="tablewrap"><table id="srctable"></table></div>
+  </section>
+  <section id="viewB" class="hidden">
+    <div id="tiles"></div>
+    <div class="readout" id="breadout"></div>
+    <section class="charts">
+      <div class="head">
+        <b>Trace</b><span id="pixinfo" class="hint"></span>
+        <label>ROI <select id="rad"><option value="0">1 px</option><option value="1" selected>3 × 3</option><option value="2">5 × 5</option><option value="3">7 × 7</option></select></label>
+        <label>Smooth <select id="tsmooth"><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select> frames</label>
+        <label><input id="follow" type="checkbox" checked> follow the frame</label>
+        <span class="hint">Scroll zooms time · drag pans · click sets the frame · double-click shows the whole trial</span>
+      </div>
+      <div class="legend" id="blegend"></div>
+      <div class="ctitle">Movie, movie − activity (residual) and baseline (raw counts, ROI mean)</div>
+      <div class="chart"><canvas id="bc1"></canvas></div>
+      <div class="ctitle">Fitted activity, and movie − activity − baseline (raw counts, ROI mean)</div>
+      <div class="chart"><canvas id="bc2"></canvas></div>
+    </section>
+  </section>
+  <details class="defs" id="defs">
+    <summary>What the panels show</summary>
+    <ul>
+      <li><b>Activity image</b> (Sources view): SILo's combined activity image of the path on its consensus canvas (all trials), or one trial's, as in <code>experiment_summary.h5</code> and <code>per_trial_summary.h5</code>. Markers sit at the kept sources' footprint centroids, the kinetics-rejected sources' pixels and, when the run kept its plan, the seeds whose pixel got no source.</li>
+      <li><b>Aligned movie</b> (Movie view): the trial's registered 80 Hz movie (<code>*_REGISTERED_DOWNSAMPLED-80Hz</code>, activity channel) in the trial's own registered frame, not resampled. Blank (NaN) at SILo's motion discards and at frames whose kernel weight lies mostly on SILo's discarded 200 Hz frames; only pixels missing in less than <code>nanThresh</code> of the frames, counting the motion discards (as SILo's trial loader and the exporter count them), are shown.</li>
+      <li><b>Fitted activity</b>: every kept source's footprint times its denoised trace (<code>dF_denoised</code>), rendered in the movie's pixels and frames following the F0 network's training-data exporter. Time: each 80 Hz frame averages SILo's 200 Hz traces at its frame lines with weights <code>exp(−|Δline| / dt)</code> within <code>max(3 dt, P)</code> lines (P: lines per cycle), leaving out SILo's discarded frames. With the <b>exporter's</b> kernel dt is the movie's own (<code>ceil(mean(diff(DSframes)))</code>, 134 lines on these rigs), as the training-data exporter does; but the 200 Hz frames are themselves averages (dt200 = 54 lines), so this smooths fast events twice and keeps 93–95% of an event's 80 Hz peak on noiseless injected events. The <b>matched</b> kernel (the default) uses <code>√(dt² − dt200²)</code> (≈ 123 lines) and keeps 97–99%. The Time kernel menu switches between them. Space: the trial's footprints are moved from the consensus canvas into the trial's frame through the trial's across-trial map (rigid, affine or patchwise), bilinearly; the exporter instead searched a rigid offset per trial by correlation and blurred the footprints to match the movie's shape (here a fixed blur, 0 unless the server was started with <code>--blur</code>). Kinetics-rejected sources are not included (their traces are not in the summary).</li>
+      <li><b>Residual</b> = aligned movie − fitted activity: what a training target made from this run would be. <b>Residual − baseline</b> = movie − activity − the F0 network's baseline (only with <code>--baseline-dir</code>).</li>
+      <li><b>Units</b>: raw counts of the registered movie (each pixel's weighted mean of its raw SLAP2 samples); SILo's traces and F0 are in the same units (footprints sum to 1, so a trace is the source's total over its footprint).</li>
+    </ul>
+  </details>
+</main>
+<div id="tip"></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const S = { meta: null, view: "A", path: null };
+const A = { src: null, images: {}, view: { z: 1, cx: 0, cy: 0 }, sel: null, marks: [], flick: false, flickTimer: null, srcSeq: 0,
+  detail: null, traces: null, xr: [0, 1], hoverT: null, sortKey: "kind", sortDir: 1, seq: 0 };
+const B = { st: null, layers: [], N: 0, R: 0, C: 0, T: 0, fr: 80, t: 0, avg: 4, playing: false, frame: null,
+  inflight: false, pending: false, view: { z: 1, cx: 0, cy: 0 }, sel: null, rad: 1, lo: 0, hi: 1, ahi: 1, rr: 1,
+  gamma: 0.5, shown: new Set(), ncols: 3, trace: null, tsmooth: 1, xr: [0, 1], hoverT: null, pix: null, tiles: [],
+  seq: 0, trial: null, events: [], ev: -1, evSrc: null, autoNext: true, pendingJump: null, kernel: "matched" };
+
+function setStatus(msg, err) { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; }
+async function getJSON(url) {
+  const r = await fetch(url); const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+async function getBin(url) {
+  const r = await fetch(url);
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error; } catch (e) {} throw new Error(m); }
+  return { buf: await r.arrayBuffer(), headers: r.headers };
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function fmt(x) { if (x === null || x === undefined || !Number.isFinite(+x)) return "–"; x = +x; if (x === 0) return "0"; const a = Math.abs(x); return a >= 100 ? x.toFixed(0) : a >= 10 ? x.toFixed(1) : a >= 1 ? x.toFixed(2) : x.toFixed(3); }
+
+// ---------- colour maps ----------
+function hex(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function lut(stops) {
+  const out = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = i / 255; let k = 0; while (k < stops.length - 2 && x > stops[k + 1][0]) k++;
+    const [x0, c0] = stops[k], [x1, c1] = stops[k + 1];
+    const f = Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+    const c = c0.map((v, j) => Math.round(v + f * (c1[j] - v)));
+    out[i] = (255 << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+  }
+  return out;
+}
+const GRAY = lut([[0, [0, 0, 0]], [1, [255, 255, 255]]]);
+const HOT = lut([[0, [0, 0, 4]], [0.25, hex("#3b0f70")], [0.5, hex("#8c2981")], [0.75, hex("#de4968")], [0.9, hex("#fe9f6d")], [1, hex("#fcfdbf")]]);
+const DIV = lut([[0, hex("#cde2fb")], [0.22, hex("#3987e5")], [0.5, hex("#3a3a37")], [0.78, hex("#e66767")], [1, hex("#fbd3d0")]]);
+function pct(a, q) {
+  const v = []; for (let i = 0; i < a.length; i++) if (Number.isFinite(a[i])) v.push(a[i]);
+  if (!v.length) return NaN; v.sort((x, y) => x - y);
+  return v[Math.min(v.length - 1, Math.max(0, Math.round(q * (v.length - 1))))];
+}
+function nice(x) { if (!Number.isFinite(x) || x === 0) return x; const p = Math.pow(10, Math.floor(Math.log10(Math.abs(x))) - 1); return parseFloat((Math.round(x / p) * p).toPrecision(6)); }
+
+// ---------- start ----------
+async function init() {
+  try { S.meta = await getJSON("/api/meta"); }
+  catch (e) { setStatus("could not load the runs: " + e.message, true); return; }
+  $("label").textContent = S.meta.label;
+  B.kernel = S.meta.kernel || "matched"; $("bkernel").value = B.kernel;
+  document.title = `${S.meta.label} · SILo run viewer`;
+  $("runinfo").innerHTML = S.meta.runs.map((r) => {
+    const s = r.settings;
+    const parts = [`baseline ${esc(s.baselineSource || "median")}`, `alignment ${esc(s.interTrialAlignment || "rigid")}`,
+      `support ${esc(s.validKernel || 3)} × ${esc(s.validKernel || 3)}`, `peak threshold ${esc(s.peakth)}`];
+    return `<span title="${esc(r.dir)}"><b>${esc(r.name)}</b>: ${parts.join(", ")}</span>`;
+  }).join(" · ") + (S.meta.blur_px ? ` · rendered footprints blurred ${S.meta.blur_px} px` : "");
+  const ps = $("path");
+  for (const p of S.meta.paths) { const o = document.createElement("option"); o.value = p.path; o.textContent = `Path ${p.path}`; ps.appendChild(o); }
+  ps.onchange = () => setPath(+ps.value);
+  if (!S.meta.paths.length) { setStatus("no paths", true); return; }
+  await setPath(S.meta.paths[0].path);
+}
+function pathMeta() { return S.meta.paths.find((p) => p.path === S.path); }
+function resetMovie() {  // the movie view's trial-path state: none loaded, nothing pending
+  B.seq++; B.st = null; B.trial = null; B.frame = null; B.trace = null; B.lastKey = undefined;
+  B.events = []; B.ev = -1; B.evSrc = null; B.pending = false;
+  if (B.playing) togglePlay();
+  updateEvInfo(); $("evinfo").textContent = "No source picked: pick one in the Sources view to step through its largest events.";
+}
+async function setPath(d) {
+  S.path = d; $("path").value = d;
+  A.seq++; A.images = {}; A.sel = null; A.detail = null; A.traces = null; A.view = { z: 1, cx: 0, cy: 0 };
+  A.src = null; A.marks = []; $("srctable").innerHTML = ""; showDetail(); drawACharts();  // nothing of the old path stays clickable
+  for (const id of ["cL", "cR"]) { const c = $(id); c.getContext("2d").clearRect(0, 0, c.width, c.height); }
+  resetMovie();
+  fillTrialSelect();
+  await loadSources();
+  if (S.view === "B") { const t = firstMovieTrial(); if (t !== null) loadTrial(t); }
+}
+
+// ---------- view A: sources ----------
+async function loadSources() {
+  const seq = ++A.srcSeq;
+  setStatus(`reading path ${S.path}…`);
+  let src;
+  try { src = await getJSON(`/api/sources?path=${S.path}`); }
+  catch (e) { setStatus(e.message, true); return; }
+  if (seq !== A.srcSeq) return;
+  A.src = src;
+  const [h, w] = src.shape; A.h = h; A.w = w;
+  A.view = { z: 1, cx: w / 2, cy: h / 2 };
+  const runs = S.meta.runs.map((r) => r.name);
+  const nT = Math.max(...runs.map((r) => src.runs[r].trials));
+  $("atrial").max = Math.max(1, nT); $("atrial").value = Math.min(+$("atrial").value, nT);
+  $("atrialv").textContent = $("atrial").value;
+  const opts = [];
+  for (const r of runs) {
+    opts.push([`${r}|act`, `${r}: activity, all trials`]);
+    opts.push([`${r}|trial_act`, `${r}: activity, trial (slider)`]);
+  }
+  for (const r of runs) { opts.push([`${r}|mean`, `${r}: mean image`]); opts.push([`${r}|trial_mean`, `${r}: mean image, trial (slider)`]); }
+  for (const [id, def] of [["selL", `${runs[0]}|act`], ["selR", runs.length > 1 ? `${runs[1]}|act` : `${runs[0]}|trial_act`]]) {
+    const s = $(id), cur = s.value; s.innerHTML = "";
+    for (const [v, t] of opts) { const o = document.createElement("option"); o.value = v; o.textContent = t; s.appendChild(o); }
+    s.value = opts.some(([v]) => v === cur) ? cur : def;
+  }
+  const anySeeds = runs.some((r) => src.runs[r].seeds !== null);
+  $("mseedsL").style.display = anySeeds ? "" : "none";
+  setStatus("");
+  await renderA(); table(); legendA(); showDetail();
+}
+function imgKey(which) {
+  const [run, kind] = $(which).value.split("|");
+  const trial = kind.startsWith("trial") ? +$("atrial").value - 1 : -1;
+  return { run, kind, trial, key: `${run}|${kind}|${trial}` };
+}
+async function getImage(k) {
+  if (A.images[k.key]) return A.images[k.key];
+  const cache = A.images, path = S.path, w = A.w, h = A.h;
+  const { buf } = await getBin(`/api/image?path=${path}&run=${encodeURIComponent(k.run)}&kind=${k.kind}&trial=${k.trial}`);
+  const data = new Float32Array(buf);
+  // another path was picked meanwhile: its cache and size differ
+  if (cache !== A.images || path !== S.path || data.length !== w * h) return null;
+  const e = { data, lo: pct(data, 0.005), hi: pct(data, 0.998), canvas: document.createElement("canvas"), stamp: "" };
+  if (!(e.hi > e.lo)) e.hi = e.lo + 1;
+  e.canvas.width = A.w; e.canvas.height = A.h;
+  A.images[k.key] = e;
+  return e;
+}
+function paintImage(e) {
+  const b = +$("ablack").value / 100, wv = Math.max(+$("awhite").value / 100, b + 0.01), g = +$("agamma").value;
+  const stamp = `${b},${wv},${g},${document.documentElement.dataset.theme || ""}`;
+  if (e.stamp === stamp) return;
+  const ctx = e.canvas.getContext("2d"), img = ctx.createImageData(A.w, A.h), u = new Uint32Array(img.data.buffer);
+  const lo = e.lo + b * (e.hi - e.lo), k = 1 / ((wv - b) * (e.hi - e.lo));
+  for (let i = 0; i < e.data.length; i++) {
+    const x = e.data[i];
+    if (!Number.isFinite(x)) { u[i] = 0; continue; }
+    const f = Math.max(0, Math.min(1, (x - lo) * k));
+    u[i] = GRAY[Math.round(255 * (g === 1 ? f : Math.pow(f, g)))];
+  }
+  ctx.putImageData(img, 0, 0); e.stamp = stamp;
+}
+function match(a, b) {  // one to one within 1.5 px, closest first: Map index a -> index b
+  const pairs = [];
+  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
+    const d = Math.hypot(a[i][0] - b[j][0], a[i][1] - b[j][1]); if (d <= 1.5) pairs.push([d, i, j]);
+  }
+  pairs.sort((x, y) => x[0] - y[0]);
+  const ua = new Set(), ub = new Set(), m = new Map();
+  for (const [, i, j] of pairs) if (!ua.has(i) && !ub.has(j)) { ua.add(i); ub.add(j); m.set(i, j); }
+  return m;
+}
+function panelRuns() { return [imgKey("selL").run, imgKey("selR").run]; }
+function computeMarks() {
+  const [L, R] = panelRuns(), out = [];
+  const add = (run, kind, i, p, other) => out.push({ run, kind, i, p, other });
+  const K = (r) => A.src.runs[r].kept;
+  if (L !== R) {
+    const m = match(K(L), K(R)), back = new Map([...m].map(([i, j]) => [j, i]));
+    K(L).forEach((p, i) => add(L, m.has(i) ? "both" : "onlyL", i, p, m.has(i) ? { run: R, i: m.get(i), p: K(R)[m.get(i)] } : null));
+    K(R).forEach((p, j) => add(R, back.has(j) ? "both" : "onlyR", j, p, back.has(j) ? { run: L, i: back.get(j), p: K(L)[back.get(j)] } : null));
+  } else K(L).forEach((p, i) => add(L, "both", i, p, null));
+  for (const r of L === R ? [L] : [L, R]) {
+    A.src.runs[r].rejected.forEach((p, i) => add(r, "rej", i, p, null));
+    (A.src.runs[r].seeds || []).forEach((p, i) => add(r, "seed", i, p, null));
+  }
+  return out;
+}
+function shown(m) {
+  if (m.kind === "rej") return $("mrej").checked;
+  if (m.kind === "seed") return $("mseeds").checked;
+  return $("mkept").checked;
+}
+function axf(c) { const W = c.width, H = c.height, s = Math.min(W / A.w, H / A.h) * A.view.z; return { s, ox: W / 2 - A.view.cx * s, oy: H / 2 - A.view.cy * s }; }
+function drawPanel(cid, e, run) {
+  const c = $(cid), dpr = window.devicePixelRatio || 1;
+  const W = c.clientWidth || 400, H = Math.max(80, Math.round(W * A.h / A.w));
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.height = H + "px"; }
+  const g = c.getContext("2d"); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.width, c.height);
+  if (!e) return;
+  paintImage(e);
+  const { s, ox, oy } = axf(c);
+  g.imageSmoothingEnabled = false; g.setTransform(s, 0, 0, s, ox, oy); g.drawImage(e.canvas, 0, 0);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const col = { both: css("--both"), onlyL: css("--onlyL"), onlyR: css("--onlyR"), rej: css("--rej"), seed: css("--seed") };
+  const r = Math.max(4 * dpr, 1.6 * s);
+  for (const m of A.marks) {
+    if (!shown(m) || m.run !== run) continue;
+    const X = ox + (m.p[1] + 0.5) * s, Y = oy + (m.p[0] + 0.5) * s;
+    if (X < -10 || Y < -10 || X > c.width + 10 || Y > c.height + 10) continue;
+    const isSel = A.sel && A.sel.run === m.run && A.sel.kind === m.kind && A.sel.i === m.i;
+    const isOther = A.sel && A.sel.other && A.sel.other.run === m.run && A.sel.other.i === m.i && m.kind !== "rej" && m.kind !== "seed";
+    g.strokeStyle = col[m.kind]; g.fillStyle = col[m.kind]; g.lineWidth = (isSel || isOther ? 3 : 1.5) * dpr;
+    g.beginPath();
+    if (m.kind === "both") g.arc(X, Y, r, 0, 2 * Math.PI);
+    else if (m.kind === "onlyL") { g.moveTo(X, Y - r); g.lineTo(X + r, Y); g.lineTo(X, Y + r); g.lineTo(X - r, Y); g.closePath(); }
+    else if (m.kind === "onlyR") g.rect(X - r * 0.8, Y - r * 0.8, r * 1.6, r * 1.6);
+    else if (m.kind === "rej") { const q = r * 0.75; g.moveTo(X - q, Y - q); g.lineTo(X + q, Y + q); g.moveTo(X + q, Y - q); g.lineTo(X - q, Y + q); }
+    else { g.arc(X, Y, Math.max(1.5 * dpr, r * 0.3), 0, 2 * Math.PI); g.fill(); continue; }
+    g.stroke();
+  }
+}
+async function renderA() {
+  if (!A.src) return;
+  const kl = imgKey("selL"), kr = imgKey("selR"), src = A.src;
+  let el, er;
+  try { [el, er] = await Promise.all([getImage(kl), getImage(kr)]); }
+  catch (e) { setStatus(e.message, true); return; }
+  // stale: another path, run list, image or trial was picked meanwhile
+  if (!el || !er || src !== A.src || kl.key !== imgKey("selL").key || kr.key !== imgKey("selR").key) return;
+  A.marks = computeMarks();
+  drawPanel("cL", A.flick ? er : el, A.flick ? kr.run : kl.run); drawPanel("cR", er, kr.run);
+}
+function legendA() {
+  const [L, R] = panelRuns();
+  const sym = (kind) => {
+    const c = css({ both: "--both", onlyL: "--onlyL", onlyR: "--onlyR", rej: "--rej", seed: "--seed" }[kind]);
+    if (kind === "both") return `<svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="none" stroke="${c}" stroke-width="1.5"/></svg>`;
+    if (kind === "onlyL") return `<svg width="12" height="12"><path d="M6 1 L11 6 L6 11 L1 6Z" fill="none" stroke="${c}" stroke-width="1.5"/></svg>`;
+    if (kind === "onlyR") return `<svg width="12" height="12"><rect x="2" y="2" width="8" height="8" fill="none" stroke="${c}" stroke-width="1.5"/></svg>`;
+    if (kind === "rej") return `<svg width="12" height="12"><path d="M2 2 L10 10 M10 2 L2 10" stroke="${c}" stroke-width="1.5"/></svg>`;
+    return `<svg width="12" height="12"><circle cx="6" cy="6" r="2" fill="${c}"/></svg>`;
+  };
+  $("alegend").innerHTML = (L !== R
+    ? `${sym("both")} in both runs (1:1 within 1.5 px) · ${sym("onlyL")} only ${esc(L)} · ${sym("onlyR")} only ${esc(R)}`
+    : `${sym("both")} kept sources of ${esc(L)}`) + ` · ${sym("rej")} kinetics-rejected · ${sym("seed")} seed without a source`;
+}
+function panelRun(cid) { const [L, R] = panelRuns(); return cid === "cL" && !A.flick ? L : R; }
+function nearestMark(c, ev) {
+  const run = panelRun(c.id);
+  const b = c.getBoundingClientRect(), dpr = c.width / b.width, { s, ox, oy } = axf(c);
+  const x = (ev.clientX - b.left) * dpr, y = (ev.clientY - b.top) * dpr;
+  let best = null, bd = 9 * dpr;
+  for (const m of A.marks) {
+    if (!shown(m) || m.run !== run) continue;
+    const X = ox + (m.p[1] + 0.5) * s, Y = oy + (m.p[0] + 0.5) * s, d = Math.hypot(X - x, Y - y);
+    if (d < bd) { bd = d; best = m; }
+  }
+  const r = (y - oy) / s, cc = (x - ox) / s;
+  return { best, r, c: cc };
+}
+async function selectMark(m) {
+  const seq = ++A.seq;
+  A.sel = m; renderA(); A.detail = null; A.traces = null; showDetail(); drawACharts();
+  if (m.kind === "rej" || m.kind === "seed") return;
+  try {
+    const [d, tb] = await Promise.all([
+      getJSON(`/api/source?path=${S.path}&run=${encodeURIComponent(m.run)}&id=${m.i}`),
+      getBin(`/api/source_traces?path=${S.path}&run=${encodeURIComponent(m.run)}&id=${m.i}`)]);
+    if (seq !== A.seq) return;
+    A.detail = d;
+    const all = new Float32Array(tb.buf), n = all.length / 4;
+    A.traces = { dls: all.subarray(n, 2 * n), den: all.subarray(0, n), ev: all.subarray(2 * n, 3 * n), f0: all.subarray(3 * n, 4 * n), n };
+    A.xr = [0, n];
+    showDetail(); drawACharts();
+  } catch (e) { if (seq === A.seq) setStatus(e.message, true); }
+}
+function kindText(m) {
+  const [L, R] = panelRuns();
+  return { both: L !== R ? "in both runs" : "kept", onlyL: `only in ${L}`, onlyR: `only in ${R}`, rej: "rejected by the kinetics test", seed: "seed without a source" }[m.kind];
+}
+function showDetail() {
+  const el = $("detail"), m = A.sel;
+  if (!m) { el.innerHTML = `<h2>Source</h2><p class="muted">Click a marker or a table row.</p>`; return; }
+  const p = m.p;
+  let h = `<h2>${esc(m.run)} · ${m.kind === "rej" ? "rejected" : m.kind === "seed" ? "seed" : "source"} ${m.i + 1}</h2>`;
+  h += `<p class="muted">${esc(kindText(m))}; row ${fmt(p[0])}, col ${fmt(p[1])} (canvas)</p><table>`;
+  if (m.kind === "rej") h += `<tr><td>kinetic score</td><td>${fmt(p[2])}</td></tr><tr><td>kinetic events</td><td>${fmt(p[3])}</td></tr>`;
+  else if (m.kind !== "seed") {
+    h += `<tr><td>SNR</td><td>${fmt(p[2])}</td></tr><tr><td>kinetic score</td><td>${fmt(p[3])}</td></tr>`;
+    h += `<tr><td>kinetic events</td><td>${fmt(p[4])}</td></tr><tr><td>footprint width (RMS per axis)</td><td>${fmt(p[5])} px</td></tr>`;
+    if (m.other) h += `<tr><td>${esc(m.other.run)} source ${m.other.i + 1}: distance</td><td>${fmt(Math.hypot(p[0] - m.other.p[0], p[1] - m.other.p[1]))} px</td></tr>
+      <tr><td>${esc(m.other.run)}: SNR / width</td><td>${fmt(m.other.p[2])} / ${fmt(m.other.p[5])} px</td></tr>`;
+  }
+  h += `</table>`;
+  if (m.kind !== "rej" && m.kind !== "seed") {
+    h += `<div style="display:flex;gap:10px;align-items:flex-start;margin-top:8px"><canvas id="fpc" width="15" height="15" style="width:120px;height:120px;image-rendering:pixelated;border-radius:4px;background:var(--well)"></canvas>
+      <div class="muted">Mean footprint (all trials), 15 × 15 px around the source pixel; + marks the centroid.<br><br>
+      <button id="tomovie" ${A.detail && A.detail.events.length ? "" : "disabled"}>Largest event in the movie</button></div></div>`;
+    h += `<div id="evlist"></div>`;
+  }
+  el.innerHTML = h;
+  if (A.detail && A.detail.id === m.i) { drawFootprint(); eventList(); $("tomovie").onclick = () => jumpToEvent(m, 0); }
+}
+function drawFootprint() {
+  const d = A.detail, c = $("fpc"); if (!c || !d) return;
+  const v = d.footprint.values, h = v.length, w = h ? v[0].length : 0;
+  c.width = w; c.height = h;
+  const g = c.getContext("2d"), img = g.createImageData(w, h), u = new Uint32Array(img.data.buffer);
+  let mx = 0; for (const row of v) for (const x of row) if (x > mx) mx = x;
+  for (let r = 0; r < h; r++) for (let cc = 0; cc < w; cc++) { const x = v[r][cc]; u[r * w + cc] = HOT[Math.round(255 * Math.max(0, Math.min(1, (x || 0) / (mx || 1))))]; }
+  g.putImageData(img, 0, 0);
+  const sc = c.clientWidth / w, cr = d.rc[0] - d.footprint.r0, ccl = d.rc[1] - d.footprint.c0;
+  c.width = w * 8; c.height = h * 8;  // redraw larger for the mark
+  const g2 = c.getContext("2d"); g2.imageSmoothingEnabled = false;
+  const tmp = document.createElement("canvas"); tmp.width = w; tmp.height = h; tmp.getContext("2d").putImageData(img, 0, 0);
+  g2.drawImage(tmp, 0, 0, w * 8, h * 8);
+  g2.strokeStyle = "#2a78d6"; g2.lineWidth = 2; const X = (ccl + 0.5) * 8, Y = (cr + 0.5) * 8;
+  g2.beginPath(); g2.moveTo(X - 6, Y); g2.lineTo(X + 6, Y); g2.moveTo(X, Y - 6); g2.lineTo(X, Y + 6); g2.stroke();
+  void sc;
+}
+function eventList() {
+  const d = A.detail, el = $("evlist"); if (!el || !d) return;
+  if (!d.events.length) { el.innerHTML = `<p class="muted">No events in trials with a movie.</p>`; return; }
+  el.innerHTML = `<p class="muted" style="margin:6px 0 2px">Largest denoised events (click: show in the movie)</p><table><tr><td class="muted">#</td><td class="muted">trial</td><td class="muted">time</td><td class="muted">dF</td></tr>` +
+    d.events.map((e, k) => `<tr data-k="${k}"><td>${k + 1}</td><td>${e.trial + 1}</td><td>${fmt(e.frame / 80)} s</td><td>${fmt(e.value)}</td></tr>`).join("") + `</table>`;
+  el.querySelectorAll("tr[data-k]").forEach((tr) => tr.onclick = () => jumpToEvent(A.sel, +tr.dataset.k));
+}
+let sortCols = [["kind", "category"], ["run", "run"], ["id", "#"], ["snr", "SNR"], ["kin", "kinetic score"], ["nev", "kinetic events"], ["width", "width (px)"], ["dist", "distance to the other run (px)"]];
+function table() {
+  if (!A.src) return;
+  const [L, R] = panelRuns();
+  const rows = A.marks.filter((m) => m.kind !== "seed" && !(L !== R && m.run === R && m.kind === "both")).map((m) => ({ m, kind: m.kind, run: m.run, id: m.i + 1,
+    snr: m.kind === "rej" ? null : m.p[2], kin: m.kind === "rej" ? m.p[2] : m.p[3], nev: m.kind === "rej" ? m.p[3] : m.p[4],
+    width: m.kind === "rej" ? null : m.p[5], dist: m.other ? Math.hypot(m.p[0] - m.other.p[0], m.p[1] - m.other.p[1]) : null }));
+  const order = { both: 0, onlyL: 1, onlyR: 2, rej: 3 };
+  rows.sort((a, b) => {
+    const va = A.sortKey === "kind" ? order[a.kind] : a[A.sortKey], vb = A.sortKey === "kind" ? order[b.kind] : b[A.sortKey];
+    const x = va ?? -1e9, y = vb ?? -1e9; return (x > y ? 1 : x < y ? -1 : 0) * A.sortDir;
+  });
+  const tv = (r, k) => k === "kind" ? esc(kindText(r.m)) : k === "run" ? esc(r.run) : k === "id" ? r.id : fmt(r[k]);
+  $("srctable").innerHTML = "<thead><tr>" + sortCols.map(([k, t]) => `<th data-k="${k}">${t}${A.sortKey === k ? (A.sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") +
+    "</tr></thead><tbody>" + rows.map((r, i) => `<tr data-i="${i}">` + sortCols.map(([k]) => `<td>${tv(r, k)}</td>`).join("") + "</tr>").join("") + "</tbody>";
+  $("srctable").querySelectorAll("th").forEach((th) => th.onclick = () => { const k = th.dataset.k; A.sortDir = A.sortKey === k ? -A.sortDir : 1; A.sortKey = k; table(); });
+  $("srctable").querySelectorAll("tbody tr").forEach((tr) => tr.onclick = () => {
+    const m = rows[+tr.dataset.i].m;
+    A.view.z = Math.max(A.view.z, 6); A.view.cx = m.p[1] + 0.5; A.view.cy = m.p[0] + 0.5;
+    selectMark(m); window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+}
+for (const cid of ["cL", "cR"]) {
+  const c = $(cid); let drag = null;
+  c.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const b = c.getBoundingClientRect(), dpr = c.width / b.width, { s, ox, oy } = axf(c);
+    const x = ((ev.clientX - b.left) * dpr - ox) / s, y = ((ev.clientY - b.top) * dpr - oy) / s;
+    const z = Math.min(64, Math.max(1, A.view.z * Math.exp(-ev.deltaY * (ev.deltaMode ? 0.1 : 0.0025)))), g = A.view.z / z;
+    A.view.cx = x + (A.view.cx - x) * g; A.view.cy = y + (A.view.cy - y) * g; A.view.z = z;
+    if (z === 1) { A.view.cx = A.w / 2; A.view.cy = A.h / 2; }
+    renderA();
+  }, { passive: false });
+  c.addEventListener("pointerdown", (ev) => { drag = { x: ev.clientX, y: ev.clientY, cx: A.view.cx, cy: A.view.cy, moved: false }; c.setPointerCapture(ev.pointerId); });
+  c.addEventListener("pointermove", (ev) => {
+    if (drag) {
+      const b = c.getBoundingClientRect(), dpr = c.width / b.width, { s } = axf(c);
+      const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      if (drag.moved) { A.view.cx = drag.cx - dx * dpr / s; A.view.cy = drag.cy - dy * dpr / s; renderA(); }
+      return;
+    }
+    const { best, r, c: cc } = nearestMark(c, ev), tip = $("tip");
+    const e = A.images[imgKey(cid === "cL" ? "selL" : "selR").key];
+    const ri = Math.floor(r), ci = Math.floor(cc);
+    const v = e && ri >= 0 && ri < A.h && ci >= 0 && ci < A.w ? e.data[ri * A.w + ci] : NaN;
+    $("areadout").textContent = ri >= 0 && ri < A.h && ci >= 0 && ci < A.w ? `row ${ri}, col ${ci}: ${fmt(v)}` : " ";
+    if (best) {
+      tip.style.display = "block"; tip.style.left = ev.clientX + 12 + "px"; tip.style.top = ev.clientY + 12 + "px";
+      tip.textContent = best.kind === "rej" ? `${best.run}: rejected, kinetic score ${fmt(best.p[2])}` : best.kind === "seed" ? `${best.run}: seed without a source`
+        : `${best.run} #${best.i + 1}: SNR ${fmt(best.p[2])}, width ${fmt(best.p[5])} px, ${kindText(best)}`;
+    } else tip.style.display = "none";
+  });
+  c.addEventListener("pointerup", (ev) => { if (drag && !drag.moved) { const { best } = nearestMark(c, ev); if (best) selectMark(best); } drag = null; });
+  c.addEventListener("pointerleave", () => { $("tip").style.display = "none"; });
+  c.addEventListener("dblclick", () => { A.view = { z: 1, cx: A.w / 2, cy: A.h / 2 }; renderA(); });
+}
+function drawACharts() {
+  const t = A.traces;
+  const lg = $("alegend2");
+  if (!t) { lg.innerHTML = ""; for (const id of ["ac1", "ac2", "ac3"]) clearChart($(id)); $("asrcinfo").textContent = A.sel ? (A.sel.kind === "rej" || A.sel.kind === "seed" ? "no traces in the summary for this marker" : "loading…") : "pick a kept source"; return; }
+  const d = A.detail;
+  $("asrcinfo").textContent = `${A.sel.run} source ${A.sel.i + 1} · ${d.offsets.length - 1} trials · ${t.n} frames at ${d.hz} Hz`;
+  const top = [{ name: "dF least squares", color: css("--data"), w: 1, y: t.dls }, { name: "dF denoised (fit)", color: css("--series-1"), w: 1.5, y: t.den }];
+  const mid = [{ name: "events", color: css("--series-2"), w: 1.25, y: t.ev, stem: true }];
+  const bot = [{ name: "F0", color: css("--series-3"), w: 1.5, y: t.f0 }];
+  lg.innerHTML = top.concat(mid, bot).map((s) => `<span><span class="sw" style="background:${s.color}"></span>${s.name}</span>`).join("");
+  const cfg = { T: t.n, fr: d.hz, xr: A.xr, cursor: null, hover: A.hoverT, bounds: d.offsets };
+  drawChart($("ac1"), top, true, cfg); drawChart($("ac3"), mid, true, cfg); drawChart($("ac2"), bot, false, cfg);
+  A.lastSeries = { top, mid, bot };
+}
+
+// ---------- view B: movie ----------
+function fillTrialSelect() {
+  const sel = $("btrial"); sel.innerHTML = "";
+  for (const t of pathMeta().trials) {
+    const o = document.createElement("option"); o.value = t.trial;
+    o.textContent = `trial ${t.trial + 1}${t.movie ? "" : " (no movie)"}${t.frames200 ? "" : " (not analysed)"}${t.aligned.every((x) => x) ? "" : " (not aligned in a run)"}`;
+    o.disabled = !t.movie; sel.appendChild(o);
+  }
+}
+function firstMovieTrial() { const t = pathMeta().trials.find((x) => x.movie && x.frames200); return t ? t.trial : null; }
+function layerTitle(name) {
+  const [kind, run] = name.split(":");
+  const k = { movie: "Aligned movie", activity: "Fitted activity", residual: "Movie − activity", baseline: "Network baseline", "residual-baseline": "Movie − activity − baseline" }[kind];
+  return { title: k, sub: run ? run : kind === "movie" ? "registered 80 Hz" : "F0 network" };
+}
+function buildLayerToggles() {
+  const box = $("layers"); box.innerHTML = "";
+  for (const name of B.layers) {
+    const l = document.createElement("label"), t = layerTitle(name);
+    l.innerHTML = `<input type="checkbox" ${B.shown.has(name) ? "checked" : ""}> ${esc(t.title)}${name.includes(":") ? " · " + esc(t.sub) : ""}`;
+    l.querySelector("input").onchange = (e) => { if (e.target.checked) B.shown.add(name); else B.shown.delete(name); buildTiles(); renderAllB(); };
+    box.appendChild(l);
+  }
+}
+async function loadTrial(t, jump) {
+  const seq = ++B.seq, d = S.path, key = `${d}/${t}`;
+  B.st = null; B.frame = null; B.trace = null;  // requests wait for the new trial's layout
+  B.trial = t; $("btrial").value = t;
+  setStatus(`loading path ${d} trial ${t + 1} (reading the movie, rendering the activity)…`);
+  const poll = setInterval(async () => { try { const p = await getJSON(`/api/progress?key=${encodeURIComponent(key)}`); if (p.msg && seq === B.seq) setStatus(`path ${d} trial ${t + 1}: ${p.msg}`); } catch (e) {} }, 700);
+  let st;
+  try { st = await getJSON(`/api/trial?path=${d}&trial=${t}`); }
+  catch (e) { if (seq === B.seq) setStatus(e.message, true); return; }
+  finally { clearInterval(poll); }
+  if (seq !== B.seq) return;
+  B.st = st; [B.T, B.R, B.C] = st.shape; B.N = st.rows.length; B.layers = st.layers;
+  const runs = S.meta.runs.map((r) => r.name);
+  if (!B.shownInit) {
+    B.shown = new Set(["movie", `activity:${runs[0]}`, `residual:${runs[0]}`]);
+    B.shownInit = true;
+  }
+  for (const n of [...B.shown]) if (!B.layers.includes(n)) B.shown.delete(n);
+  B.pix = new Int32Array(B.N);
+  for (let n = 0; n < B.N; n++) B.pix[n] = st.rows[n] * B.C + st.cols[n];
+  B.mean = Float32Array.from(st.mean, (v) => (v === null ? NaN : v));
+  B.discard = new Set(st.discard);
+  const inf = st.info;
+  $("binfo").textContent = `${B.T} frames (${(B.T / B.fr).toFixed(1)} s) · ${B.R} × ${B.C} px, ${B.N} shown · ${B.discard.size} frames blank · movie dt ${inf.dt_lines} lines; activity dt (exporter's / matched) ${Object.entries(inf.render_dt_lines).map(([n, k]) => `${esc(n)} ${k.exporter} / ${k.matched}`).join(", ")}${inf.lines_per_cycle ? ` (P ${inf.lines_per_cycle})` : " (reach 3 dt; no raw header)"}` +
+    `${inf.blur_px ? ` · blur ${inf.blur_px} px` : ""} · ${inf.movie}${inf.baseline ? " · " + inf.baseline : ""}` +
+    Object.entries(st.markers).filter(([, m]) => !m.rendered).map(([n]) => ` · ${n}: no activity in this trial`).join("");
+  $("tslider").max = B.T - 1;
+  const keepView = jump || (B.lastKey && B.lastKey.d === d && B.R === B.lastKey.R && B.C === B.lastKey.C);
+  if (!keepView) B.view = { z: 1, cx: B.C / 2, cy: B.R / 2 };
+  B.lastKey = { d, R: B.R, C: B.C };
+  if (jump) {
+    B.view = { z: Math.max(B.view.z, 6), cx: jump.c + 0.5, cy: jump.r + 0.5 };
+    B.sel = { r: Math.round(jump.r), c: Math.round(jump.c) }; B.t = jump.frame;
+  } else {
+    if (!B.sel || B.sel.r >= B.R || B.sel.c >= B.C) B.sel = { r: B.R >> 1, c: B.C >> 1 };
+    B.t = Math.min(B.T - 1, st.busiest[0] || 0);
+  }
+  B.xr = [Math.max(0, B.t - 400), Math.min(B.T, B.t + 400)];
+  $("tslider").value = B.t; updateTLabel();
+  B.frame = null; B.trace = null; B.autoNext = true;
+  buildLayerToggles(); buildTiles(); drawBCharts(); updateEvInfo();
+  setStatus("");
+  await requestFrame();
+  if (seq !== B.seq) return;
+  loadTrace();
+}
+async function requestFrame() {
+  if (B.st === null || S.view !== "B") return;
+  if (B.inflight) { B.pending = true; return; }
+  B.inflight = true;
+  const t = B.t, avg = B.avg, seq = B.seq, kernel = B.kernel;
+  try {
+    const { buf } = await getBin(`/api/frame?path=${S.path}&trial=${B.trial}&t=${t}&avg=${avg}&kernel=${kernel}`);
+    if (seq !== B.seq) throw null;
+    if (t !== B.t || avg !== B.avg || kernel !== B.kernel) { B.pending = true; throw null; }  // outdated: ask again
+    const all = new Float32Array(buf);
+    B.frame = {}; B.layers.forEach((name, i) => { B.frame[name] = all.subarray(i * B.N, (i + 1) * B.N); });
+    if (B.autoNext) { autoRange(); B.autoNext = false; }
+    renderAllB(); if (!B.playing) setStatus("");
+  } catch (e) { if (e && seq === B.seq) setStatus(e.message, true); }
+  B.inflight = false;
+  if (B.pending) { B.pending = false; requestFrame(); }
+}
+async function loadTrace() {
+  if (B.st === null || !B.sel) return;
+  const { r, c } = B.sel, seq = B.seq, rad = B.rad, kernel = B.kernel;
+  try {
+    const { buf, headers } = await getBin(`/api/trace?path=${S.path}&trial=${B.trial}&r=${r}&c=${c}&rad=${rad}&kernel=${kernel}`);
+    if (seq !== B.seq || !B.sel || B.sel.r !== r || B.sel.c !== c || B.rad !== rad || B.kernel !== kernel) return;
+    const all = new Float32Array(buf);
+    B.trace = {}; B.layers.forEach((name, i) => { B.trace[name] = all.subarray(i * B.T, (i + 1) * B.T); });
+    $("pixinfo").textContent = `row ${r}, col ${c} (trial frame) · ${headers.get("X-Pixels")} pixels shown`;
+    drawBCharts(); drawAllTiles();
+  } catch (e) { if (seq === B.seq) setStatus(e.message, true); }
+}
+function autoRange() {
+  if (!B.frame) return;
+  let src = B.frame.movie; if (src.filter(Number.isFinite).length < 10) src = B.mean;
+  const lo = nice(pct(src, 0.005)), hi = nice(pct(src, 0.995));
+  if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) { B.lo = lo; B.hi = hi; }
+  const acts = B.layers.filter((n) => n.startsWith("activity:"));
+  let amax = 0; for (const n of acts) { const v = pct(B.frame[n], 0.999); if (v > amax) amax = v; }
+  if (amax > 0) B.ahi = nice(amax);
+  const rl = B.layers.find((n) => n.startsWith("residual-baseline:"));
+  if (rl) { const a = Array.from(B.frame[rl], Math.abs); const v = nice(pct(a, 0.99)); if (v > 0) B.rr = v; }
+  $("lo").value = B.lo; $("hi").value = B.hi; $("ahi").value = B.ahi; $("rr").value = B.rr;
+}
+function buildTiles() {
+  const grid = $("tiles"); grid.innerHTML = "";
+  grid.style.gridTemplateColumns = `repeat(${B.ncols}, minmax(0, 1fr))`;
+  B.tiles = B.layers.filter((n) => B.shown.has(n)).map((name) => {
+    const el = document.createElement("div"); el.className = "tile";
+    const t = layerTitle(name);
+    el.innerHTML = `<div class="tt"><span><b>${esc(t.title)}</b></span><span>${esc(t.sub)}</span></div><canvas></canvas>`;
+    grid.appendChild(el);
+    const cv = el.querySelector("canvas"), off = document.createElement("canvas"); off.width = B.C; off.height = B.R;
+    const ctx = off.getContext("2d"), img = ctx.createImageData(B.C, B.R);
+    const tile = { name, kind: name.split(":")[0], run: name.split(":")[1], el, cv, off, octx: ctx, img, u32: new Uint32Array(img.data.buffer) };
+    attachTileEvents(tile);
+    return tile;
+  });
+  sizeTiles();
+}
+function sizeTiles() {
+  const dpr = window.devicePixelRatio || 1;
+  for (const t of B.tiles) {
+    const w = t.cv.clientWidth || 300, h = Math.max(60, Math.round(w * B.R / B.C));
+    t.cv.style.height = h + "px"; t.cv.width = Math.round(w * dpr); t.cv.height = Math.round(h * dpr);
+  }
+  drawAllTiles();
+}
+function renderTile(t) {
+  const v = B.frame && B.frame[t.name]; if (!v) return;
+  const u = t.u32, pix = B.pix, N = B.N;
+  if (t.kind === "residual-baseline") {
+    const k = 127.5 / B.rr;
+    for (let n = 0; n < N; n++) { const x = v[n]; u[pix[n]] = Number.isFinite(x) ? DIV[Math.max(0, Math.min(255, Math.round(127.5 + x * k)))] : 0; }
+  } else {
+    const act = t.kind === "activity", lo = act ? 0 : B.lo, hi = act ? B.ahi : B.hi, map = act ? HOT : GRAY;
+    const k = 1 / Math.max(1e-9, hi - lo), g = B.gamma;
+    for (let n = 0; n < N; n++) {
+      const x = v[n]; if (!Number.isFinite(x)) { u[pix[n]] = 0; continue; }
+      const f = Math.max(0, Math.min(1, (x - lo) * k));
+      u[pix[n]] = map[Math.round(255 * (g === 1 ? f : Math.pow(f, g)))];
+    }
+  }
+  t.octx.putImageData(t.img, 0, 0);
+}
+function renderAllB() { for (const t of B.tiles) renderTile(t); drawAllTiles(); updateReadout(); }
+function bxf(t) { const W = t.cv.width, H = t.cv.height, s = Math.min(W / B.C, H / B.R) * B.view.z; return { s, ox: W / 2 - B.view.cx * s, oy: H / 2 - B.view.cy * s }; }
+function drawMarkers(ctx, s, ox, oy, dpr) {
+  if (!$("bmarks").checked || !B.st) return;
+  const names = S.meta.runs.map((r) => r.name);
+  names.forEach((run, ri) => {
+    const m = B.st.markers[run]; if (!m) return;
+    const r = Math.max(2.5 * dpr, 1.4 * s);  // about a footprint's size when zoomed in
+    ctx.lineWidth = (s > 4 ? 1.25 : 0.9) * dpr; ctx.strokeStyle = css(ri === 0 ? "--both" : "--onlyR");
+    for (const p of m.kept) {
+      if (p[0] === null) continue;
+      const X = ox + (p[1] + 0.5) * s, Y = oy + (p[0] + 0.5) * s; ctx.beginPath();
+      if (ri === 0) ctx.arc(X, Y, r, 0, 2 * Math.PI); else ctx.rect(X - r * 0.8, Y - r * 0.8, r * 1.6, r * 1.6);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = css("--rej");
+    for (const p of m.rejected) { const X = ox + (p[1] + 0.5) * s, Y = oy + (p[0] + 0.5) * s, q = r * 0.7; ctx.beginPath(); ctx.moveTo(X - q, Y - q); ctx.lineTo(X + q, Y + q); ctx.moveTo(X + q, Y - q); ctx.lineTo(X - q, Y + q); ctx.stroke(); }
+  });
+}
+function drawTile(t) {
+  const ctx = t.cv.getContext("2d"), dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, t.cv.width, t.cv.height);
+  const { s, ox, oy } = bxf(t);
+  ctx.imageSmoothingEnabled = false; ctx.setTransform(s, 0, 0, s, ox, oy); ctx.drawImage(t.off, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawMarkers(ctx, s, ox, oy, dpr);
+  if (B.sel) {
+    ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = css("--mark");
+    const r0 = B.sel.r - B.rad, c0 = B.sel.c - B.rad, w = 2 * B.rad + 1, pad = Math.max(0, 3 * dpr / s - 0.5);
+    ctx.strokeRect(ox + (c0 - pad) * s, oy + (r0 - pad) * s, (w + 2 * pad) * s, (w + 2 * pad) * s);
+  }
+}
+function drawAllTiles() { for (const t of B.tiles) drawTile(t); }
+function toTrial(t, ev) {
+  const rect = t.cv.getBoundingClientRect(), dpr = t.cv.width / rect.width, { s, ox, oy } = bxf(t);
+  const x = ((ev.clientX - rect.left) * dpr - ox) / s, y = ((ev.clientY - rect.top) * dpr - oy) / s;
+  return { x, y, c: Math.floor(x), r: Math.floor(y) };
+}
+function zoomAt(t, ev, f) {
+  const p = toTrial(t, ev), z = Math.min(64, Math.max(1, B.view.z * f)), g = B.view.z / z;
+  B.view.cx = p.x + (B.view.cx - p.x) * g; B.view.cy = p.y + (B.view.cy - p.y) * g; B.view.z = z;
+  if (z === 1) { B.view.cx = B.C / 2; B.view.cy = B.R / 2; }
+  drawAllTiles();
+}
+let wheelAcc = 0;
+function attachTileEvents(t) {
+  const cv = t.cv; let drag = null;
+  cv.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    if (ev.ctrlKey || ev.metaKey) { zoomAt(t, ev, Math.exp(-ev.deltaY * (ev.deltaMode ? 0.1 : 0.0025))); return; }
+    wheelAcc += ev.deltaMode ? ev.deltaY * 40 : ev.deltaY;
+    const steps = Math.trunc(wheelAcc / 40);
+    if (steps) { wheelAcc -= steps * 40; setT(B.t + steps * (ev.shiftKey ? 10 : 1)); }
+  }, { passive: false });
+  cv.addEventListener("pointerdown", (ev) => { drag = { x: ev.clientX, y: ev.clientY, cx: B.view.cx, cy: B.view.cy, moved: false }; cv.setPointerCapture(ev.pointerId); });
+  cv.addEventListener("pointermove", (ev) => {
+    if (drag) {
+      const rect = cv.getBoundingClientRect(), dpr = cv.width / rect.width, { s } = bxf(t);
+      const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      if (drag.moved) { B.view.cx = drag.cx - dx * dpr / s; B.view.cy = drag.cy - dy * dpr / s; drawAllTiles(); }
+    }
+    const p = toTrial(t, ev); B.hover = { r: p.r, c: p.c }; updateReadout();
+  });
+  cv.addEventListener("pointerup", (ev) => {
+    if (drag && !drag.moved) { const p = toTrial(t, ev); if (p.r >= 0 && p.r < B.R && p.c >= 0 && p.c < B.C) { B.sel = { r: p.r, c: p.c }; drawAllTiles(); loadTrace(); } }
+    drag = null;
+  });
+  cv.addEventListener("pointerleave", () => { B.hover = null; updateReadout(); });
+  cv.addEventListener("dblclick", () => { B.view = { z: 1, cx: B.C / 2, cy: B.R / 2 }; drawAllTiles(); });
+}
+function updateReadout() {
+  const h = B.hover, el = $("breadout");
+  if (!h || !B.frame || h.r < 0 || h.r >= B.R || h.c < 0 || h.c >= B.C) { el.textContent = " "; return; }
+  const target = h.r * B.C + h.c; let n = -1;
+  for (let i = 0; i < B.N; i++) if (B.pix[i] === target) { n = i; break; }
+  if (n < 0) { el.textContent = `row ${h.r}, col ${h.c}: not shown (missing in too many frames)`; return; }
+  el.textContent = [`row ${h.r}, col ${h.c}`].concat(B.layers.map((name) => { const t = layerTitle(name); return `${t.title.toLowerCase()}${name.includes(":") ? " (" + t.sub + ")" : ""} ${fmt(B.frame[name][n])}`; })).join(" · ");
+}
+function setT(t) {
+  if (!B.T) return;
+  B.t = Math.max(0, Math.min(B.T - 1, Math.round(t)));
+  $("tslider").value = B.t; updateTLabel();
+  if ($("follow").checked && (B.t < B.xr[0] || B.t >= B.xr[1])) { const w = B.xr[1] - B.xr[0]; B.xr = [Math.max(0, Math.min(B.T - w, B.t - w / 2)), 0]; B.xr[1] = B.xr[0] + w; }
+  drawBCharts(); requestFrame();
+}
+function updateTLabel() {
+  const a = B.avg > 1 ? ` (mean of ${B.avg})` : "";
+  $("tlabel").textContent = `frame ${B.t} / ${B.T - 1} · ${(B.t / B.fr).toFixed(3)} s${a}${B.discard && B.discard.has(B.t) ? " · blank (discarded)" : ""}`;
+}
+let lastTick = 0;
+function tick(now) {
+  if (!B.playing) return;
+  if (!B.inflight && now - lastTick >= 1000 / +$("fps").value) { lastTick = now; let t = B.t + +$("skip").value; if (t >= B.T) t = 0; setT(t); }
+  requestAnimationFrame(tick);
+}
+function togglePlay() { B.playing = !B.playing; $("bplay").textContent = B.playing ? "⏸" : "▶"; $("bplay").classList.toggle("on", B.playing); if (B.playing) requestAnimationFrame(tick); else setStatus(""); }
+function smooth(a, k) {
+  const T = a.length, out = new Float32Array(T);
+  if (k <= 1) { out.set(a); return out; }
+  const cs = new Float64Array(T + 1), cn = new Float64Array(T + 1);
+  for (let i = 0; i < T; i++) { const ok = Number.isFinite(a[i]); cs[i + 1] = cs[i] + (ok ? a[i] : 0); cn[i + 1] = cn[i] + (ok ? 1 : 0); }
+  const lo = Math.floor(k / 2), hi = k - lo;
+  for (let i = 0; i < T; i++) { const a0 = Math.max(0, i - lo), a1 = Math.min(T, i + hi), n = cn[a1] - cn[a0]; out[i] = n > 0 && Number.isFinite(a[i]) ? (cs[a1] - cs[a0]) / n : NaN; }
+  return out;
+}
+function drawBCharts() {
+  const lg = $("blegend");
+  if (!B.trace) { lg.innerHTML = ""; clearChart($("bc1")); clearChart($("bc2")); return; }
+  const k = B.tsmooth, tr = B.trace, runs = S.meta.runs.map((r) => r.name);
+  const top = [{ name: "movie", color: css("--data"), w: 1, y: smooth(tr.movie, k) }];
+  const bot = [];
+  runs.forEach((r, i) => {
+    const c = css(`--series-${(2 * i) % 8 + 1}`);
+    top.push({ name: `movie − activity (${r})`, color: c, w: 1.25, y: smooth(tr[`residual:${r}`], k) });
+    bot.push({ name: `activity (${r})`, color: c, w: 1.5, y: smooth(tr[`activity:${r}`], k) });
+    if (tr[`residual-baseline:${r}`]) bot.push({ name: `movie − activity − baseline (${r})`, color: css(`--series-${(2 * i + 1) % 8 + 1}`), w: 1, y: smooth(tr[`residual-baseline:${r}`], k) });
+  });
+  if (tr.baseline) top.push({ name: "baseline (network)", color: css("--series-4"), w: 2, y: smooth(tr.baseline, k) });
+  lg.innerHTML = top.concat(bot).map((s) => `<span><span class="sw" style="background:${s.color}"></span>${esc(s.name)}</span>`).join("");
+  const cfg = { T: B.T, fr: B.fr, xr: B.xr, cursor: B.t, avg: B.avg, hover: B.hoverT, discard: B.discard };
+  drawChart($("bc1"), top, false, cfg); drawChart($("bc2"), bot, true, cfg);
+  B.lastSeries = { top, bot };
+}
+async function jumpToEvent(m, k) {
+  if (!A.detail) return;
+  B.events = A.detail.events; B.ev = k; B.evSrc = { run: m.run, i: m.i, pos: A.detail.trial_rc };
+  showView("B", true);
+  await gotoEvent();
+}
+async function gotoEvent() {
+  const e = B.events[B.ev]; if (!e) return;
+  const pos = B.evSrc.pos[e.trial];
+  const jump = { r: pos ? pos[0] : B.R / 2, c: pos ? pos[1] : B.C / 2, frame: e.frame };
+  updateEvInfo();
+  if (B.trial !== e.trial || !B.st) { await loadTrial(e.trial, jump); return; }
+  B.view = { z: Math.max(B.view.z, 6), cx: jump.c + 0.5, cy: jump.r + 0.5 };
+  B.sel = { r: Math.round(jump.r), c: Math.round(jump.c) };
+  setT(e.frame); drawAllTiles(); loadTrace();
+}
+function updateEvInfo() {
+  const ok = B.evSrc && B.events.length;
+  $("evprev").disabled = !ok || B.ev <= 0; $("evnext").disabled = !ok || B.ev >= B.events.length - 1;
+  if (!ok) return;
+  const e = B.events[B.ev];
+  $("evinfo").textContent = `${B.evSrc.run} source ${B.evSrc.i + 1}: event ${B.ev + 1} of ${B.events.length} (largest first) · trial ${e.trial + 1}, frame ${e.frame}, dF ${fmt(e.value)}`;
+}
+
+// ---------- charts ----------
+function clearChart(cv) { const dpr = window.devicePixelRatio || 1; cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr); cv.getContext("2d").clearRect(0, 0, cv.width, cv.height); cv._cfg = null; }
+function ticks(lo, hi, n) {
+  const span = hi - lo; if (!(span > 0)) return [lo];
+  const step0 = span / n, p = Math.pow(10, Math.floor(Math.log10(step0))), step = [1, 2, 5, 10].map((m) => m * p).find((s) => s >= step0);
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+function drawChart(cv, series, zero, cfg) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const L = 56, Rm = 10, Tm = 8, Bm = 22, pw = W - L - Rm, ph = H - Tm - Bm;
+  const [x0, x1] = cfg.xr, i0 = Math.max(0, Math.floor(x0)), i1 = Math.min(cfg.T, Math.ceil(x1));
+  let lo = Infinity, hi = -Infinity;
+  for (const s of series) for (let i = i0; i < i1; i++) { const v = s.y[i]; if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+  if (zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+  const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
+  const X = (t) => L + (t - x0) / (x1 - x0) * pw, Y = (v) => Tm + (hi - v) / (hi - lo) * ph;
+  cv._cfg = { cfg, L, pw };
+  ctx.font = "11px system-ui, sans-serif"; ctx.fillStyle = css("--text-muted"); ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const v of ticks(lo, hi, 4)) { const y = Math.round(Y(v)) + 0.5; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke(); ctx.fillText(fmt(v), L - 6, y); }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const s of ticks(x0 / cfg.fr, x1 / cfg.fr, 8)) { const x = X(s * cfg.fr); if (x >= L && x <= L + pw) ctx.fillText(`${+s.toFixed(3)} s`, x, Tm + ph + 5); }
+  if (zero) { ctx.strokeStyle = css("--text-muted"); const y = Math.round(Y(0)) + 0.5; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke(); }
+  ctx.save(); ctx.beginPath(); ctx.rect(L, Tm, pw, ph); ctx.clip();
+  if (cfg.bounds) { ctx.strokeStyle = css("--text-muted"); ctx.globalAlpha = 0.5; for (const b of cfg.bounds) { const x = X(b); if (x > L && x < L + pw) { ctx.beginPath(); ctx.moveTo(x, Tm); ctx.lineTo(x, Tm + ph); ctx.stroke(); } } ctx.globalAlpha = 1; }
+  if (cfg.discard && cfg.discard.size) { ctx.fillStyle = css("--text-muted"); ctx.globalAlpha = 0.14; for (const d of cfg.discard) if (d >= x0 && d < x1) ctx.fillRect(X(d), Tm, Math.max(1, X(d + 1) - X(d)), ph); ctx.globalAlpha = 1; }
+  const stride = Math.max(1, Math.floor((i1 - i0) / (pw * 2)));
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.w; ctx.lineJoin = "round";
+    if (s.stem) {
+      ctx.beginPath(); const y0 = Y(0);
+      for (let i = i0; i < i1; i++) { const v = s.y[i]; if (Number.isFinite(v) && v !== 0) { const x = X(i + 0.5); ctx.moveTo(x, y0); ctx.lineTo(x, Y(v)); } }
+      ctx.stroke(); continue;
+    }
+    ctx.beginPath(); let pen = false;
+    for (let b = i0; b < i1; b += stride) {  // each display bin as its min and max, so no event is skipped
+      let mn = Infinity, mx = -Infinity;
+      for (let i = b, e = Math.min(i1, b + stride); i < e; i++) { const v = s.y[i]; if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; } }
+      if (mn === Infinity) { pen = false; continue; }
+      const x = X(b + (stride > 1 ? stride / 2 : 0.5));
+      if (pen) ctx.lineTo(x, Y(mn)); else { ctx.moveTo(x, Y(mn)); pen = true; }
+      if (mx !== mn) ctx.lineTo(x, Y(mx));
+    }
+    ctx.stroke();
+  }
+  if (cfg.cursor !== null && cfg.cursor !== undefined) {
+    const cur = X(cfg.cursor + 0.5); ctx.strokeStyle = css("--mark"); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cur, Tm); ctx.lineTo(cur, Tm + ph); ctx.stroke();
+    if (cfg.avg > 1) { ctx.fillStyle = css("--mark"); ctx.globalAlpha = 0.12; const a = cfg.cursor - Math.floor((cfg.avg - 1) / 2); ctx.fillRect(X(a), Tm, X(a + cfg.avg) - X(a), ph); ctx.globalAlpha = 1; }
+  }
+  if (cfg.hover !== null && cfg.hover !== undefined) { ctx.strokeStyle = css("--text-muted"); ctx.lineWidth = 1; ctx.setLineDash([3, 3]); const x = X(cfg.hover + 0.5); ctx.beginPath(); ctx.moveTo(x, Tm); ctx.lineTo(x, Tm + ph); ctx.stroke(); ctx.setLineDash([]); }
+  ctx.restore();
+}
+function chartT(cv, ev) { const g = cv._cfg; if (!g) return null; const rect = cv.getBoundingClientRect(); return g.cfg.xr[0] + (ev.clientX - rect.left - g.L) / g.pw * (g.cfg.xr[1] - g.cfg.xr[0]); }
+function attachChart(cv, st, redraw, list, onClick) {
+  let drag = null;
+  cv.addEventListener("wheel", (ev) => {
+    ev.preventDefault(); const t = chartT(cv, ev); if (t === null) return;
+    const T = cv._cfg.cfg.T, f = Math.exp(ev.deltaY * (ev.deltaMode ? 0.1 : 0.0025));
+    const w = Math.min(T, Math.max(16, (st.xr[1] - st.xr[0]) * f)), a = (t - st.xr[0]) / (st.xr[1] - st.xr[0]);
+    let x0 = t - a * w; x0 = Math.max(0, Math.min(T - w, x0)); st.xr = [x0, x0 + w]; redraw();
+  }, { passive: false });
+  cv.addEventListener("pointerdown", (ev) => { drag = { x: ev.clientX, xr: st.xr.slice(), moved: false }; cv.setPointerCapture(ev.pointerId); });
+  cv.addEventListener("pointermove", (ev) => {
+    if (!cv._cfg) return;
+    if (drag) {
+      const dx = ev.clientX - drag.x; if (Math.abs(dx) > 3) drag.moved = true;
+      if (drag.moved) { const w = drag.xr[1] - drag.xr[0], T = cv._cfg.cfg.T; let x0 = drag.xr[0] - dx / cv._cfg.pw * w; x0 = Math.max(0, Math.min(T - w, x0)); st.xr = [x0, x0 + w]; }
+    }
+    const t = chartT(cv, ev); st.hoverT = t !== null && t >= st.xr[0] && t < st.xr[1] ? t : null;
+    redraw(); showTip(ev, list(), st.hoverT, cv._cfg ? cv._cfg.cfg.fr : 80);
+  });
+  cv.addEventListener("pointerup", (ev) => { if (drag && !drag.moved && onClick) { const t = chartT(cv, ev); if (t !== null) onClick(Math.floor(t)); } drag = null; });
+  cv.addEventListener("pointerleave", () => { st.hoverT = null; $("tip").style.display = "none"; redraw(); });
+  cv.addEventListener("dblclick", () => { if (cv._cfg) { st.xr = [0, cv._cfg.cfg.T]; redraw(); } });
+}
+function showTip(ev, list, hoverT, fr) {
+  const tip = $("tip");
+  if (hoverT === null || !list) { tip.style.display = "none"; return; }
+  const i = Math.max(0, Math.floor(hoverT));
+  let html = `<div><b>frame ${i}</b> · ${(i / fr).toFixed(3)} s</div>`;
+  for (const s of list) html += `<div class="r"><span><span class="sw" style="background:${s.color}"></span> ${esc(s.name)}</span><span>${fmt(s.y[i])}</span></div>`;
+  tip.innerHTML = html; tip.style.display = "block";
+  const x = ev.clientX + 14, y = ev.clientY + 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(x, window.innerWidth - w - 8) + "px"; tip.style.top = Math.min(y, window.innerHeight - h - 8) + "px";
+}
+attachChart($("ac1"), A, drawACharts, () => A.lastSeries && A.lastSeries.top, null);
+attachChart($("ac2"), A, drawACharts, () => A.lastSeries && A.lastSeries.bot, null);
+attachChart($("ac3"), A, drawACharts, () => A.lastSeries && A.lastSeries.mid, null);
+attachChart($("bc1"), B, drawBCharts, () => B.lastSeries && B.lastSeries.top, (t) => setT(t));
+attachChart($("bc2"), B, drawBCharts, () => B.lastSeries && B.lastSeries.bot, (t) => setT(t));
+
+// ---------- controls ----------
+function showView(v, noLoad) {
+  S.view = v;
+  $("tabA").classList.toggle("on", v === "A"); $("tabB").classList.toggle("on", v === "B");
+  $("viewA").classList.toggle("hidden", v !== "A"); $("viewB").classList.toggle("hidden", v !== "B");
+  document.querySelectorAll(".aonly").forEach((e) => e.classList.toggle("hidden", v !== "A"));
+  document.querySelectorAll(".bonly").forEach((e) => e.classList.toggle("hidden", v !== "B"));
+  if (v === "A") { renderA(); drawACharts(); }
+  else if (noLoad) return;
+  else if (B.trial === null || B.lastKey === undefined || B.lastKey.d !== S.path) { const t = firstMovieTrial(); if (t !== null) loadTrial(t); }
+  else { sizeTiles(); requestFrame(); drawBCharts(); }
+}
+$("tabA").onclick = () => showView("A");
+$("tabB").onclick = () => showView("B");
+for (const id of ["selL", "selR"]) $(id).onchange = () => { renderA().then(() => { table(); legendA(); }); };
+$("atrial").oninput = () => { $("atrialv").textContent = $("atrial").value; renderA(); };
+for (const id of ["ablack", "awhite", "agamma"]) $(id).oninput = () => renderA();
+for (const id of ["mkept", "mrej", "mseeds"]) $(id).onchange = () => renderA();
+$("afit").onclick = () => { A.view = { z: 1, cx: A.w / 2, cy: A.h / 2 }; renderA(); };
+$("aflick").onpointerdown = () => { A.flick = true; renderA(); };
+for (const ev of ["pointerup", "pointerleave"]) $("aflick").addEventListener(ev, () => { if (A.flick && !A.flickTimer) { A.flick = false; renderA(); } });
+$("aflickauto").onclick = () => {
+  if (A.flickTimer) { clearInterval(A.flickTimer); A.flickTimer = null; A.flick = false; $("aflickauto").classList.remove("on"); renderA(); return; }
+  $("aflickauto").classList.add("on"); A.flickTimer = setInterval(() => { A.flick = !A.flick; renderA(); }, 600);
+};
+$("btrial").onchange = () => loadTrial(+$("btrial").value);
+function stepTrial(dlt) {
+  const ts = pathMeta().trials.filter((t) => t.movie && t.frames200).map((t) => t.trial), i = ts.indexOf(B.trial);
+  const n = ts[Math.max(0, Math.min(ts.length - 1, i + dlt))]; if (n !== undefined && n !== B.trial) loadTrial(n);
+}
+$("btprev").onclick = () => stepTrial(-1); $("btnext").onclick = () => stepTrial(1);
+$("tslider").addEventListener("input", (e) => setT(+e.target.value));
+$("bstart").onclick = () => setT(0);
+$("bprev").onclick = (e) => setT(B.t - (e.shiftKey ? 10 : 1));
+$("bnext").onclick = (e) => setT(B.t + (e.shiftKey ? 10 : 1));
+$("bplay").onclick = togglePlay;
+$("avg").onchange = (e) => { B.avg = +e.target.value; updateTLabel(); drawBCharts(); requestFrame(); };
+for (const id of ["lo", "hi", "ahi", "rr"]) $(id).addEventListener("change", () => { const v = parseFloat($(id).value); if (Number.isFinite(v)) { B[id] = v; renderAllB(); } });
+$("bauto").onclick = () => { autoRange(); renderAllB(); };
+$("gamma").onchange = (e) => { B.gamma = +e.target.value; renderAllB(); };
+$("ncols").onchange = (e) => { B.ncols = +e.target.value; buildTiles(); renderAllB(); };
+$("zin").onclick = () => { B.view.z = Math.min(64, B.view.z * 1.5); drawAllTiles(); };
+$("zout").onclick = () => { B.view.z = Math.max(1, B.view.z / 1.5); if (B.view.z === 1) { B.view.cx = B.C / 2; B.view.cy = B.R / 2; } drawAllTiles(); };
+$("zreset").onclick = () => { B.view = { z: 1, cx: B.C / 2, cy: B.R / 2 }; drawAllTiles(); };
+$("bmarks").onchange = () => drawAllTiles();
+$("bkernel").onchange = (e) => { B.kernel = e.target.value; $("runinfo").dataset.kernel = B.kernel; requestFrame(); loadTrace(); };
+$("rad").onchange = (e) => { B.rad = +e.target.value; drawAllTiles(); loadTrace(); };
+$("tsmooth").onchange = (e) => { B.tsmooth = +e.target.value; drawBCharts(); };
+$("evprev").onclick = () => { if (B.ev > 0) { B.ev--; gotoEvent(); } };
+$("evnext").onclick = () => { if (B.ev < B.events.length - 1) { B.ev++; gotoEvent(); } };
+$("btheme").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("giantview-theme", root.dataset.theme); } catch (e) {}
+  renderA(); legendA(); drawACharts(); if (B.st) { buildTiles(); renderAllB(); drawBCharts(); }
+};
+try { const th = localStorage.getItem("giantview-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
+document.addEventListener("keydown", (ev) => {
+  if (S.view !== "B" || ev.target.closest("input, select, textarea")) return;
+  if (ev.key === "ArrowRight") { setT(B.t + (ev.shiftKey ? 10 : 1)); ev.preventDefault(); }
+  else if (ev.key === "ArrowLeft") { setT(B.t - (ev.shiftKey ? 10 : 1)); ev.preventDefault(); }
+  else if (ev.key === " ") { togglePlay(); ev.preventDefault(); }
+  else if (ev.key === "Home") setT(0);
+  else if (ev.key === "End") setT(B.T - 1);
+  else if (ev.key === "PageDown") { stepTrial(1); ev.preventDefault(); }
+  else if (ev.key === "PageUp") { stepTrial(-1); ev.preventDefault(); }
+});
+let rz = null;
+window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (S.view === "A") { renderA(); drawACharts(); } else { sizeTiles(); drawBCharts(); } }, 100); });
+init();
+</script>
+</body>
+</html>

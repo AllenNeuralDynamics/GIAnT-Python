@@ -358,3 +358,94 @@ Differences from MATLAB
 * Not ported: WMF seeding, recordings other
   than SLAP2, the ROI-drawing GUI and the import of post-acquisition
   annotations (an existing ``annotations.h5`` is read).
+
+Viewing a run
+-------------
+
+``giant view RUN [RUN ...]`` serves a page (http://127.0.0.1:8766 by
+default) for inspecting SILo runs by eye. A run is a folder with
+``experiment_summary.h5`` and ``per_trial_summary.h5`` (directly or in
+``source_extraction/``); the page reads only these files, the trial table,
+the registered movies and, optionally, the F0 network's baselines, so runs
+whose work folder is gone (Code Ocean results) can be viewed too. Two or
+more runs of the same session (network against median baseline, new
+against old defaults) are compared; ``NAME=FOLDER`` names a run.
+
+.. code-block:: bash
+
+   giant view network=runs/net median=runs/med \
+       --table trial_table.h5 --moco-dir motion_correction \
+       --baseline-dir baselines
+
+``--table`` defaults to a ``trial_table.h5`` in or above the first run's
+folder, ``--moco-dir`` to the table's ``savedr/motion_correction``,
+``--data-dir`` (raw ``.dat``/``.meta``, for the lines per cycle) to the
+table's ``datadr``; ``--port``, ``--no-browser``, ``--cache-trials``
+(trial-paths kept in memory, default 2), ``--kernel`` and ``--blur``
+(below).
+
+**Sources view.** Per path, two panels side by side, each showing a run's
+combined activity image, one trial's activity image or the mean image
+(``visualizations/act_im``, ``per_trial_act_im``, ``mean_im``), with zoom
+and pan in step, contrast, and a flicker between the panels (hold, or
+alternating). Markers: kept sources at their footprint centroids,
+kinetics-rejected sources at their pixels and, when the run kept its plan
+files, seeds whose pixel got no source. With two runs, kept sources are
+marked by whether the other run has one within 1.5 px (one to one, closest
+first). Clicking a source shows its mean footprint, SNR, kinetic score
+and footprint width (RMS per axis over the 6 px disk around its pixel),
+its traces over all trials at 200 Hz (``dF_ls``, ``dF_denoised``,
+``events``, ``F0``) and its largest denoised events, each of which opens
+the movie view at the source's position in that trial and frame; the
+movie view then steps through the events.
+
+**Movie view.** One trial-path at a time, frame by frame (scroll, play,
+average 1-64 frames), all panels in step, with traces of a clicked pixel
+or small region below:
+
+* *Aligned movie*: the trial's registered 80 Hz movie
+  (``*_REGISTERED_DOWNSAMPLED-80Hz``, activity channel) in the trial's own
+  registered frame, not resampled. It is blank at SILo's motion discards
+  (``recNegErr``, as the trial loader) and at the frames whose time kernel
+  falls mostly on SILo's discarded 200 Hz frames; only the pixels missing
+  in less than ``nanThresh`` of the frames, counting the motion discards as
+  the trial loader and the exporter do, are shown (held in memory: the
+  movie as float32 and the baseline as float16, the activity computed per
+  request from sparse footprints).
+* *Fitted activity*: every kept source's footprint times its denoised
+  trace, rendered in the movie's pixels and frames. Space: each trial's
+  footprints (``per_trial_profiles``, on the consensus canvas) are moved
+  into the trial's frame through the trial's across-trial map
+  (``frame_info/trial_alignment_affine``, or
+  ``trial_alignment_displacement`` for patchwise runs): the trial-frame
+  footprint at pixel ``q`` is the canvas footprint at the map's inverse of
+  ``q``, interpolated bilinearly, the map SILo read the trial's data
+  through. Time: each 80 Hz frame averages the 200 Hz traces at SILo's
+  frame lines with weights ``exp(-|dline| / dt)`` within ``max(3 dt, P)``
+  lines (``P`` lines per cycle from the raw header, else ``3 dt``), leaving
+  out SILo's discarded frames. The F0 network's training-data exporter
+  (slap2-F0-network ``exportF0TrainingData.m``) uses the movie's own
+  ``dt``, ``ceil(mean(diff(DSframes)))`` (``--kernel exporter``). The
+  200 Hz frames are themselves averages (``dt200 =
+  ceil(mean(diff(lines)))``), so this smooths fast events twice: on
+  noiseless injected GFP events it keeps 0.93-0.95 of an event's 80 Hz
+  peak. The default, ``--kernel matched``, uses ``sqrt(dt**2 - dt200**2)``
+  (123 lines on these rigs) and keeps 0.97-0.99. The page switches between
+  the two (Time kernel).
+  Kinetics-rejected sources are not rendered (the summaries do not hold
+  their traces).
+* *Movie - activity*: the residual, what a training target made from the
+  run would be; *movie - activity - baseline* with ``--baseline-dir``
+  (the network's ``<stem>_BASELINE-80Hz.h5``), and the baseline itself.
+
+Units: raw counts of the registered movie (each pixel's weighted mean of
+its raw SLAP2 samples); SILo's traces and F0 are in the same units, and
+footprints sum to 1, so a trace is the source's total over its footprint.
+
+Differences from the exporter's rendering: the trial's footprints are
+moved through SILo's own across-trial map instead of an offset searched
+per trial by correlating movie and activity (an integer offset of the mean
+images plus a sub-pixel search), and they are not blurred to match the
+movie's shape unless ``--blur SIGMA`` is given (the exporter picks a blur
+per trial); and the default time kernel is the matched one, not the
+exporter's.

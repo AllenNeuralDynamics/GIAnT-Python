@@ -100,6 +100,8 @@ The stages also run on their own, for any subset of their units, with file contr
 
 With the F0 network's baselines (slap2-F0-network) the run localizes and extracts with them instead of the moving median and the fitted baseline: `giant silo TABLE --baseline-dir DIR` (baselines made beforehand), or `--f0-ckpt PATH` to predict the missing ones with `slap2-f0 predict-registered` (on the GPU; GIAnT-Python calls its command line and does not import it). This sets `baseline_source='network'`: no surround, the bootstrap null and threshold 8 in localization, and the network's baseline times one gain per pixel in the solver (`baseline_mode='gain'`); each can still be set. The summary records the baseline files and the checkpoint. See [SILo for SLAP2 raster recordings](docs/source/silo.rst).
 
+To inspect runs by eye, `giant view RUN [RUN ...]` serves a local page (http://127.0.0.1:8766): the activity images with the runs' sources overlaid (two runs compared source by source), and, trial by trial, the aligned 80 Hz movie, the fitted activity rendered into it and the residual movie - activity (with `--baseline-dir`, also the network's baseline). See "Viewing a run" in [SILo for SLAP2 raster recordings](docs/source/silo.rst).
+
 Two seeding settings are not MATLAB's and are on by default: `seed_fit='local'` runs the Gaussian seed fits locally and to convergence, which takes seconds per path instead of minutes; `seed_merge_px=1.5` rejects a residual peak that ends within 1.5 pixels of another one, so a source that falls between pixels is not seeded two or three times. `--set seed_fit=matlab --set seed_merge_px=0` gives MATLAB's seeding.
 
 ## Raster SILo localization (multi-ROI)
