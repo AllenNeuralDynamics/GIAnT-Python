@@ -27,6 +27,7 @@ lookup table.
    silo
    f0_export
    reg_stats
+   spine
 
 Getting started
 ---------------

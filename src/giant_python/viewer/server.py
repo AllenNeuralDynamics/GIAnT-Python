@@ -117,8 +117,19 @@ class Store:
                     f"runs have different paths: {runs[0].name} "
                     f"{self.paths}, {r.name} {r.paths}"
                 )
+            # the movie is read once, as the first run's activity channel
+            # with the trial loader's defaults (trial._settings)
+            for key, default in (("numChannels", 2), ("activityChannel", 1)):
+                v0, v = runs[0].param(key, default), r.param(key, default)
+                if int(v) != int(v0):
+                    raise ValueError(
+                        f"runs differ in {key}: {runs[0].name} {v0}, "
+                        f"{r.name} {v}"
+                    )
         self._cache: OrderedDict = OrderedDict()
         self._loading: dict = {}
+        # one trial-path loads at a time: each needs a whole movie in memory
+        self._load_slot = threading.Semaphore(1)
         self._lock = threading.Lock()
         self.progress: dict = {}
 
@@ -277,7 +288,8 @@ class Store:
                 ev.wait()
                 continue
             try:
-                tr = self._load(d, t)
+                with self._load_slot:
+                    tr = self._load(d, t)
                 with self._lock:
                     self._cache[key] = tr
                     while len(self._cache) > self.cache_trials:

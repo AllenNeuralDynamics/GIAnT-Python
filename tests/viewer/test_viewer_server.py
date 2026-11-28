@@ -101,3 +101,39 @@ def test_api_errors(server):
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(base + "/api/frame?path=1&trial=0&t=3&kernel=other")
     assert e.value.code == 400
+
+
+def test_runs_must_share_the_activity_channel(tmp_path):
+    """Runs read with different activity channels are not compared."""
+    from giant_python.viewer.run import SiloRun
+    from giant_python.viewer.server import Store
+    from giant_python.viewer.trial import Session
+
+    syn = write_session(tmp_path, "rigid")
+    a, b = SiloRun(syn["run"], "a"), SiloRun(syn["run"], "b")
+    b.params["activityChannel"] = 2
+    session = Session(syn["run"] / "trial_table.h5", syn["moco"])
+    with pytest.raises(ValueError, match="activityChannel"):
+        Store([a, b], session)
+    # a run without numChannels counts as 2 channels, as the loader reads it
+    b.params["activityChannel"] = 1
+    a.params["numChannels"] = 2
+    b.params.pop("numChannels")
+    Store([a, b], session)
+    a.params["numChannels"] = 1
+    with pytest.raises(ValueError, match="numChannels"):
+        Store([a, b], session)
+
+
+def test_large_valid_kernel_is_reported(tmp_path):
+    """A 9 x 9 support (81 values) is still described."""
+    import h5py
+
+    from giant_python.viewer.run import SiloRun
+
+    syn = write_session(tmp_path, "rigid")
+    es = syn["run"] / "source_extraction" / "experiment_summary.h5"
+    with h5py.File(es, "r+") as f:
+        del f["params/validKernel"]
+        f["params/validKernel"] = np.ones((9, 9))
+    assert SiloRun(syn["run"]).describe()["validKernel"] == 9
