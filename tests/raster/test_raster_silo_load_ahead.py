@@ -92,7 +92,9 @@ def test_options_are_checked():
 
 
 @pytest.mark.parametrize("memory", [None, 1e-9])
-def test_streamed_run_loading_ahead_is_the_same(tmp_path, fake, memory):
+def test_streamed_run_loading_ahead_is_the_same(
+    tmp_path, fake, memory  # noqa: F811
+):
     """Loading three trials ahead gives the results files and summaries of
     loading one at a time."""
     one = make_session(tmp_path / "one")
