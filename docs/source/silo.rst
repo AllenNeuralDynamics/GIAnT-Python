@@ -287,6 +287,30 @@ container (:mod:`giant_python.extraction.raster.container`). A trial in
 which no selected pixel has a sample gets a ``.skip.json`` marker instead
 (MATLAB has no such case handled).
 
+By default each selected pixel of the consensus frame is read at its own
+position in the trial through the across-trial map. With an affine or
+patchwise map every pixel then has its own sub-pixel position, so every
+frame goes through the loader's general bilinear interpolation, and the
+interpolation's blur and noise differ from pixel to pixel.
+``--solve-grid trial`` (``SiloParams.solve_grid='trial'``, a Python setting,
+off by default) solves each trial on its own pixel grid instead
+(:mod:`giant_python.extraction.raster.trial_grid`): the map only places the
+subproblems in the trial, each moved by one whole-pixel shift (the map's
+mean displacement over its pixels, rounded), and the trial is read at those
+whole pixels of its registered frame, where all pixels share a frame's
+interpolation weights (the fast path). The global trace and the user-ROI
+traces are read on the same grid (labeled pixels from the trial's own mean
+image, the ROIs moved into the trial through the map's inverse). The
+subproblems keep the plan's sources and crops; the rest of the map (up to
+about half a pixel) is absorbed by the footprints, which collect maps back
+to the consensus frame once per trial (bilinear at the map's position of
+each consensus pixel, each footprint's sum kept), so the summaries and
+``giant view`` are in the consensus frame as before. The plan is the same
+on both grids; the prepare and solve settings hashes include the grid when
+it is ``'trial'`` (containers and results files record ``solve_grid``),
+and solve and collect refuse files of the other grid. Measured times and
+the comparison with the consensus grid are in GIAnT-Python#52.
+
 **dispatch**: the session's subproblems, in path, trial and subproblem
 order, are cut into ``--machines`` contiguous parts of about equal
 estimated work (pixels x frames x (sources + 1)); each part is a job file
@@ -308,6 +332,15 @@ while the previous trial's subproblems are solved in a pool of
 ``--solver-workers`` processes of ``--solver-threads`` threads. It writes the
 same results files as the staged run (and containers only with
 ``--save-subproblems DIR``), and ends with the collect stage.
+
+Loading a trial usually takes longer than solving the previous one, so the
+loader sets the pace. ``--load-workers N`` (``SiloExecution.load_workers``,
+default 1) loads up to N trials of a path at once, in threads of the main
+process, ahead of the solver; ``--load-memory-gb`` caps the data of the
+trials loaded and not yet handed to the solver (estimated from the bytes
+per line of the trials loaded so far; a trial holds about
+``(channels + 1) * pixels * frames * 4`` bytes, twice while its subproblems
+are cut out). The loads and the results are the same as with one worker.
 
 File contracts
 --------------

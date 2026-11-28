@@ -41,6 +41,12 @@ File layout (HDF5, row-major, zero-based indices; lines are one-based)::
                            NaN where a pixel has no network value
     /baseline/frame_lines  (registered frames,), resizable: their lines
 
+With ``solve_grid`` 'trial' (``params`` records ``"solve_grid": "trial"``)
+the pixels, the sources and the crops are those of the trial's own grid
+(:mod:`~giant_python.extraction.raster.trial_grid`): ``consensus_rc``,
+``trial_rc`` and ``sources/rc`` hold positions in the trial's registered
+frame, each subproblem moved by its whole-pixel shift.
+
 ``/baseline`` has the attributes ``filled`` (0 while empty) and, when
 filled, ``identity`` (JSON: the baseline file and the network's record,
 :class:`~giant_python.extraction.raster.baseline_map.TrialBaseline`). A

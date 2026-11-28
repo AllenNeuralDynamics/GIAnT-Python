@@ -1527,7 +1527,9 @@ def load_trial(  # noqa: C901
         cols_s, rows_s = np.nonzero(sel.T)  # column-major order of the map
         read = slice(None)
     else:
-        rows_s, cols_s, read, need = _trial_points(points, sel_pix, warp, shape)
+        rows_s, cols_s, read, need = _trial_points(
+            points, sel_pix, warp, shape
+        )
     for m in [labeled] + masks:
         need[: shape[0], : shape[1]] |= m
     r_d, c_d, shift, centre, qpos = _points(need, alignment, warp)

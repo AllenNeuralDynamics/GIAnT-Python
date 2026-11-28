@@ -105,7 +105,10 @@ def test_layout_moves_each_subproblem_by_one_shift(bent_plan):
                 cons.col0 + g.shifts[k, 1],
             )
             src = np.column_stack(
-                [plan.source_rows[cons.sources], plan.source_cols[cons.sources]]
+                [
+                    plan.source_rows[cons.sources],
+                    plan.source_cols[cons.sources],
+                ]
             )
             np.testing.assert_array_equal(
                 g.sources_rc[cons.sources], src + g.shifts[k]
@@ -200,7 +203,9 @@ def test_masks_into_the_trial(bent_plan):
     mask = np.zeros(plan.shape, bool)
     mask[20:31, 30:37] = True
     t = 1
-    moved = masks_to_trial([mask, np.zeros_like(mask)], plan.warp, t, plan.shape)
+    moved = masks_to_trial(
+        [mask, np.zeros_like(mask)], plan.warp, t, plan.shape
+    )
     assert not moved[1].any()
     rr, cc = np.meshgrid(
         np.arange(plan.shape[0]), np.arange(plan.shape[1]), indexing="ij"
@@ -208,7 +213,9 @@ def test_masks_into_the_trial(bent_plan):
     x_r, x_c = plan.warp.inverse(t, rr.astype(float), cc.astype(float))
     x_r = np.floor(x_r + 0.5).astype(int)
     x_c = np.floor(x_c + 0.5).astype(int)
-    ok = (x_r >= 0) & (x_r < plan.shape[0]) & (x_c >= 0) & (x_c < plan.shape[1])
+    ok = (
+        (x_r >= 0) & (x_r < plan.shape[0]) & (x_c >= 0) & (x_c < plan.shape[1])
+    )
     want = np.zeros(plan.shape, bool)
     want[ok] = mask[x_r[ok], x_c[ok]]
     np.testing.assert_array_equal(moved[0], want)

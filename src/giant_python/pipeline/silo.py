@@ -1257,6 +1257,81 @@ def _save_container(
         f.attrs["settings_hash"] = chash
 
 
+@dataclass
+class _Unit:
+    """A trial-path the streaming driver extracts: where its results go
+    and the hashes they get."""
+
+    d: int
+    t: int
+    base: Optional[Path]
+    chash: str
+    rhash: str
+    out: Path
+    skip: Path
+    lines: float = 1.0
+
+
+def _loaded(units: list, load, execution: SiloExecution):
+    """``(unit, load(unit))`` in the units' order.
+
+    With ``execution.load_workers`` 1 each unit is loaded when the caller
+    asks for it (after it has handed on the previous one). With more,
+    later units are loaded ahead in threads of this process, at most
+    ``load_workers`` at a time and, with ``load_memory_gb``, only while the
+    data of the trials loaded and not yet handed on is estimated below it
+    (from the bytes per line of the trials loaded so far; always at least
+    one). The loads are the same either way: one process, the same
+    threads per operation.
+    """
+    workers = execution.load_workers
+    if workers <= 1 or len(units) <= 1:
+        for u in units:
+            yield u, load(u)
+        return
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    limit = (
+        None
+        if execution.load_memory_gb is None
+        else execution.load_memory_gb * 1e9
+    )
+    per_line = []  # bytes per line of the trials loaded so far
+
+    def estimate(u: _Unit) -> float:
+        """Estimated bytes of a unit's loaded data (0 before any load)."""
+        return max(per_line, default=0.0) * u.lines
+
+    def measured(u: _Unit, item: dict) -> dict:
+        """Record a finished load's bytes per line."""
+        if "nbytes" in item:
+            per_line.append(item["nbytes"] / u.lines)
+        return item
+
+    queue: deque = deque()
+    nxt = 0
+    pool = ThreadPoolExecutor(workers, thread_name_prefix="giant-load")
+    try:
+        while nxt < len(units) or queue:
+            while nxt < len(units) and len(queue) < workers:
+                held = sum(estimate(v) for v, _ in queue)
+                if (
+                    queue
+                    and limit is not None
+                    and (not per_line or held + estimate(units[nxt]) > limit)
+                ):
+                    break
+                queue.append((units[nxt], pool.submit(load, units[nxt])))
+                nxt += 1
+            u, fut = queue.popleft()
+            yield u, measured(u, fut.result())
+    finally:
+        for _, fut in queue:
+            fut.cancel()
+        pool.shutdown(wait=True)
+
+
 def stream(  # noqa: C901
     session: SiloSession,
     params: SiloParams,
@@ -1330,6 +1405,7 @@ def stream(  # noqa: C901
         check_plan_support(f"the plan {pf.name}", plan, params)
         check_plan_alignment(f"the plan {pf.name}", plan, params)
         n_sub = len(plan.groups)
+        units = []
         for t in (int(x) for x in plan.valid_trials):
             base = _extraction_baseline(session, params, d, t, baseline_dir)
             chash = _prepare_hash(session, params, ph, d, t, base)
@@ -1342,17 +1418,23 @@ def stream(  # noqa: C901
             ):
                 report.append({"unit": (d, t), "skipped": "up to date"})
                 continue
+            n_lines = session.last_line[d, t] - session.first_line[d, t] + 1
+            units.append(
+                _Unit(d, t, base, chash, rhash, out, skip, float(n_lines))
+            )
+
+        def load(u: _Unit) -> dict:
+            """Load one trial and make its subproblems (a loader task)."""
             t0 = time.perf_counter()
-            grid = trial_grid_for(params, plan, t)
+            grid = trial_grid_for(params, plan, u.t)
             groups = unit_layout(plan, grid)[0]
-            placements = [(g.pixels, g.sources) for g in groups]
             try:
                 trial = load_trial_for(
                     session,
                     params,
                     plan,
-                    d,
-                    t,
+                    u.d,
+                    u.t,
                     rois,
                     execution.loader_device,
                     grid,
@@ -1360,15 +1442,16 @@ def stream(  # noqa: C901
             except ValueError as exc:
                 if NO_DATA not in str(exc):
                     raise
-                _mark_skipped(session, d, t, str(exc), chash, ph)
-                report.append({"unit": (d, t), "skipped": str(exc)})
-                continue
-            if skip.exists():
-                skip.unlink()
+                _mark_skipped(session, u.d, u.t, str(exc), u.chash, ph)
+                return {"skipped": str(exc)}
+            if u.skip.exists():
+                u.skip.unlink()
             tb = (
                 None
-                if base is None
-                else load_trial_baseline(session, params, trial, base, d, t)
+                if u.base is None
+                else load_trial_baseline(
+                    session, params, trial, u.base, u.d, u.t
+                )
             )
             load_s = time.perf_counter() - t0
             record = TrialRecord.from_trial(trial)
@@ -1379,10 +1462,10 @@ def stream(  # noqa: C901
                     params,
                     plan,
                     ph,
-                    chash,
+                    u.chash,
                     trial,
-                    d,
-                    t,
+                    u.d,
+                    u.t,
                     tb,
                     grid,
                 )
@@ -1396,21 +1479,37 @@ def stream(  # noqa: C901
                 _ContainerView(
                     trial,
                     plan,
-                    d,
-                    t,
+                    u.d,
+                    u.t,
                     ph,
                     None if tb is None else tb.identity,
                 ),
-                session.container_file(d, t).name,
-                chash,
+                session.container_file(u.d, u.t).name,
+                u.chash,
                 (0, n_sub),
                 n_sub,
                 extracted,
-                rhash,
+                u.rhash,
                 params,
                 options,
             )
+            nbytes = int(trial.y.nbytes + trial.finv.nbytes)
             del trial, tb
+            placements = [(g.pixels, g.sources) for g in groups]
+            return {
+                "load": load_s,
+                "record": record,
+                "placements": placements if extracted else [],
+                "subs": subs,
+                "attrs": attrs,
+                "nbytes": nbytes,
+            }
+
+        for u, item in _loaded(units, load, execution):
+            if "skipped" in item:
+                report.append({"unit": (u.d, u.t), "skipped": item["skipped"]})
+                continue
+            subs = item.pop("subs")
             submitted = time.perf_counter() - clock0
             done = _Done()
             futures, results = _submit(subs, sp, options, pool, done)
@@ -1422,23 +1521,24 @@ def stream(  # noqa: C901
                 )
             else:
                 wait_s = 0.0
-            out.parent.mkdir(parents=True, exist_ok=True)
+            u.out.parent.mkdir(parents=True, exist_ok=True)
             pending = _Pending(
-                d,
-                t,
-                record,
-                placements if extracted else [],
+                u.d,
+                u.t,
+                item["record"],
+                item["placements"],
                 futures,
                 results,
-                attrs,
-                out,
+                item["attrs"],
+                u.out,
                 submitted,
                 done,
             )
-            report.append({"unit": (d, t), "load": load_s, "wait": wait_s})
+            load_s = item["load"]
+            report.append({"unit": (u.d, u.t), "load": load_s, "wait": wait_s})
             if execution.verbose:
                 print(
-                    f"SILo path {d + 1} trial {t + 1}: loaded in "
+                    f"SILo path {u.d + 1} trial {u.t + 1}: loaded in "
                     f"{load_s:.1f} s (waited {wait_s:.1f} s for the "
                     "previous trial)",
                     flush=True,

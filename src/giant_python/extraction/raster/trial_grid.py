@@ -267,9 +267,7 @@ def _bilinear(img: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     )
 
 
-def masks_to_trial(
-    masks, warp: TrialWarp, trial: int, shape: tuple
-) -> list:
+def masks_to_trial(masks, warp: TrialWarp, trial: int, shape: tuple) -> list:
     """Masks of the consensus frame moved into a trial's registered frame.
 
     The inverse of
