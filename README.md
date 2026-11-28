@@ -147,7 +147,7 @@ GIAnT-Python now processes SLAP2 raster (multi-ROI) recordings from raw data to 
 4. **Extraction** fits each source's shape (its *footprint*) and its activity over time, separating the activity of neighbours. A test of each trace's time course then rejects candidates whose transients do not rise and decay as the indicator does.
 5. **Inspection**: `giant view` shows the sources on the activity images and, for each trial, the movie, the fitted activity and what the fit left unexplained.
 
-The output files have GIAnT-MATLAB's layout, so code that reads `experiment_summary.h5` works unchanged. Without the baseline of step 2, GIAnT-Python follows GIAnT-MATLAB's method except for the changes to seeding, footprints, alignment and details of the fits described below, each of which can be switched back.
+The output files have GIAnT-MATLAB's layout, so code that reads `experiment_summary.h5` works unchanged. Without the baseline of step 2, GIAnT-Python follows GIAnT-MATLAB's method. It differs in seeding, footprints and alignment, which can each be set to GIAnT-MATLAB's behaviour, and in running its fits until they have settled where GIAnT-MATLAB stops after a fixed number of steps. Matched settings therefore give closely agreeing results, not identical ones.
 
 ### What changed relative to GIAnT-MATLAB
 
@@ -157,9 +157,9 @@ GIAnT-Python can instead take the baseline from a neural network, the [F0 networ
 
 **A simpler fit.** With the network's baseline, extraction no longer estimates a time-varying baseline of its own. The fit keeps the network's baseline and adjusts a single scale factor per pixel, which stays close to 1 in practice. Fewer quantities are estimated from the same data, the baseline and the activity can no longer trade against each other, and extraction runs faster.
 
-**Source finding against measured chance.** With the network's baseline, the image of activity is computed relative to that baseline directly; GIAnT-MATLAB subtracts each pixel's surroundings at this step to remove slow background changes, which also removes part of the signal. The threshold for accepting a spot is set for each trial from simulated movies with the trial's baseline and noise but no activity, so it reflects how often noise alone produces such a spot.
+**Source finding against measured chance.** With the network's baseline, the image of activity is computed relative to that baseline directly; GIAnT-MATLAB subtracts each pixel's surroundings at this step to remove slow background changes, which also removes part of the signal. Each trial's image is then calibrated against simulated movies that have the trial's baseline and noise but no activity, so that its values express how far a spot exceeds what noise alone produces. The trials' images are combined, and candidates are accepted above a fixed threshold on the combined image.
 
-**Seeding.** Each spot in the activity image is fitted with a small bell-shaped profile to place a candidate source. GIAnT-MATLAB fits all spots of an imaging path together and stops after a fixed number of steps, which takes minutes per path and often seeds a source lying between pixels two or three times. GIAnT-Python fits each spot on its own until the fit has settled, which takes seconds, and discards a candidate that ends within 1.5 pixels of another. In tests with artificial sources at known positions this removed nearly all duplicates, while pairs 2 pixels or more apart were still separated.
+**Seeding.** Each spot in the activity image is fitted with a small bell-shaped profile to place a candidate source. GIAnT-MATLAB fits all spots of an imaging path together and stops after a fixed number of steps, which takes minutes per path and often seeds a source lying between pixels two or three times. GIAnT-Python fits each spot on its own until the fit has settled, which takes seconds. Further candidates are then placed where this first fit left activity unexplained, and such a candidate is discarded if it ends within 1.5 pixels of one already placed. In tests with artificial sources at known positions this removed nearly all duplicates, while pairs 2 pixels or more apart were still separated.
 
 **Wider footprints and local alignment.** A footprint may now extend over 5 x 5 pixels instead of 3 x 3; on real recordings a third to two thirds of the footprints were wider than the smaller window could represent. Trials are aligned to each other with a smooth map of local displacements instead of one shift for the whole field, which matters when the tissue deforms between trials.
 
@@ -167,7 +167,7 @@ GIAnT-Python can instead take the baseline from a neural network, the [F0 networ
 
 ### How the results compare with GIAnT-MATLAB
 
-With GIAnT-MATLAB's settings the two implementations agree closely: on sparse recordings the traces of matched sources correlate at 1.00 and amplitudes agree within 1%. The defaults differ, and the number of sources differs with them. The table counts the sources kept in the first three minutes of three recordings, both imaging paths together.
+With settings matched to GIAnT-MATLAB's the two implementations agree closely: on sparse recordings the traces of matched sources correlate at 1.00 and amplitudes agree within 1%. The defaults differ, and the number of sources differs with them. The table counts the sources kept in the first three minutes of three recordings, both imaging paths together.
 
 | recording | GIAnT-MATLAB | GIAnT-Python, fitted baseline | GIAnT-Python, network baseline |
 |---|---|---|---|
@@ -175,7 +175,7 @@ With GIAnT-MATLAB's settings the two implementations agree closely: on sparse re
 | intermediate (885233) | 143 | 135 | 72 |
 | dense (780125) | 440 | 355 | 269 |
 
-- **Fitted baseline.** GIAnT-Python finds as many sources as GIAnT-MATLAB on the sparse recording and about 20% fewer on the dense one. About three quarters of the sources missing there lie within 2 pixels of a source that GIAnT-Python kept. Without the merging of close candidates a single source is often seeded twice, so some of these pairs were duplicates; others are probably real neighbours, and we could not determine the proportions.
+- **Fitted baseline.** GIAnT-Python finds as many sources as GIAnT-MATLAB on the sparse recording and about 20% fewer on the dense one. About three quarters of the sources missing there lie within 2 pixels of a source that GIAnT-Python kept. Without the 1.5 pixel rule a single source is often seeded twice, so some of these pairs were duplicates; others are probably real neighbours, and we could not determine the proportions.
 - **Network baseline.** GIAnT-Python keeps 40 to 50% fewer sources than GIAnT-MATLAB. More than eight in ten of them are also found with the fitted baseline; the difference is candidates that drop out under the stricter threshold applied with the network baseline. On the dense recording most of these are candidates that the time-course test rejects in any case: with the fitted baseline it rejects a quarter to more than half of the candidates there, with the network baseline almost none. On the sparser recordings the sources that drop out had passed the test, and we cannot tell from real recordings how many of them are real.
 - **Control recording.** On GFP, where every source found is false, the fitted baseline gave three false sources per path and the network baseline none. Of artificial sources added to that recording, 99% were found with the fitted baseline and 97% with the network baseline.
 
@@ -199,10 +199,10 @@ Source finding and extraction take about as long as in GIAnT-MATLAB on sparse re
 - **The baseline is slightly low**, by 2 to 3% on the control recording. The network was trained on targets derived from GIAnT-MATLAB's fits, which carry that method's errors, and the way those targets were made left 5 to 7% of the peak of each fast event in the baseline the network was asked to predict.
 - **Small events are overestimated.** Events well above the noise are found in more than nine cases in ten and sized within a few percent. Events near the noise level are found about half the time, and those that are found appear about a quarter too large, because noise helps them over the threshold.
 - **Event sizes with the two baselines differ.** On real recordings events come out 10 to 15% smaller with the network baseline than with the fitted one, more than the 3 to 6% seen for artificial events. The cause is not established, and we do not yet know which is closer to the truth for real events.
-- **Two effects of the settings**, described above: dF/F depends on the footprint size, and sources closer than 1.5 pixels are treated as one.
+- **Two effects of the settings**, described above: dF/F depends on the footprint size, and a weaker source within about 1.5 pixels of a stronger one is usually not seeded separately.
 - **Source positions vary more between trials** with the network baseline (about 0.2 pixels against 0.12 to 0.19), for reasons we have not identified.
 - **Trial edges.** Baselines are least certain in the first and last two seconds of a trial, where less of the surrounding recording is available.
-- **Scope.** Recordings other than SLAP2 raster and Band Scan, registration of Band Scan recordings, drawing of regions of interest, and a few raster registration options (`refStackTemplate`, `isReVolt`, integration ROIs) still require GIAnT-MATLAB.
+- **Scope.** Recordings other than SLAP2 raster and Band Scan, registration of Band Scan recordings, drawing of regions of interest on raster recordings, and a few raster registration options (`refStackTemplate`, `isReVolt`, integration ROIs) still require GIAnT-MATLAB.
 
 ### Open directions
 
