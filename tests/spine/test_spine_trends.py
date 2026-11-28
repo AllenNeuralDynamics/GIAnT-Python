@@ -79,6 +79,38 @@ def test_trial_blocks_split_at_gaps():
     assert trial_blocks([]).size == 0
 
 
+def test_trials_without_numbers_are_blocks_of_their_own():
+    """A trial without an acquisition number is neither in a brief run nor
+    a neighbour of one; with no numbers at all, trials are consecutive."""
+    np.testing.assert_array_equal(
+        trial_blocks([10, 11, -1, -1, 14, 15]), [0, 0, 1, 2, 3, 3]
+    )
+    np.testing.assert_array_equal(trial_blocks([-1, -1, -1]), [0, 0, 0])
+    x = np.zeros((1, 7))
+    x[0, 3] = 1.0  # a transient at the trial without a number
+    x += np.random.default_rng(0).normal(size=x.shape) * 1e-3
+    t, start, _, _ = brief_stat(x, trial_blocks([1, 2, 3, -1, 5, 6, 7]), 1)
+    assert start[0] != 3
+    t, start, _, _ = brief_stat(x, trial_blocks([1, 2, 3, 4, 5, 6, 7]), 1)
+    assert start[0] == 3
+
+
+@pytest.mark.parametrize(
+    "kw, match",
+    [
+        (dict(n_perm=-1), "n_perm"),
+        (dict(max_brief=0), "max_brief"),
+        (dict(fdr_q=2.0), "fdr_q"),
+        (dict(fdr_q=0.0), "fdr_q"),
+        (dict(seed=-3), "seed"),
+    ],
+)
+def test_trend_settings_are_checked(kw, match):
+    """Settings the tests cannot use are refused."""
+    with pytest.raises(ValueError, match=match):
+        trend_tests(np.zeros((5, 2)), np.ones(2, bool), np.arange(5), **kw)
+
+
 def test_step_stat_is_the_matlab_loop():
     """Cumulative sums give MATLAB's statistic, split and size."""
     rng = np.random.default_rng(3)

@@ -556,3 +556,42 @@ def test_readout_runs_the_trend_tests(session, tmp_path):
     assert rep2["paths"][1]["f0_reused"]
     p2 = read_product(rep2["output"])["paths"][1]
     assert np.isnan(p2["trends"]["sources"]["f0_net"]["step_p"]).all()
+
+
+def test_readout_refuses_bad_trend_settings(session, tmp_path):
+    """Invalid trend settings are refused before anything is read or
+    reused."""
+    with pytest.raises(ValueError, match="fdr_q"):
+        make_spine_summary(
+            session["run"], session["table"], tmp_path / "o", fdr_q=2.0
+        )
+    assert not (tmp_path / "o").exists()
+
+
+def test_trials_without_numbers_are_noted(session, tmp_path, monkeypatch):
+    """A trial whose raw file has no acquisition number is left out of the
+    brief test's runs, and the summary's notes say so."""
+    import giant_python.spine.pipeline as pl
+
+    real = pl.table_trials
+
+    def no_number(table, path):
+        """The table's trials with trial 2 unnumbered."""
+        stems, acq = real(table, path)
+        acq = acq.copy()
+        acq[1] = -1
+        return stems, acq
+
+    monkeypatch.setattr(pl, "table_trials", no_number)
+    notes = []
+    rep = make_spine_summary(
+        session["run"],
+        session["table"],
+        tmp_path / "o",
+        n_perm=0,
+        progress=notes.append,
+    )
+    assert sum("trial(s) 2 have no acquisition number" in m for m in notes)
+    p = read_product(rep["output"])["paths"][1]
+    blocks = p["trends"]["sources"]["mean_ch1"]["blocks"]
+    assert blocks[1] != blocks[0] and blocks[1] != blocks[2]

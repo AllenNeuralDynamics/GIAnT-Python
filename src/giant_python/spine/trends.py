@@ -62,6 +62,12 @@ def trial_blocks(acquisition) -> np.ndarray:
     """Blocks of consecutive acquisition numbers, as ``spineTrends.m``:
     a new block starts where the number jumps by more than 1.
 
+    A trial without a number (negative, as
+    :func:`~giant_python.spine.pipeline.table_trials` reports it) is a
+    block of its own, so that it is neither in a brief run nor one of its
+    neighbours; when no trial has a number, the trials are taken as
+    consecutive (one block).
+
     Parameters
     ----------
     acquisition : array_like of int, shape (trials,)
@@ -74,7 +80,29 @@ def trial_blocks(acquisition) -> np.ndarray:
     a = np.asarray(acquisition, dtype=np.int64).ravel()
     if a.size == 0:
         return np.zeros(0, np.int64)
-    return np.concatenate([[0], np.cumsum(np.diff(a) > 1)]).astype(np.int64)
+    known = a >= 0
+    if not known.any():
+        return np.zeros(a.size, np.int64)
+    new = np.zeros(a.size, bool)
+    new[1:] = (np.diff(a) > 1) | ~known[1:] | ~known[:-1]
+    return np.cumsum(new).astype(np.int64)
+
+
+def check_trend_settings(n_perm, fdr_q, max_brief, seed) -> None:
+    """Refuse settings the tests cannot use (ValueError): ``n_perm`` must
+    be at least 0, ``max_brief`` at least 1, ``fdr_q`` in (0, 1] and
+    ``seed`` at least 0 (numpy's seed sequences take no negative
+    numbers)."""
+    if int(n_perm) != n_perm or n_perm < 0:
+        raise ValueError(f"n_perm must be a whole number >= 0, not {n_perm}")
+    if int(max_brief) != max_brief or max_brief < 1:
+        raise ValueError(
+            f"max_brief must be a whole number >= 1, not {max_brief}"
+        )
+    if not 0 < fdr_q <= 1:
+        raise ValueError(f"fdr_q must be in (0, 1], not {fdr_q}")
+    if int(seed) != seed or seed < 0:
+        raise ValueError(f"seed must be a whole number >= 0, not {seed}")
 
 
 def step_stat(x: np.ndarray):
@@ -419,12 +447,13 @@ def trend_tests(
         Sources to test; a source with a non-finite size in a trial is left
         out too.
     acquisition : array_like of int, shape (trials,)
-        The trials' acquisition numbers (:func:`trial_blocks`).
+        The trials' acquisition numbers (:func:`trial_blocks`; negative
+        where unknown).
     n_perm : int
         Random trial orders per source for the p-values (0: statistics
         only, p and q NaN).
     fdr_q : float
-        FDR level; kept for the counts in the result.
+        FDR level, in (0, 1]; kept for the counts in the result.
     max_brief : int
         Longest run of the brief test.
     seed : int
@@ -456,6 +485,7 @@ def trend_tests(
         ``counts``: per test the sources with p < 0.05 and with
         ``q <= fdr_q``, up and down.
     """
+    check_trend_settings(n_perm, fdr_q, max_brief, seed)
     L = np.asarray(norm, dtype=np.float64).T  # (sources, trials)
     n_src, T = L.shape
     tested = np.asarray(ok, bool).ravel() & np.isfinite(L).all(axis=1)

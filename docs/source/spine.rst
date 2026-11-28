@@ -90,7 +90,9 @@ values, for the sources in ``ok`` that it covers:
 ``brief``
     A change of 1 to ``--max-brief`` (3) consecutive trials that comes
     back: each such run, with trials on both sides in the same block of
-    consecutive acquisition numbers, against the up to 2 trials before it
+    consecutive acquisition numbers (a trial without a number is a block of
+    its own; with no numbers at all the trials are taken as consecutive),
+    against the up to 2 trials before it
     and the up to 2 after it, with the noise SD from the median
     trial-to-trial difference away from the run. The run's statistic is
     the smaller of the two t's when they agree in sign; the source's is the
