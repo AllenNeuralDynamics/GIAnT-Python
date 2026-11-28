@@ -187,6 +187,7 @@ const $ = id => document.getElementById(id);
 const S = { meta: null, prod: 0, path: null, trial: -1, src: -1, data: null, roi: null, crops: null, field: null,
   lim: {}, view: { s: 1, ox: 0, oy: 0 }, order: [], sortKey: "step_p", sortDir: 1, cropsKey: "", fieldKey: "" };
 const MARK_VAR = { "Growing": "--grow", "Shrinking": "--shrink", "Unsure": "--unsure", "Not a spine": "--notspine" };
+const PREFER = ["f0_gain", "f0_net", "f0_silo_ch1", "mean_ch1"];
 const MARK_KEYS = { g: "Growing", s: "Shrinking", u: "Unsure", x: "Not a spine", c: "" };
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
@@ -349,7 +350,7 @@ async function loadPath(n, near, view) {
   const imgs = pm.images.map(x => [x.name, x.name]);
   fillSelect($("fimg"), imgs, true);
   fillSelect($("cimg"), imgs, true);
-  const prefer = ["f0_gain", "f0_net", "f0_silo_ch1", "mean_ch1"];
+  const prefer = PREFER;
   const sizeImgs = pm.normalized.map(x => [x, x]);
   const hadSimg = $("simg").value;
   fillSelect($("simg"), sizeImgs, true);
@@ -674,7 +675,10 @@ async function drawSize() {
   let shared = null;
   if (tr && isFinite(tr.shared_loading[k])) shared = tr.shared_v.map(v => pct(tr.shared_loading[k] * v));
   const oth = otherSource();
-  let othY = null; if (oth && oth.d.normalized[prim]) othY = oth.d.normalized[prim].map(row => pct(row[oth.k]));
+  // the other summary's nearest source, in the same image or else in its own leading one
+  let othY = null, othImg = null;
+  if (oth) { othImg = oth.d.normalized[prim] ? prim : PREFER.find(x => oth.d.normalized[x]);
+    if (othImg) othY = oth.d.normalized[othImg].map(row => pct(row[oth.k])); }
   let lo = Infinity, hi = -Infinity;
   const upd = arr => { if (arr) for (const x of arr) if (isFinite(x)) { lo = Math.min(lo, x); hi = Math.max(hi, x); } };
   ser.forEach(s => upd(s.y)); upd(band.map(b => b[0])); upd(band.map(b => b[1])); upd(shared); upd(othY);
@@ -711,12 +715,12 @@ async function drawSize() {
   const m = ser.find(s => s.main); if (m) line(m.y, m.col, 2.2, null, true);
   c.series = ser.map(s => ({ name: s.name, y: s.y }));
   if (shared) c.series.push({ name: `${prim}: shared trend part`, y: shared });
-  if (othY) c.series.push({ name: `${oth.name} source ${oth.d.ids[oth.k] + 1}`, y: othY });
+  if (othY) c.series.push({ name: `${oth.name} source ${oth.d.ids[oth.k] + 1} (${othImg})`, y: othY });
   c.band = band;
   // legend and title
   const leg = ser.map(s => `<span><span class="sw" style="background:${s.col};${s.main ? "height:4px" : ""}"></span>${s.name}${s.main ? " (sizes)" : ""}</span>`);
   if (shared) leg.push(`<span><span class="sw dot" style="border-color:${m ? m.col : series(0)}"></span>shared-trend part</span>`);
-  if (othY) leg.push(`<span><span class="sw dash" style="border-color:${css("--text-secondary")}"></span>${oth.name}, source ${oth.d.ids[oth.k] + 1}</span>`);
+  if (othY) leg.push(`<span><span class="sw dash" style="border-color:${css("--text-secondary")}"></span>${oth.name}, source ${oth.d.ids[oth.k] + 1} (${othImg})</span>`);
   leg.push(`<span><span class="sw band"></span>all sources, 10–90%</span>`);
   $("slegend").innerHTML = leg.join("");
   let tt = `<b>Source ${S.data.ids[k] + 1}</b>: size vs its own mean (${prim})`;
@@ -820,7 +824,7 @@ function buildTable() {
   tb.innerHTML = html + "</tbody>";
   tb.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { const k = th.dataset.k;
     if (S.sortKey === k) S.sortDir *= -1; else { S.sortKey = k; S.sortDir = (k === "src" || k.endsWith("_p") || k.endsWith("_q") || k === "mark") ? 1 : -1; }
-    buildTable(); highlightRow(true); });
+    buildTable(); $("tablewrap").scrollTop = 0; highlightRow(true); });
   tb.querySelectorAll("tbody tr").forEach(tr2 => tr2.onclick = () => selectSource(+tr2.dataset.k, true));
   const marks = S.data.marks || {}; const nm = Object.keys(marks.by_source || {}).length;
   const counts = tr ? tr.attrs : null;
