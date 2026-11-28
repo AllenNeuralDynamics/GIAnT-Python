@@ -80,9 +80,17 @@ def route(store: SpineStore, path: str, q: dict):
 
 class _Handler(BaseHTTPRequestHandler):
     """Serves the page and the API of ``store`` (set by
-    :func:`make_handler`)."""
+    :func:`make_handler`).
+
+    Every request must name a trusted host (``allowed``, set by
+    :func:`make_server`: the loopback names and the bound host at the
+    server's port), so that a page reaching the server through DNS
+    rebinding (its own name resolving to 127.0.0.1) gets nothing; marks
+    must also come as JSON from a trusted origin.
+    """
 
     store: SpineStore
+    allowed: frozenset = frozenset()
 
     def log_message(self, *a):
         """Quiet."""
@@ -116,6 +124,14 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001  (shown on the page)
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
+    def _untrusted_host(self) -> bool:
+        """Whether the request's ``Host`` is not one of ``allowed`` (an
+        empty ``allowed`` trusts every host: a server bound to all
+        interfaces)."""
+        if not self.allowed:
+            return False
+        return self.headers.get("Host", "").lower() not in self.allowed
+
     def do_GET(self):
         """Route a GET request."""
         u = urlparse(self.path)
@@ -123,6 +139,9 @@ class _Handler(BaseHTTPRequestHandler):
 
         def go():
             """Answer it."""
+            if self._untrusted_host():
+                self._json({"error": "untrusted Host"}, 403)
+                return
             if u.path in ("/", "/index.html"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
                 return
@@ -137,12 +156,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _cross_origin(self) -> bool:
         """Whether the request comes from a page of another origin: its
-        ``Origin`` (or ``Referer``) names a host other than this
-        server's."""
+        ``Origin`` (or ``Referer``) is not ``http://`` and a trusted host
+        (with ``allowed`` empty, not the request's own ``Host``)."""
         src = self.headers.get("Origin") or self.headers.get("Referer")
         if not src:
             return False
-        return urlparse(src).netloc != self.headers.get("Host", "")
+        o = urlparse(src)
+        if o.scheme != "http":
+            return True
+        if self.allowed:
+            return o.netloc.lower() not in self.allowed
+        return o.netloc.lower() != self.headers.get("Host", "").lower()
 
     def do_POST(self):
         """Set a mark (JSON from a page of this server only: a page of
@@ -152,6 +176,9 @@ class _Handler(BaseHTTPRequestHandler):
 
         def go():
             """Answer it."""
+            if self._untrusted_host():
+                self._json({"error": "untrusted Host"}, 403)
+                return
             if u.path != "/api/mark":
                 raise LookupError(u.path)
             ctype = self.headers.get("Content-Type", "")
@@ -182,9 +209,27 @@ def make_handler(store: SpineStore):
     return type("Handler", (_Handler,), {"store": store})
 
 
+_LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
+
+
 def make_server(store: SpineStore, host="127.0.0.1", port=DEFAULT_PORT):
-    """An HTTP server for ``store`` (not started)."""
-    return ThreadingHTTPServer((host, port), make_handler(store))
+    """An HTTP server for ``store`` (not started).
+
+    It answers only requests whose ``Host`` is a loopback name or ``host``
+    at the bound port; bound to all interfaces (``0.0.0.0``, ``::``), it
+    trusts every host name.
+    """
+    handler = make_handler(store)
+    srv = ThreadingHTTPServer((host, port), handler)
+    bound = srv.server_address[1]
+    if host not in ("0.0.0.0", "::", ""):
+        names = set(_LOOPBACK) | {host.lower()}
+        names = {
+            f"[{h}]" if ":" in h and not h.startswith("[") else h
+            for h in names
+        }
+        handler.allowed = frozenset(f"{h}:{bound}" for h in names)
+    return srv
 
 
 def product_args(items) -> list:

@@ -207,7 +207,8 @@ class SpineProduct:
                 else:
                     at[k] = v.item() if hasattr(v, "item") else v
             p["images"][name] = at
-        p["rois"] = {k: read_roiset(g["rois"][k], shape) for k in g["rois"]}
+        rois = g.get("rois", {})
+        p["rois"] = {k: read_roiset(rois[k], shape) for k in rois}
         for grp in ("readout", "normalized", "activity"):
             p[grp] = {
                 s: {k: g[grp][s][k][()] for k in g[grp][s]}

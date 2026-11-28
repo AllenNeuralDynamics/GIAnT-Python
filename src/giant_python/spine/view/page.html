@@ -310,7 +310,7 @@ async function init() {
   $("path").onchange = () => loadPath(+$("path").value);
   for (const id of ["fimg", "fview", "vs", "sqrt"]) $(id).onchange = () => drawField(true);
   $("range").onchange = () => { drawField(true); drawCrops(); };
-  for (const id of ["cimg", "cview"]) $(id).onchange = () => loadCrops();
+  for (const id of ["cimg", "cview"]) $(id).onchange = () => { syncControls(); loadCrops(); };
   $("vs").addEventListener("change", () => loadCrops());
   $("sqrt").addEventListener("change", () => drawCrops());
   $("simg").onchange = () => { buildTable(); drawSize(); };
@@ -390,7 +390,16 @@ async function loadPath(n, near, view) {
   if (g !== S.gen.path) return;
   if (view) { S.view = view; drawOverlay(); }
   setTrial(S.trial, true);
-  if (S.data.n) await selectSource(s, true); else { S.src = -1; S.roi = null; S.crops = null; status("no sources"); }
+  if (S.data.n) await selectSource(s, true); else { clearSource(); status("no sources on this path"); }
+}
+function clearSource() {
+  // no source selected: pending source requests are dropped and the source panels emptied
+  S.src = -1; S.roi = null; S.crops = null; S.cropsKey = ""; S.other = null;
+  S.gen.roi++; S.gen.crops++; S.gen.size++;
+  for (const id of ["size", "act", "crops"]) { const cv = $(id); cv.getContext("2d").clearRect(0, 0, cv.width, cv.height); }
+  for (const id of ["stitle", "atitle", "ctitle", "slegend"]) $(id).textContent = "";
+  $("tip").style.display = "none";
+  showMark(); drawOverlay();
 }
 
 function exportedSources(n) {
@@ -460,7 +469,7 @@ function fieldTip(e) {
 async function drawField(refetch, fit) {
   if (!S.path) return;
   const view = $("fview").value, image = $("fimg").value, vs = $("vs").value;
-  $("vs").disabled = view !== "change"; $("range").disabled = view !== "change"; $("fimg").disabled = view === "activity";
+  syncControls();
   const key = [S.prod, S.path, image, S.trial, view, vs].join("|");
   if (refetch || key !== S.fieldKey) {
     const g = ++S.gen.field;
@@ -480,6 +489,11 @@ async function drawField(refetch, fit) {
   $("ftitle").innerHTML = `<b>Path${S.path}</b>: ${what}, ${view === "activity" ? "all trials" : tl}. Click a ring to select a source; drag to pan, scroll to zoom.`;
   const leg = Object.entries(MARK_VAR).map(([l, v]) => `<span><span class="chip" style="background:${css(v)}"></span>${l}</span>`);
   $("flegend").innerHTML = `<span><span class="chip" style="border:1.5px solid ${css("--text-secondary")}"></span>source</span>` + leg.join("");
+}
+function syncControls() {
+  // the comparison and colour range serve the change views of the field and of the crops
+  const change = $("fview").value === "change" || $("cview").value === "change";
+  $("vs").disabled = !change; $("range").disabled = !change; $("fimg").disabled = $("fview").value === "activity";
 }
 function renderField() {
   const off = fieldOff;
@@ -557,6 +571,7 @@ async function selectSource(k, keepTable) {
   const [w, h] = fieldSize(); const x = (S.data.cols[k] + 0.5) * S.view.s + S.view.ox, y = (S.data.rows[k] + 0.5) * S.view.s + S.view.oy;
   if (x < 20 || y < 20 || x > w - 20 || y > h - 20) { S.view.ox += w / 2 - x; S.view.oy += h / 2 - y; }
   status(`source ${S.data.ids[k] + 1}`);
+  showMark(); highlightRow(keepTable);
   const g = ++S.gen.roi; const data = S.data;
   let roi = null, err = null;
   try { roi = await api.roi(S.prod, S.path, k); } catch (e) { err = e; }
@@ -876,12 +891,21 @@ function showMark() {
   $("mtitle").innerHTML = S.src >= 0 ? `Mark <b>source ${S.data.ids[S.src] + 1}</b> (saved at once; attaches to its position)` : "Mark";
   document.querySelectorAll(".marks button, #note").forEach(b => b.disabled = !S.meta.marks_file);
 }
-async function setMark(label) {
-  if (S.src < 0) return;
-  try {
-    S.data.marks = await api.mark(S.prod, S.path, S.src, label, label ? $("note").value : "");
-    showMark(); drawOverlay(); buildTable(); status(label ? `marked ${label}` : "mark cleared");
-  } catch (e) { status(e.message, true); }
+let markQueue = Promise.resolve();
+function setMark(label) {
+  // marks go to the server one at a time, in the order they are made, each with
+  // the product, path, source and note of the moment it was made
+  if (S.src < 0) return markQueue;
+  const req = { prod: S.prod, path: S.path, src: S.src, label, note: label ? $("note").value : "", data: S.data };
+  markQueue = markQueue.then(async () => {
+    try {
+      const marks = await api.mark(req.prod, req.path, req.src, req.label, req.note);
+      req.data.marks = marks;
+      if (req.data === S.data) { showMark(); drawOverlay(); buildTable(); }
+      status(req.label ? `marked ${req.label}` : "mark cleared");
+    } catch (e) { status(e.message, true); }
+  });
+  return markQueue;
 }
 
 // ---------------------------------------------------------------- trials, keys

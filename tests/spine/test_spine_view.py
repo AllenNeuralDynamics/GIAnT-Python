@@ -402,3 +402,87 @@ def test_cache_keys_follow_the_file(product, tmp_path):
     pr._cache.get((gen, "norm", 1, "mean_ch1"), lambda: "stale")
     new = pr.normalized(1, "mean_ch1")
     assert new is not old and not isinstance(new, str)
+
+
+def test_server_refuses_untrusted_hosts(product, tmp_path):
+    """Requests naming another host (DNS rebinding) get nothing, and marks
+    from an origin that is not this server's trusted names are refused."""
+    store = SpineStore([(None, product)], tmp_path / "marks.csv")
+    srv = make_server(store, port=0)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    port = srv.server_address[1]
+    base = f"http://127.0.0.1:{port}"
+    try:
+        req = urllib.request.Request(
+            base + "/api/meta", headers={"Host": f"evil.example:{port}"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 403
+        req = urllib.request.Request(
+            base + "/api/meta", headers={"Host": f"localhost:{port}"}
+        )
+        with urllib.request.urlopen(req) as r:
+            assert r.status == 200
+        body = json.dumps({"path": 1, "id": 0, "label": "Unsure"}).encode()
+        for origin in (
+            f"http://evil.example:{port}",
+            f"https://127.0.0.1:{port}",
+        ):
+            req = urllib.request.Request(
+                base + "/api/mark",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": origin,
+                    "Host": f"127.0.0.1:{port}",
+                },
+            )
+            with pytest.raises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(req)
+            assert e.value.code == 403
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_export_refuses_unknown_paths(product, tmp_path):
+    """Asking for a path the summary does not have is an error, not an
+    empty page."""
+    with pytest.raises(ValueError, match="no path"):
+        export_html(product, tmp_path / "p.html", paths=[7])
+    assert not (tmp_path / "p.html").exists()
+
+
+def test_pick_sources_keeps_infinite_statistics_first():
+    """An infinite statistic (a change without noise) ranks first among
+    equal q-values."""
+    from giant_python.spine.view.export import pick_sources
+
+    inf = float("inf")
+    tr = {
+        f"{t}_{f}": [None, None]
+        for t in ("brief", "resid")
+        for f in ("q", "t")
+    }
+    tr.update({"step_q": [1e-4, 1e-4], "step_t": [6.0, inf]})
+    src = {"n": 2, "trends": {"f0": tr}, "marks": {}}
+    assert pick_sources(src, "f0", 1) == [1]
+
+
+def test_summary_without_rois_loads(product, tmp_path):
+    """A summary with no sources and no user ROIs (no rois group) loads."""
+    import shutil
+
+    import h5py
+
+    copy = tmp_path / "copy.h5"
+    shutil.copy(product, copy)
+    with h5py.File(copy, "r+") as f:
+        for n in ("Path1", "Path2"):
+            if f"{n}/rois" in f:
+                del f[f"{n}/rois"]
+    store = SpineStore([(None, copy)])
+    assert store.sources(0, 1)["n"] == 0
+    assert store.meta()["products"][0]["paths"][1]["n_sources"] == 0

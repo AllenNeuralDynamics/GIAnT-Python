@@ -99,15 +99,15 @@ def pick_sources(src: dict, image: str | None, top: int) -> list:
     tr = src.get("trends", {}).get(image) if image else None
     if tr and top > 0:
 
-        def arr(key):
-            """A per-source list as floats (None and NaN as inf)."""
-            v = np.array([np.inf if x is None else x for x in tr[key]], float)
-            return np.where(np.isfinite(v), v, np.inf)
+        def arr(key, missing):
+            """A per-source list as floats, None and NaN as ``missing``
+            (infinite statistics stay infinite)."""
+            v = np.array([np.nan if x is None else x for x in tr[key]], float)
+            return np.where(np.isnan(v), missing, v)
 
         tests = ("step", "brief", "resid")
-        q = np.stack([arr(f"{t}_q") for t in tests])
-        t_abs = np.stack([np.abs(arr(f"{t}_t")) for t in tests])
-        t_abs[~np.isfinite(t_abs)] = 0
+        q = np.stack([arr(f"{t}_q", np.inf) for t in tests])
+        t_abs = np.stack([np.abs(arr(f"{t}_t", 0.0)) for t in tests])
         best = np.argmin(q, axis=0)
         cols = np.arange(q.shape[1])
         q_best, t_best = q[best, cols], t_abs[best, cols]
@@ -118,6 +118,18 @@ def pick_sources(src: dict, image: str | None, top: int) -> list:
         if k not in seen:
             seen.append(k)
     return seen
+
+
+def _select_paths(available: dict, paths, product) -> dict:
+    """The requested paths of a summary (ValueError for one it lacks)."""
+    unknown = [n for n in paths if n not in available]
+    if unknown:
+        raise ValueError(
+            f"{Path(product).name} has no path(s) "
+            f"{', '.join(str(n) for n in unknown)} (it has "
+            f"{', '.join(str(n) for n in available)})"
+        )
+    return {n: available[n] for n in paths}
 
 
 def export_html(
@@ -171,7 +183,7 @@ def export_html(
     meta = store.meta()
     pm = meta["products"][0]
     if paths:
-        pm["paths"] = {n: pm["paths"][n] for n in paths if n in pm["paths"]}
+        pm["paths"] = _select_paths(pm["paths"], paths, product)
     data: dict = {
         "meta": meta,
         "sources": {},
