@@ -225,3 +225,24 @@ def test_load_registered_trial_half_images(tmp_path):
     np.testing.assert_allclose(
         tr.half_ims[0, :, :, 1], stack[first, 1].mean(axis=0), rtol=1e-6
     )
+
+
+def test_channel_means_equal_the_joint_nanmean():
+    """The mean image and the missing pixels, one channel at a time, are
+    those of ``nanmean`` and ``isnan(...).mean`` over all channels at once,
+    bit for bit (pixels without samples included)."""
+    from giant_python.extraction.raster.trial import _channel_means
+
+    rng = np.random.default_rng(3)
+    stack = rng.gamma(2.0, 30.0, (97, 3, 11, 13)).astype(np.float32)
+    stack[rng.random(stack.shape) < 0.3] = np.nan
+    stack[:, :, 2, 5] = np.nan  # no sample in any channel
+    stack[:, 1, 4, 4] = np.nan  # none in one channel
+    with np.errstate(invalid="ignore"), pytest.warns(RuntimeWarning):
+        want = np.nanmean(stack, axis=0).transpose(1, 2, 0)
+    gaps = np.isnan(stack).mean(axis=(0, 1))
+    with pytest.warns(RuntimeWarning):
+        got, missing = _channel_means(stack, 0.33)
+    assert got.dtype == want.dtype
+    np.testing.assert_array_equal(got, want)
+    np.testing.assert_array_equal(missing, gaps > 0.33)
