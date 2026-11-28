@@ -30,8 +30,10 @@ Every image is a stack ``(trials, rows, cols)`` in the run's consensus
 frame:
 
 ``mean_ch<c>``
-    The run's per-trial mean images (``per_trial_mean_im``). Channel 1
-    includes activity.
+    The run's per-trial mean images (``per_trial_mean_im``), ``<c>`` the
+    one-based file channel. The run's activity channel
+    (``params/activityChannel``, 1 if the run does not record it; for
+    example 2 in some external recordings) includes activity.
 ``f0_silo_ch<c>``
     The run's own per-trial F0 images, where the run has them
     (``per_trial_F0_im``, GIAnT-MATLAB's spine-size branch).
@@ -75,8 +77,9 @@ The output
 ``--out-dir``. The key covers the inputs' identities and the settings, so a
 rerun with unchanged inputs reuses the file. It holds, per path, the images,
 the windows (sparse), the readouts, the normalized sizes, each source's
-per-trial activity (mean ``dF_ls`` and event frames, to check whether
-activity moves the readout) and the acquisition trial numbers. See
+per-trial activity in the activity channel (mean ``dF_ls`` and event
+frames, to check whether activity moves the readout), which file channel
+that is (``activity_channel``), and the acquisition trial numbers. See
 :mod:`giant_python.spine.product` for the layout.
 
 Example::
