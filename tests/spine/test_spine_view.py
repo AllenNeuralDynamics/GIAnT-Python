@@ -309,3 +309,22 @@ def test_cli_export(product, tmp_path, capsys):
     )
     rep = json.loads(capsys.readouterr().out)
     assert rep["output"] == str(out) and out.is_file()
+
+
+def test_pick_sources_marked_first_then_by_q_and_size():
+    """The export's crops go to the marked sources, then by q, with ties at
+    the permutation floor going to the larger statistic."""
+    from giant_python.spine.view.export import pick_sources
+
+    nan = float("nan")
+    tr = {
+        "step_q": [0.5, 1e-4, 1e-4, nan, 0.02],
+        "step_t": [1.0, 3.0, 6.0, nan, 2.5],
+        "brief_q": [0.9, 0.9, 0.9, nan, 0.9],
+        "brief_t": [1.0, 1.0, 1.0, nan, 1.0],
+        "resid_q": [0.04, 0.9, 0.9, nan, 0.9],
+        "resid_t": [2.0, 1.0, 1.0, nan, 1.0],
+    }
+    src = {"n": 5, "trends": {"f0": tr}, "marks": {"by_source": {"0": {}}}}
+    assert pick_sources(src, "f0", 3) == [0, 2, 1, 4]
+    assert pick_sources(src, "f0", 0) == [0]

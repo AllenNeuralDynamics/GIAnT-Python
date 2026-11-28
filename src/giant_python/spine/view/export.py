@@ -93,18 +93,26 @@ def primary_image(names) -> str | None:
 def pick_sources(src: dict, image: str | None, top: int) -> list:
     """Source indices for the crops: the marked ones and the ``top`` with
     the smallest q over the step, brief and beyond-trend tests of
-    ``image``."""
+    ``image``; ties (q at the floor of the permutations) go to the larger
+    statistic of the test that gives that q."""
     picked = [int(k) for k in src.get("marks", {}).get("by_source", {})]
     tr = src.get("trends", {}).get(image) if image else None
     if tr and top > 0:
-        q = np.full(src["n"], np.inf)
-        for t in ("step", "brief", "resid"):
-            v = np.array(
-                [np.inf if x is None else x for x in tr[f"{t}_q"]], float
-            )
-            q = np.minimum(q, np.where(np.isfinite(v), v, np.inf))
-        order = [int(k) for k in np.argsort(q, kind="stable")]
-        picked += [k for k in order if np.isfinite(q[k])][:top]
+
+        def arr(key):
+            """A per-source list as floats (None and NaN as inf)."""
+            v = np.array([np.inf if x is None else x for x in tr[key]], float)
+            return np.where(np.isfinite(v), v, np.inf)
+
+        tests = ("step", "brief", "resid")
+        q = np.stack([arr(f"{t}_q") for t in tests])
+        t_abs = np.stack([np.abs(arr(f"{t}_t")) for t in tests])
+        t_abs[~np.isfinite(t_abs)] = 0
+        best = np.argmin(q, axis=0)
+        cols = np.arange(q.shape[1])
+        q_best, t_best = q[best, cols], t_abs[best, cols]
+        order = np.lexsort((-t_best, q_best))
+        picked += [int(k) for k in order if np.isfinite(q_best[k])][:top]
     seen: list = []
     for k in picked:
         if k not in seen:
