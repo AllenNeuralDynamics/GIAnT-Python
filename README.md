@@ -155,7 +155,7 @@ The output files have GIAnT-MATLAB's layout, so code that reads `experiment_summ
 
 GIAnT-Python can instead take the baseline from a neural network, the [F0 network](https://github.com/AllenNeuralDynamics/slap2-F0-network), which reads the registered movie and predicts the baseline of every pixel and frame. On the same control recording its baseline was 2 to 3% too low. The network is used when baselines are supplied (`giant silo TABLE --baseline-dir DIR`) or a model file is given (`--f0-ckpt PATH`).
 
-**A simpler fit.** With the network's baseline, extraction no longer estimates a time-varying baseline of its own. The fit keeps the network's baseline and adjusts a single scale factor per pixel, which stays close to 1 in practice. Fewer quantities are estimated from the same data, the baseline and the activity can no longer trade against each other, and extraction runs faster.
+**A simpler fit.** With the network's baseline, extraction no longer estimates a time-varying baseline of its own. The fit keeps the time course of the network's baseline and adjusts a single scale factor per pixel, which stays close to 1 in practice. Fewer quantities are estimated from the same data, and the baseline can no longer change its time course to absorb activity; its level at each pixel is still fitted together with the sources. Extraction also runs faster.
 
 **Source finding against measured chance.** With the network's baseline, the image of activity is computed relative to that baseline directly; GIAnT-MATLAB subtracts each pixel's surroundings at this step to remove slow background changes, which also removes part of the signal. Each trial's image is then calibrated against simulated movies that have the trial's baseline and noise but no activity, so that its values express how far a spot exceeds what noise alone produces. The trials' images are combined, and candidates are accepted above a fixed threshold on the combined image.
 
@@ -163,7 +163,7 @@ GIAnT-Python can instead take the baseline from a neural network, the [F0 networ
 
 **Wider footprints and local alignment.** A footprint may now extend over 5 x 5 pixels instead of 3 x 3; on real recordings a third to two thirds of the footprints were wider than the smaller window could represent. Trials are aligned to each other with a smooth map of local displacements instead of one shift for the whole field, which matters when the tissue deforms between trials.
 
-**Running at scale.** The many small fitting problems of a recording can be solved on separate machines or one after another on a single machine, with identical results. In the cloud, registration, the network's prediction and extraction run as separate steps, so a later step can be repeated without redoing the earlier ones.
+**Running at scale.** The many small fitting problems of a recording can be solved on separate machines or one after another on a single machine. The results are identical as long as the numerical settings (threads per process, precision, CPU or GPU) are the same. In the cloud, registration, the network's prediction and extraction run as separate steps, so a later step can be repeated without redoing the earlier ones.
 
 ### How the results compare with GIAnT-MATLAB
 
