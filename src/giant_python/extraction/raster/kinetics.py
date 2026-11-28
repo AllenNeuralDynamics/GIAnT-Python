@@ -238,6 +238,10 @@ class KineticsTest:
     event_rate : ndarray, shape (sources,), optional
         Every source's events per minute of its trace
         (:func:`source_minutes`), when the evidence test ran.
+    seed_height : ndarray, shape (sources,), optional
+        Every source's seed height in robust SDs
+        (:func:`~giant_python.extraction.raster.seeding.seed_heights`),
+        when the evidence test judged only the weaker seeds.
     """
 
     keep: np.ndarray
@@ -246,6 +250,7 @@ class KineticsTest:
     weak: Optional[np.ndarray] = None
     snr: Optional[np.ndarray] = None
     event_rate: Optional[np.ndarray] = None
+    seed_height: Optional[np.ndarray] = None
 
     @property
     def kept_score(self) -> np.ndarray:

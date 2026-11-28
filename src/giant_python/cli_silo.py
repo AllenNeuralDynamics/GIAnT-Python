@@ -118,8 +118,9 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         "--min-source-event-rate",
         type=float,
         default=None,
-        help="Remove sources with fewer kinetics-test events per minute "
-        "(default 0, off; 2 with the network's baseline). --peak-th 8 "
+        help="Remove sources seeded below peak-th + 2 (evidence_margin) "
+        "with fewer kinetics-test events per minute (default 0, off; 2 "
+        "with the network's baseline). --peak-th 8 "
         "--min-source-event-rate 0 gives the network's defaults before "
         "2026-11-28.",
     )

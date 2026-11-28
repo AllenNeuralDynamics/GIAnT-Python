@@ -148,6 +148,51 @@ def candidate_statistic(
     return rc, second[is_max]
 
 
+def seed_heights(
+    act_im: np.ndarray, rows: np.ndarray, cols: np.ndarray
+) -> np.ndarray:
+    """Each source's seed height, as the seed threshold measures it.
+
+    The second-largest value of the 3 x 3 neighbourhood of the source's
+    pixel in the combined activity image (the candidate statistic,
+    :func:`candidate_statistic`; NaN pixels and pixels outside the image
+    left out), in robust SDs above the image's median: the background of
+    :func:`~giant_python.extraction.raster.peaks.get_act_im_peaks` (median
+    and MAD-SD of the finite pixels). A first-pass seed at ``peak_th`` has
+    a height above ``peak_th``.
+
+    Parameters
+    ----------
+    act_im : ndarray of shape (H, W)
+        The image the sources were seeded in (``ExtractionPlan.act_im``).
+    rows, cols : ndarray of int, shape (N,)
+        The sources' pixels (zero-based).
+
+    Returns
+    -------
+    ndarray, shape (N,)
+        NaN where fewer than one finite value surrounds the pixel or the
+        image has no spread.
+    """
+    act = np.asarray(act_im, dtype=np.float64)
+    vals = act[np.isfinite(act)]
+    out = np.full(np.size(rows), np.nan)
+    if vals.size == 0:
+        return out
+    mu = float(np.median(vals))
+    sigma = float(np.median(np.abs(vals - mu))) / _MAD_SCALE
+    if not sigma > 0:
+        return out
+    h, w = act.shape
+    for i, (r, c) in enumerate(zip(np.ravel(rows), np.ravel(cols))):
+        r, c = int(r), int(c)
+        win = act[max(r - 1, 0): r + 2, max(c - 1, 0): c + 2].ravel()
+        win = np.sort(win[np.isfinite(win)])
+        if win.size:
+            out[i] = (win[-2] if win.size > 1 else win[-1]) - mu
+    return out / sigma
+
+
 def null_background(null_ims: np.ndarray) -> tuple[float, float]:
     """Median and robust SD (MATLAB's MAD scale) of null images' finite
     pixels."""

@@ -701,6 +701,13 @@ class SiloParams:
         discarded) are removed. A rate, so that it means the same in short
         and long recordings. None takes the default of ``baseline_source``
         (0, or 2 with the network, where it goes with the seed threshold).
+    evidence_margin : float or None
+        The evidence test judges only the sources seeded below ``peak_th``
+        + ``evidence_margin`` robust SDs (their seed height,
+        :func:`~giant_python.extraction.raster.seeding.seed_heights`):
+        stronger seeds are kept whatever their evidence. Default 2; None
+        judges every source. Matters only when the evidence test is on.
+        Not a MATLAB option.
     min_frames : int
         Trials with fewer frames are loaded but not source-extracted
         (MATLAB's ``minFrames``).
@@ -764,6 +771,7 @@ class SiloParams:
     min_kinetic_score: float = 0.2
     min_source_snr: float = 0.0
     min_source_event_rate: Optional[float] = None
+    evidence_margin: Optional[float] = 2.0
     min_frames: int = 100
     user_rois: bool = True
 
@@ -816,6 +824,8 @@ class SiloParams:
             _nonnegative(name, getattr(self, name))
         if self.localization_peak_th is not None:
             _positive("localization_peak_th", self.localization_peak_th)
+        if self.evidence_margin is not None:
+            _nonnegative("evidence_margin", self.evidence_margin)
         for name in (
             "localization_surround",
             "localization_variance_floor",
@@ -934,6 +944,20 @@ class SiloParams:
             raise ValueError(
                 "localization_null_seed must be a nonnegative integer"
             )
+
+    @property
+    def evidence_test(self) -> bool:
+        """Whether the evidence test runs (``min_source_snr`` or
+        ``min_source_event_rate`` above 0)."""
+        return self.min_source_snr > 0 or self.min_source_event_rate > 0
+
+    @property
+    def evidence_judge_below(self) -> Optional[float]:
+        """Seed height below which the evidence test judges a source
+        (``peak_th + evidence_margin``); None judges every source."""
+        if self.evidence_margin is None:
+            return None
+        return float(self.peak_th) + float(self.evidence_margin)
 
     @property
     def sel_radius(self) -> int:
@@ -1067,6 +1091,10 @@ class SiloParams:
         for n, before in _STAGE_FIELDS_ADDED.get(stage, {}).items():
             if getattr(self, n) != before:
                 out[n] = getattr(self, n)
+        if stage == "collect" and self.evidence_test:
+            # which sources the evidence test judges (an option added
+            # with it; without the test it changes nothing)
+            out["evidence_margin"] = self.evidence_margin
         return out
 
     def to_matlab(
@@ -1168,6 +1196,11 @@ class SiloParams:
                 (self.valid_kernel, self.valid_kernel), dtype=np.bool_
             ),
         }
+        if self.evidence_test:
+            margin = self.evidence_margin
+            out["evidenceMargin"] = float(
+                np.inf if margin is None else margin
+            )
         for name, (key, matlab) in _PYTHON_ONLY.items():
             value = getattr(self, name)
             if value == matlab:

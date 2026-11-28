@@ -441,6 +441,30 @@ def test_evidence_test_event_rate(tmp_path):
     np.testing.assert_array_equal(kin.weak, kin.n_events == 0)
 
 
+def test_evidence_test_judges_weak_seeds_only():
+    """With judge_below the evidence test judges only the sources whose
+    seed height in the plan's combined image is below it."""
+    from giant_python.extraction.raster.seeding import seed_heights
+
+    plan = make_plan()
+    result = PathResult(
+        plan=plan,
+        trials=[None, outcome(1, plan.n_pixels), outcome(2, plan.n_pixels)],
+        alignment=[None, alignment(1), alignment(2)],
+    )
+    h = seed_heights(plan.act_im, plan.source_rows, plan.source_cols)
+    cut = float(np.median(h))
+    kin = kinetics_test(
+        result, 0.024, 200.0, 0.0, min_event_rate=1e6, judge_below=cut
+    )
+    np.testing.assert_allclose(kin.seed_height, h)
+    np.testing.assert_array_equal(kin.weak, ~(h >= cut))
+    assert kin.weak.any() and not kin.weak.all()
+    np.testing.assert_array_equal(kin.keep, h >= cut)
+    every = kinetics_test(result, 0.024, 200.0, 0.0, min_event_rate=1e6)
+    assert every.weak.all() and every.seed_height is None
+
+
 def test_evidence_events_skipped_without_counts():
     """The event criterion judges nothing when the kinetics test cannot
     count events (decay under 3 frames); the SNR criterion still does."""

@@ -272,6 +272,52 @@ def test_silo_params_evidence_test():
             SiloParams(**bad)
 
 
+def test_seed_heights():
+    """A source's seed height: the second-largest 3 x 3 value around its
+    pixel, in robust SDs above the image's median (NaN left out)."""
+    from giant_python.extraction.raster.peaks import _MAD_SCALE
+    from giant_python.extraction.raster.seeding import seed_heights
+
+    rng = np.random.default_rng(3)
+    im = rng.standard_normal((40, 50))
+    mu = np.median(im)
+    sigma = np.median(np.abs(im - mu)) / _MAD_SCALE
+    im[10, 10], im[10, 11] = 50.0, 9.0 * sigma + mu  # second largest: 9 SDs
+    im[0, 0], im[0, 1], im[1, 0], im[1, 1] = 40.0, 30.0, np.nan, np.nan
+    h = seed_heights(im, np.array([10, 0, 25]), np.array([10, 0, 30]))
+    # the planted values barely move the image's median and MAD
+    vals = im[np.isfinite(im)]
+    mu = np.median(vals)
+    sigma = np.median(np.abs(vals - mu)) / _MAD_SCALE
+    win = np.sort(im[24:27, 29:32].ravel())
+    np.testing.assert_allclose(
+        h, [(im[10, 11] - mu) / sigma, (30.0 - mu) / sigma,
+            (win[-2] - mu) / sigma]
+    )
+    assert np.isnan(seed_heights(np.full((5, 5), np.nan), [2], [2])).all()
+    assert np.isnan(seed_heights(np.ones((5, 5)), [2], [2])).all()
+
+
+def test_silo_params_evidence_margin():
+    """The evidence test judges sources seeded below peak_th + 2 by
+    default; the margin enters the collect hash and the params struct only
+    when the test is on, so MATLAB's settings keep both."""
+    m = SiloParams()
+    assert m.evidence_margin == 2.0 and not m.evidence_test
+    assert "evidence_margin" not in m.stage_settings("collect")
+    assert "evidenceMargin" not in m.to_matlab(2, 80.0)
+    net = SiloParams(baseline_source="network")
+    assert net.evidence_test and net.evidence_judge_below == 5.0
+    assert net.stage_settings("collect")["evidence_margin"] == 2.0
+    assert net.to_matlab(2, 80.0)["evidenceMargin"] == 2.0
+    every = SiloParams(baseline_source="network", evidence_margin=None)
+    assert every.evidence_judge_below is None
+    assert every.to_matlab(2, 80.0)["evidenceMargin"] == np.inf
+    assert every.stage_settings("collect") != net.stage_settings("collect")
+    with pytest.raises(ValueError):
+        SiloParams(evidence_margin=-1.0)
+
+
 def test_null_sd_acceptance():
     """acceptance='null_sd' counts peak_th in robust SDs of the null; the
     plan and SiloParams accept it with the null images."""
