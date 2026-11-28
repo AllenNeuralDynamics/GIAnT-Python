@@ -5,7 +5,9 @@ DIR]`` reads out every source's (and user ROI's) size in every trial and
 writes a ``spine_summary_<key>.h5`` file (:mod:`giant_python.spine`),
 with the trend tests of the normalized sizes;
 ``giant spine images`` only builds the network's per-trial F0 images (the
-slow part), which ``readout`` then reuses from its cache.
+slow part), which ``readout`` then reuses from its cache. ``giant spine
+view`` shows summaries in the browser (and writes marks), ``giant spine
+export-html`` writes one self-contained page of a summary.
 """
 
 from __future__ import annotations
@@ -143,14 +145,36 @@ def add_spine_commands(subparsers) -> None:
         help="Only build the network's per-trial F0 images (cached).",
     )
     _add_common(images)
+    from .spine.view import export, server
+
+    view = sub.add_parser(
+        "view",
+        help="Inspect spine_summary files in the browser and mark spines.",
+    )
+    server.add_arguments(view)
+    exp = sub.add_parser(
+        "export-html",
+        help="Write one self-contained page of a spine_summary file.",
+    )
+    export.add_arguments(exp)
 
 
 def run_spine_command(args: argparse.Namespace) -> int:
     """Run a ``giant spine`` subcommand; print a JSON report."""
     from .spine.pipeline import make_spine_summary
 
+    if args.spine_command == "view":
+        from .spine.view.server import serve
+
+        return serve(args)
+    if args.spine_command == "export-html":
+        from .spine.view.export import export_html_from_args
+
+        return export_html_from_args(args)
     if args.spine_command not in ("readout", "images"):
-        raise ValueError("give a spine subcommand: readout or images")
+        raise ValueError(
+            "give a spine subcommand: readout, images, view or export-html"
+        )
     if args.spine_command == "images" and args.baseline_dir is None:
         raise ValueError("giant spine images needs --baseline-dir")
     paths = (

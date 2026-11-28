@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spine size viewer</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f4f2; --surface-1: #fcfcfb; --surface-2: #eceae6; --well: #121211;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974; --border: #d9d8d3; --grid: #e6e5e0;
+  --accent: #2a78d6; --band: #e3e2dd;
+  --grow: #16a34a; --shrink: #e34948; --unsure: #d9a400; --notspine: #a855f7;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624; --well: #0b0b0a;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --border: #3a3a37; --grid: #2c2c2a;
+    --accent: #3987e5; --band: #2f2f2c;
+    --grow: #4ade80; --shrink: #f87171; --unsure: #facc15; --notspine: #c084fc;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624; --well: #0b0b0a;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --border: #3a3a37; --grid: #2c2c2a;
+  --accent: #3987e5; --band: #2f2f2c;
+  --grow: #4ade80; --shrink: #f87171; --unsure: #facc15; --notspine: #c084fc;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--surface-1); border-bottom: 1px solid var(--border);
+  padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+label { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+select, input, button { font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+input[type=number] { width: 64px; }
+input[type=range] { accent-color: var(--accent); }
+button { cursor: pointer; padding: 3px 9px; }
+button:hover { background: var(--surface-2); }
+button:disabled { opacity: .45; cursor: default; }
+#tslider { flex: 1 1 320px; min-width: 180px; }
+#tlabel { font-variant-numeric: tabular-nums; min-width: 160px; color: var(--text-secondary); }
+#status { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+#status.err { color: #d03b3b; }
+main { padding: 10px 16px 24px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+@media (max-width: 1100px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+.panel + .panel { margin-top: 10px; }
+.ptitle { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; min-height: 18px; }
+.ptitle b { color: var(--text-primary); font-weight: 600; }
+canvas { display: block; }
+#field { width: 100%; background: var(--well); border-radius: 4px; cursor: crosshair; touch-action: none; }
+#crops { background: var(--surface-1); }
+.chart canvas { width: 100%; height: 210px; cursor: crosshair; }
+.chart.small canvas { height: 90px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; }
+.sw.band { height: 9px; background: var(--band); }
+.sw.dot { border-top: 2px dotted; height: 0; background: none !important; }
+.sw.dash { border-top: 2px dashed; height: 0; background: none !important; }
+.marks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.marks button[data-l="Growing"] { border-color: var(--grow); }
+.marks button[data-l="Shrinking"] { border-color: var(--shrink); }
+.marks button[data-l="Unsure"] { border-color: var(--unsure); }
+.marks button[data-l="Not a spine"] { border-color: var(--notspine); }
+#note { flex: 1 1 200px; min-width: 120px; }
+#markstate { font-weight: 600; min-width: 90px; }
+.chip { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+#tablewrap { margin-top: 10px; max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+#srctable { border-collapse: collapse; width: 100%; font-size: 12px; background: var(--surface-1); }
+#srctable th, #srctable td { padding: 3px 6px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#srctable th { cursor: pointer; color: var(--text-muted); font-weight: 500; position: sticky; top: 0; background: var(--surface-1); }
+#srctable th.grp { cursor: default; text-align: center; border-bottom: 0; }
+#srctable td:nth-child(2), #srctable th:nth-child(2) { text-align: left; }
+#srctable tr:hover td { background: var(--surface-2); cursor: pointer; }
+#srctable tr.sel td { background: var(--surface-2); box-shadow: inset 0 -1px var(--accent); }
+#srctable td.pass { font-weight: 600; color: var(--text-primary); }
+#srctable td.nt { color: var(--text-muted); }
+details.defs { margin-top: 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; color: var(--text-secondary); }
+details.defs summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+details.defs li { margin: 3px 0; }
+#tip { position: fixed; z-index: 10; pointer-events: none; display: none; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.18);
+  font-variant-numeric: tabular-nums; }
+#tip .r { display: flex; gap: 14px; justify-content: space-between; }
+.muted { color: var(--text-muted); font-size: 12px; }
+#notes { color: var(--text-muted); font-size: 12px; }
+@media (max-width: 700px) { header { padding: 8px; } main { padding: 8px; } #tlabel { min-width: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Spine size viewer</h1>
+    <label>Product <select id="prod"></select></label>
+    <label>Path <select id="path"></select></label>
+    <label title="The image whose sizes and trend tests the table and the size plot lead with">Sizes <select id="simg"></select></label>
+    <span id="status">loading…</span>
+    <button id="btheme" title="Light / dark">◐</button>
+  </div>
+  <div class="row">
+    <label>Field <select id="fimg"></select></label>
+    <label>View <select id="fview"><option value="image">image</option><option value="change">change</option><option value="activity">activity</option></select></label>
+    <label title="Change views: each trial against the mean of all trials, or against the trial before it">vs <select id="vs"><option value="average">mean of trials</option><option value="previous">previous trial</option></select></label>
+    <label title="Colour range of the change views">± % <input id="range" type="number" min="2" max="100" step="5" value="25"></label>
+    <label><input id="sqrt" type="checkbox" checked> sqrt contrast</label>
+    <label>Crops <select id="cimg"></select></label>
+    <label><select id="cview"><option value="image">image</option><option value="change">change</option></select></label>
+    <button id="bfit" title="Fit the field to the panel">Fit</button>
+  </div>
+  <div class="row">
+    <button id="bprev" title="Previous trial (←)">‹</button>
+    <input id="tslider" type="range" min="-1" max="0" value="-1" step="1">
+    <button id="bnext" title="Next trial (→)">›</button>
+    <span id="tlabel"></span>
+    <span class="muted">keys: ←/→ trial, a mean, n/p next/previous source, r other product, g/s/u/x mark, c clear</span>
+  </div>
+</header>
+<main>
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <div class="ptitle" id="ftitle"></div>
+        <canvas id="field"></canvas>
+        <div class="legend" id="flegend"></div>
+      </div>
+      <div class="panel">
+        <div class="ptitle" id="ctitle"></div>
+        <canvas id="crops"></canvas>
+      </div>
+    </div>
+    <div>
+      <div class="panel chart">
+        <div class="ptitle" id="stitle"></div>
+        <canvas id="size"></canvas>
+        <div class="legend" id="slegend"></div>
+      </div>
+      <div class="panel chart small">
+        <div class="ptitle" id="atitle"></div>
+        <canvas id="act"></canvas>
+      </div>
+      <div class="panel">
+        <div class="ptitle" id="mtitle">Mark</div>
+        <div class="marks">
+          <button data-l="Growing">Growing (g)</button>
+          <button data-l="Shrinking">Shrinking (s)</button>
+          <button data-l="Unsure">Unsure (u)</button>
+          <button data-l="Not a spine">Not a spine (x)</button>
+          <button data-l="">Clear (c)</button>
+          <input id="note" placeholder="note (saved with the mark)">
+          <span id="markstate"></span>
+        </div>
+        <div class="muted" id="marksinfo"></div>
+      </div>
+    </div>
+  </div>
+  <div id="tablewrap"><table id="srctable"></table></div>
+  <details class="defs">
+    <summary>What is shown</summary>
+    <ul>
+      <li><b>Size</b>: each source's readout of a per-trial image in its fixed window (the mean footprint over the pixels with a value in every trial), normalized as <code>spineTrends.m</code>: log, minus each trial's median over the sources, minus the source's own mean; shown as % against that mean.</li>
+      <li><b>Step</b>: the largest t of a change between the trials before and after a split (after trial: the last trial before it); <b>brief</b>: the strongest change of 1–3 trials that comes back, against the 2 trials on each side; <b>beyond trend</b>: the step test once the source's part of the shared trend (first singular vector over the sources) is removed. p from random trial orders of the source, q from Benjamini–Hochberg per path; bold where q ≤ the FDR level.</li>
+      <li><b>Field</b>: each trial divided by its median (bleach-normalized), or their mean. <b>Change</b>: trials blurred 0.7 px, against the mean of all trials or the previous trial in the same block of consecutive acquisitions; at the mean, the last block against the earlier ones (one block: second half against first); brightness follows the mean image. <b>Activity</b>: the run's activity image as a robust z.</li>
+      <li><b>Crops</b>: the window (footprint weights; contours at 50% and 10% of the peak; hatched: pixels left out because some trial has no value there), then the mean and every trial, on one contrast.</li>
+      <li><b>Marks</b> belong to a position and attach to the nearest source within 2.5 px, in any product of the session.</li>
+    </ul>
+    <div id="notes"></div>
+  </details>
+</main>
+<div id="tip"></div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const S = { meta: null, prod: 0, path: null, trial: -1, src: -1, data: null, roi: null, crops: null, field: null,
+  lim: {}, view: { s: 1, ox: 0, oy: 0 }, order: [], sortKey: "step_p", sortDir: 1, cropsKey: "", fieldKey: "" };
+const MARK_VAR = { "Growing": "--grow", "Shrinking": "--shrink", "Unsure": "--unsure", "Not a spine": "--notspine" };
+const MARK_KEYS = { g: "Growing", s: "Shrinking", u: "Unsure", x: "Not a spine", c: "" };
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---------------------------------------------------------------- data
+const STATIC = window.SPINE_STATIC || null;
+async function decodeStatic() {
+  // the export embeds gzip'd JSON as base64; arrays inside are uint8 with scale/offset (255 = NaN)
+  const el = document.getElementById("spine-static");
+  if (!el) return null;
+  const bin = Uint8Array.from(atob(el.textContent.trim()), c => c.charCodeAt(0));
+  const txt = await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  return JSON.parse(txt);
+}
+function unpack(e) {
+  // layers of uint8 codes: value = offset + scale * code, 255 = NaN
+  const n = e.shape.reduce((a, b) => a * b, 1); const out = new Float32Array(n); let at = 0;
+  for (const l of e.layers) {
+    const q = Uint8Array.from(atob(l.b64), c => c.charCodeAt(0));
+    for (let i = 0; i < q.length; i++) out[at + i] = q[i] === 255 ? NaN : l.offset + l.scale * q[i];
+    at += q.length;
+  }
+  return { shape: e.shape, data: out };
+}
+let EMB = null;
+// keys of the export's field images (as giant_python.spine.view.export.field_key)
+function fieldKey(n, image, trial, view, vs) {
+  if (view === "activity") return `${n}||-1|activity|`;
+  return `${n}|${image}|${trial}|${view}|${view === "change" && trial >= 0 ? vs : ""}`;
+}
+const api = {
+  async json(url) {
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    return j;
+  },
+  async bin(url) {
+    const r = await fetch(url);
+    if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error; } catch (e) {} throw new Error(m); }
+    return { shape: JSON.parse(r.headers.get("X-Shape")), data: new Float32Array(await r.arrayBuffer()) };
+  },
+  meta() { return EMB ? Promise.resolve(EMB.meta) : this.json("/api/meta"); },
+  sources(p, n) { return EMB ? Promise.resolve(EMB.sources[n]) : this.json(`/api/sources?prod=${p}&path=${n}`); },
+  field(p, n, image, trial, view, vs) {
+    if (EMB) { const e = EMB.fields[fieldKey(n, image, trial, view, vs)];
+      return e ? Promise.resolve(unpack(e)) : Promise.reject(new Error("not in this export (it holds the mean of trials)")); }
+    return this.bin(`/api/field?prod=${p}&path=${n}&image=${encodeURIComponent(image)}&trial=${trial}&view=${view}&vs=${vs}`);
+  },
+  roi(p, n, k) {
+    if (EMB) { const e = EMB.rois[`${n}|${k}`]; return e ? Promise.resolve(e) : Promise.reject(new Error("not in this export")); }
+    return this.json(`/api/roi?prod=${p}&path=${n}&id=${k}`);
+  },
+  crops(p, n, k, image, view, vs) {
+    if (EMB) { const e = EMB.crops[`${n}|${k}|${image}|${view}|${view === "change" ? vs : ""}`];
+      return e ? Promise.resolve(unpack(e)) : Promise.reject(new Error("not in this export")); }
+    return this.bin(`/api/crops?prod=${p}&path=${n}&id=${k}&image=${encodeURIComponent(image)}&view=${view}&vs=${vs}`);
+  },
+  async mark(p, n, k, label, note) {
+    if (EMB) throw new Error("marks are not saved from an export");
+    const r = await fetch("/api/mark", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prod: p, path: n, id: k, label, note }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    return j;
+  },
+};
+function status(msg, err) { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; }
+
+// ---------------------------------------------------------------- helpers
+const pct = x => (x === null || x === undefined || !isFinite(x)) ? NaN : 100 * (Math.exp(x) - 1);
+const fmtP = p => (p === null || p === undefined || !isFinite(p)) ? "" : (p < 0.001 ? p.toExponential(0) : p.toFixed(3));
+const fmtPct = x => isFinite(x) ? (x > 0 ? "+" : "") + x.toFixed(0) : "";
+function pmeta() { return S.meta.products[S.prod].paths[S.path]; }
+function acqOf(t) {
+  // acquisition number of trial index t ("" for -1: no split or run)
+  if (t === null || t === undefined || t < 0) return "";
+  const a = pmeta().acquisition[t]; return a >= 0 ? a : t + 1;
+}
+function trialList(ts) {
+  // '2-11, 20' style list of acquisition numbers
+  const n = ts.map(acqOf); const out = []; let i = 0;
+  while (i < n.length) { let j = i; while (j + 1 < n.length && n[j + 1] === n[j] + 1) j++;
+    out.push(j > i ? `${n[i]}-${n[j]}` : `${n[i]}`); i = j + 1; }
+  return out.join(", ");
+}
+function quantile(sorted, q) { if (!sorted.length) return NaN; const i = (sorted.length - 1) * q, a = Math.floor(i), b = Math.ceil(i);
+  return sorted[a] + (sorted[b] - sorted[a]) * (i - a); }
+function finiteSorted(arr) { const v = []; for (const x of arr) if (isFinite(x)) v.push(x); return v.sort((a, b) => a - b); }
+function series(k) { return css(`--series-${(k % 8) + 1}`); }
+function hexRgb(h) { h = h.replace("#", ""); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+// blue - white - red, as spineViewer.m
+const DIV = (() => { const m = []; for (let i = 0; i < 256; i++) { let r, g, b;
+  if (i < 128) { const f = i / 127; r = 0.13 + 0.87 * f; g = 0.4 + 0.6 * f; b = 0.75 + 0.25 * f; }
+  else { const f = (i - 128) / 127; r = 1 - 0.2 * f; g = 1 - 0.85 * f; b = 1 - 0.9 * f; }
+  m.push([r * 255, g * 255, b * 255]); } return m; })();
+function actColour(z) {
+  // grey below 5, red - yellow - white above (to 15)
+  if (z < 5) { const g = Math.max(0, Math.min(1, (z + 3) / 8)) * 140; return [g, g, g]; }
+  const f = Math.min(1, (z - 5) / 10);
+  if (f < 0.5) { const u = f / 0.5; return [190 + 65 * u, 13 + 102 * u, 13]; }
+  const u = (f - 0.5) / 0.5; return [255, 115 + 140 * u, 13 + 217 * u];
+}
+function sqrtv(x, on) { return on ? Math.sqrt(Math.max(x, 0)) : x; }
+
+// ---------------------------------------------------------------- setup
+async function init() {
+  if (document.getElementById("spine-static")) EMB = await decodeStatic();
+  S.meta = await api.meta();
+  const ps = $("prod"); ps.innerHTML = "";
+  S.meta.products.forEach((p, i) => ps.add(new Option(p.name, i)));
+  ps.disabled = S.meta.products.length < 2;
+  ps.onchange = () => switchProduct(+ps.value);
+  $("path").onchange = () => loadPath(+$("path").value);
+  for (const id of ["fimg", "fview", "vs", "sqrt"]) $(id).onchange = () => drawField(true);
+  $("range").onchange = () => { drawField(true); drawCrops(); };
+  for (const id of ["cimg", "cview"]) $(id).onchange = () => loadCrops();
+  $("vs").addEventListener("change", () => loadCrops());
+  $("sqrt").addEventListener("change", () => drawCrops());
+  $("simg").onchange = () => { buildTable(); drawSize(); };
+  $("tslider").oninput = () => setTrial(+$("tslider").value);
+  $("bprev").onclick = () => setTrial(S.trial - 1);
+  $("bnext").onclick = () => setTrial(S.trial + 1);
+  $("bfit").onclick = () => { fitView(); drawOverlay(); };
+  $("btheme").onclick = () => { const r = document.documentElement;
+    const dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    r.dataset.theme = dark ? "light" : "dark"; redrawAll(); };
+  document.querySelectorAll(".marks button").forEach(b => b.onclick = () => setMark(b.dataset.l));
+  $("note").onchange = () => { const m = markOf(S.src); setMark(m ? m.label : "Unsure"); };
+  document.addEventListener("keydown", onKey);
+  setupField();
+  setupCharts();
+  window.addEventListener("resize", () => { fitView(); redrawAll(); });
+  await switchProduct(0, true);
+}
+
+async function switchProduct(i, first) {
+  // keep path, trial, views and the nearest source
+  const prev = S.data && S.src >= 0 ? { r: S.data.rows[S.src], c: S.data.cols[S.src] } : null;
+  const keepView = !first && S.field;
+  const view = { ...S.view };
+  S.prod = i; $("prod").value = i;
+  const prod = S.meta.products[i];
+  const ps = $("path"); const cur = S.path; ps.innerHTML = "";
+  for (const n of Object.keys(prod.paths)) ps.add(new Option(`Path${n}`, n));
+  const n = prod.paths[cur] ? cur : +Object.keys(prod.paths)[0];
+  ps.value = n;
+  $("notes").textContent = prod.notes && prod.notes.length ? "Readout notes: " + prod.notes.join("; ") : "";
+  await loadPath(+n, prev, keepView ? view : null);
+}
+
+function fillSelect(sel, items, keep) {
+  const cur = sel.value; sel.innerHTML = "";
+  for (const [v, t] of items) sel.add(new Option(t, v));
+  if (keep && items.some(([v]) => v === cur)) sel.value = cur;
+}
+
+async function loadPath(n, near, view) {
+  S.path = n; status("loading…");
+  const pm = pmeta();
+  const imgs = pm.images.map(x => [x.name, x.name]);
+  fillSelect($("fimg"), imgs, true);
+  fillSelect($("cimg"), imgs, true);
+  const prefer = ["f0_gain", "f0_net", "f0_silo_ch1", "mean_ch1"];
+  const sizeImgs = pm.normalized.map(x => [x, x]);
+  const hadSimg = $("simg").value;
+  fillSelect($("simg"), sizeImgs, true);
+  if (!pm.normalized.includes(hadSimg)) { const p = prefer.find(x => pm.normalized.includes(x)); if (p) $("simg").value = p; }
+  if (!S.fieldKey) {
+    // the field: an image that covers it; the crops: the readout's F0
+    const f = ["f0_net", "mean_ch1"].find(x => pm.images.some(i => i.name === x)); if (f) $("fimg").value = f;
+    const c = prefer.find(x => pm.images.some(i => i.name === x)); if (c) $("cimg").value = c;
+  }
+  $("fview").querySelector('option[value="activity"]').disabled = !pm.has_activity_image;
+  const sl = $("tslider"); sl.max = pm.acquisition.length - 1;
+  S.trial = Math.min(S.trial, pm.acquisition.length - 1);
+  try {
+    S.data = await api.sources(S.prod, n);
+  } catch (e) { status(e.message, true); return; }
+  S.lim = {};
+  let s = 0;
+  if (near && S.data.n) {
+    let best = Infinity;
+    for (let k = 0; k < S.data.n; k++) { const d = (S.data.rows[k] - near.r) ** 2 + (S.data.cols[k] - near.c) ** 2; if (d < best) { best = d; s = k; } }
+  } else if (S.src >= 0 && S.src < S.data.n && !near) s = S.src;
+  if (EMB && !near) { const inc = exportedSources(n); if (inc.length && !inc.includes(s)) s = inc[0]; }
+  buildTable();
+  await drawField(true, view === null || view === undefined);
+  if (view) { S.view = view; drawOverlay(); }
+  setTrial(S.trial, true);
+  if (S.data.n) await selectSource(s, true); else status("no sources");
+}
+
+function exportedSources(n) {
+  // sources whose crops an export holds
+  return EMB ? Object.keys(EMB.rois).filter(k => k.startsWith(`${n}|`)).map(k => +k.split("|")[1]) : [];
+}
+
+// ---------------------------------------------------------------- field
+const fieldOff = document.createElement("canvas");
+function setupField() {
+  const cv = $("field");
+  let drag = null;
+  cv.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, ox: S.view.ox, oy: S.view.oy, moved: false }; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", e => {
+    if (!drag) { fieldTip(e); return; }
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved) { S.view.ox = drag.ox + dx; S.view.oy = drag.oy + dy; drawOverlay(); }
+  });
+  cv.addEventListener("pointerup", e => {
+    if (drag && !drag.moved) clickField(e);
+    drag = null;
+  });
+  cv.addEventListener("pointerleave", () => { $("tip").style.display = "none"; });
+  cv.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = cv.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
+    const f = Math.exp(-e.deltaY * 0.0015);
+    const s = Math.max(0.2, Math.min(60, S.view.s * f)); const k = s / S.view.s;
+    S.view.ox = x - (x - S.view.ox) * k; S.view.oy = y - (y - S.view.oy) * k; S.view.s = s;
+    drawOverlay();
+  }, { passive: false });
+}
+function fieldSize() {
+  const cv = $("field"); const w = cv.clientWidth;
+  const [H, W] = pmeta().shape; const h = Math.max(160, Math.min(560, Math.round(w * H / W)));
+  return [w, h];
+}
+function fitView() {
+  if (!S.path) return;
+  const [w, h] = fieldSize(); const [H, W] = pmeta().shape;
+  const s = Math.min(w / W, h / H);
+  S.view = { s, ox: (w - W * s) / 2, oy: (h - H * s) / 2 };
+}
+function toImg(e) {
+  const r = $("field").getBoundingClientRect();
+  return [(e.clientY - r.top - S.view.oy) / S.view.s, (e.clientX - r.left - S.view.ox) / S.view.s];
+}
+function clickField(e) {
+  if (!S.data || !S.data.n) return;
+  const [r, c] = toImg(e); let best = Infinity, k = -1;
+  for (let i = 0; i < S.data.n; i++) { const d = (S.data.rows[i] - r) ** 2 + (S.data.cols[i] - c) ** 2; if (d < best) { best = d; k = i; } }
+  if (k >= 0 && Math.sqrt(best) * S.view.s < 14) selectSource(k);
+}
+function fieldTip(e) {
+  if (!S.field) return;
+  const [r, c] = toImg(e); const [L, H, W] = S.field.shape; const ri = Math.floor(r + 0.5), ci = Math.floor(c + 0.5);
+  const tip = $("tip");
+  if (ri < 0 || ci < 0 || ri >= H || ci >= W) { tip.style.display = "none"; return; }
+  const v = S.field.data[ri * W + ci];
+  const view = $("fview").value;
+  const txt = view === "change" ? `change ${isFinite(v) ? (100 * v).toFixed(1) + "%" : "–"}` :
+    view === "activity" ? `z ${isFinite(v) ? v.toFixed(1) : "–"}` : `${isFinite(v) ? v.toFixed(3) : "–"} × trial median`;
+  tip.innerHTML = `<div class="r"><span>row ${ri}, col ${ci}</span><span>${txt}</span></div>`;
+  tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px";
+}
+async function drawField(refetch, fit) {
+  if (!S.path) return;
+  const view = $("fview").value, image = $("fimg").value, vs = $("vs").value;
+  $("vs").disabled = view !== "change"; $("range").disabled = view !== "change"; $("fimg").disabled = view === "activity";
+  const key = [S.prod, S.path, image, S.trial, view, vs].join("|");
+  if (refetch || key !== S.fieldKey) {
+    try { S.field = await api.field(S.prod, S.path, image, S.trial, view, vs); S.fieldKey = key; }
+    catch (e) { status(`field: ${e.message}`, true); S.field = null; S.fieldKey = key; }
+  }
+  renderField();
+  if (fit) fitView();
+  drawOverlay();
+  const tl = S.trial < 0 ? "mean of trials" : `trial ${acqOf(S.trial)}`;
+  const what = view === "activity" ? "activity image (robust z; sources detected above threshold)" :
+    view === "change" ? `${image} change, ${S.trial < 0 ? "late vs early trials" : (vs === "previous" ? "vs the previous trial" : "vs the mean of trials")} (red brighter, blue dimmer, ±${$("range").value}%)` :
+    `${image}, bleach-normalized`;
+  $("ftitle").innerHTML = `<b>Path${S.path}</b>: ${what}, ${view === "activity" ? "all trials" : tl}. Click a ring to select a source; drag to pan, scroll to zoom.`;
+  const leg = Object.entries(MARK_VAR).map(([l, v]) => `<span><span class="chip" style="background:${css(v)}"></span>${l}</span>`);
+  $("flegend").innerHTML = `<span><span class="chip" style="border:1.5px solid ${css("--text-secondary")}"></span>source</span>` + leg.join("");
+}
+function renderField() {
+  const off = fieldOff;
+  if (!S.field) { off.width = 1; off.height = 1; return; }
+  const [L, H, W] = S.field.shape; off.width = W; off.height = H;
+  const ctx = off.getContext("2d"); const im = ctx.createImageData(W, H); const d = im.data; const a = S.field.data;
+  const view = $("fview").value; const sq = $("sqrt").checked;
+  if (view === "change") {
+    const r = (+$("range").value || 25) / 100; const b = a.subarray(H * W);
+    for (let i = 0; i < H * W; i++) { const c = a[i];
+      if (!isFinite(c)) { d[i * 4 + 3] = 0; continue; }
+      const idx = Math.round(255 * Math.min(Math.max((c / r + 1) / 2, 0), 1)); const m = DIV[idx]; const br = b[i];
+      d[i * 4] = m[0] * br; d[i * 4 + 1] = m[1] * br; d[i * 4 + 2] = m[2] * br; d[i * 4 + 3] = 255; }
+  } else if (view === "activity") {
+    for (let i = 0; i < H * W; i++) { const z = a[i]; if (!isFinite(z)) { d[i * 4 + 3] = 0; continue; }
+      const c = actColour(z); d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = 255; }
+  } else {
+    // one contrast per image (from the first view of it), so trials compare
+    const lk = [S.prod, S.path, $("fimg").value, sq].join("|");
+    if (!S.lim[lk]) { const v = finiteSorted(Array.from(a.subarray(0, H * W), x => sqrtv(x, sq)));
+      S.lim[lk] = [quantile(v, 0.005), quantile(v, 0.998)]; }
+    const [lo, hi] = S.lim[lk]; const sc = 255 / Math.max(hi - lo, 1e-9);
+    for (let i = 0; i < H * W; i++) { const x = a[i]; if (!isFinite(x)) { d[i * 4 + 3] = 0; continue; }
+      const g = Math.max(0, Math.min(255, (sqrtv(x, sq) - lo) * sc)); d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = g; d[i * 4 + 3] = 255; }
+  }
+  ctx.putImageData(im, 0, 0);
+}
+function contourSegments(w, frac) {
+  // pixel-edge outline of weights above frac of the peak: segments [r0, c0, r1, c1] in grid units
+  const n = w.length; let top = 0; for (const row of w) for (const x of row) top = Math.max(top, x);
+  const th = frac * top; const inside = (r, c) => r >= 0 && c >= 0 && r < n && c < n && w[r][c] > th && top > 0;
+  const seg = [];
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) { if (!inside(r, c)) continue;
+    if (!inside(r - 1, c)) seg.push([r, c, r, c + 1]); if (!inside(r + 1, c)) seg.push([r + 1, c, r + 1, c + 1]);
+    if (!inside(r, c - 1)) seg.push([r, c, r + 1, c]); if (!inside(r, c + 1)) seg.push([r, c + 1, r + 1, c + 1]); }
+  return seg;
+}
+function drawOverlay() {
+  const cv = $("field"); const [w, h] = fieldSize(); const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + "px";
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = css("--well"); ctx.fillRect(0, 0, w, h);
+  const v = S.view; ctx.imageSmoothingEnabled = false;
+  if (S.field) ctx.drawImage(fieldOff, v.ox, v.oy, fieldOff.width * v.s, fieldOff.height * v.s);
+  if (!S.data || !S.data.n) return;
+  // pixel centres are at integer coordinates: screen = (c + 0.5) * s + ox
+  const X = c => (c + 0.5) * v.s + v.ox, Y = r => (r + 0.5) * v.s + v.oy;
+  const by = (S.data.marks && S.data.marks.by_source) || {};
+  ctx.lineWidth = 1.4;
+  for (let k = 0; k < S.data.n; k++) {
+    const x = X(S.data.cols[k]), y = Y(S.data.rows[k]); if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
+    const m = by[k];
+    ctx.beginPath(); ctx.arc(x, y, Math.max(3.5, Math.min(7, 2.2 * v.s)), 0, 2 * Math.PI);
+    ctx.strokeStyle = "rgba(0,0,0,.65)"; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = m && m.label ? css(MARK_VAR[m.label]) : (S.data.ok[k] ? "#ffffff" : "#9a9a95"); ctx.lineWidth = 1.4; ctx.stroke();
+  }
+  if (S.roi && S.src >= 0) {
+    const [r0, c0] = S.roi.origin;
+    for (const [frac, col] of [[0.5, "#ff3b30"], [0.1, "#ff9f0a"]]) {
+      ctx.beginPath();
+      for (const [a, b, c, d] of contourSegments(S.roi.weights, frac)) {
+        ctx.moveTo((c0 + b) * v.s + v.ox, (r0 + a) * v.s + v.oy); ctx.lineTo((c0 + d) * v.s + v.ox, (r0 + c) * v.s + v.oy); }
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    const x = X(S.data.cols[S.src]), y = Y(S.data.rows[S.src]);
+    ctx.beginPath(); ctx.arc(x, y, Math.max(9, 4 * v.s), 0, 2 * Math.PI); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.stroke();
+  }
+}
+
+// ---------------------------------------------------------------- source selection, crops
+async function selectSource(k, keepTable) {
+  if (!S.data || k < 0 || k >= S.data.n) return;
+  S.src = k;
+  // pan only if the source is outside the view
+  const [w, h] = fieldSize(); const x = (S.data.cols[k] + 0.5) * S.view.s + S.view.ox, y = (S.data.rows[k] + 0.5) * S.view.s + S.view.oy;
+  if (x < 20 || y < 20 || x > w - 20 || y > h - 20) { S.view.ox += w / 2 - x; S.view.oy += h / 2 - y; }
+  status(`source ${S.data.ids[k] + 1}`);
+  try { S.roi = await api.roi(S.prod, S.path, k); } catch (e) { S.roi = null; status(`window: ${e.message}`, true); }
+  drawOverlay(); drawSize(); drawAct(); showMark(); highlightRow(keepTable);
+  await loadCrops();
+}
+async function loadCrops() {
+  if (S.src < 0) return;
+  const image = $("cimg").value, view = $("cview").value, vs = $("vs").value;
+  const key = [S.prod, S.path, S.src, image, view, vs].join("|");
+  if (key !== S.cropsKey) {
+    try { S.crops = await api.crops(S.prod, S.path, S.src, image, view, vs); }
+    catch (e) { S.crops = null; status(`crops: ${e.message}`, true); }
+    S.cropsKey = key;
+  }
+  drawCrops();
+}
+function drawCrops() {
+  const cv = $("crops"); const panel = cv.parentElement; const W0 = panel.clientWidth - 16;
+  const pm = pmeta(); const nT = pm.acquisition.length; const nTiles = nT + 2; // window, mean, trials
+  const sz = S.roi ? S.roi.size : (2 * S.meta.crop_half + 1);
+  const perRow = Math.max(4, Math.min(nTiles, Math.floor(W0 / 58)));
+  const tile = Math.max(36, Math.min(96, Math.floor(W0 / perRow) - 4)); const lab = 13, gap = 4;
+  const rows = Math.ceil(nTiles / perRow);
+  const dpr = window.devicePixelRatio || 1; const Wc = perRow * (tile + gap), Hc = rows * (tile + lab + gap);
+  cv.width = Math.round(Wc * dpr); cv.height = Math.round(Hc * dpr); cv.style.width = Wc + "px"; cv.style.height = Hc + "px";
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, Wc, Hc);
+  ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "bottom";
+  const view = $("cview").value; const sq = $("sqrt").checked; const rng = (+$("range").value || 25) / 100;
+  let lo = 0, hi = 1, nL = 1;
+  if (S.crops) { nL = S.crops.shape[0];
+    if (view !== "change") { const n = S.crops.shape[1] * sz * sz; const v = finiteSorted(Array.from(S.crops.data.subarray(0, n), x => sqrtv(x, sq)));
+      lo = quantile(v, 0.01); hi = quantile(v, 0.995); } }
+  const off = document.createElement("canvas"); off.width = sz; off.height = sz; const octx = off.getContext("2d");
+  const segs = S.roi ? [[contourSegments(S.roi.weights, 0.5), "#ff3b30"], [contourSegments(S.roi.weights, 0.1), "#ff9f0a"]] : [];
+  for (let k = 0; k < nTiles; k++) {
+    const x0 = (k % perRow) * (tile + gap), y0 = Math.floor(k / perRow) * (tile + lab + gap) + lab;
+    const label = k === 0 ? "window" : k === 1 ? (view === "change" ? "late/early" : "mean") : `${acqOf(k - 2)}`;
+    ctx.fillStyle = (k - 2 === S.trial || (k === 1 && S.trial < 0)) ? css("--accent") : css("--text-secondary");
+    ctx.fillText(label, x0 + 1, y0 - 1);
+    ctx.fillStyle = css("--well"); ctx.fillRect(x0, y0, tile, tile);
+    const im = octx.createImageData(sz, sz); const d = im.data;
+    if (k === 0 && S.roi) {
+      let top = 0; for (const row of S.roi.weights) for (const x of row) top = Math.max(top, x);
+      for (let r = 0; r < sz; r++) for (let c = 0; c < sz; c++) { const g = top > 0 ? 255 * Math.sqrt(S.roi.weights[r][c] / top) : 0; const i = (r * sz + c) * 4;
+        d[i] = d[i + 1] = d[i + 2] = g; d[i + 3] = 255; }
+    } else if (k > 0 && S.crops) {
+      const t = k - 1; const base = t * sz * sz; const plane = S.crops.shape[1] * sz * sz;
+      for (let p = 0; p < sz * sz; p++) { const x = S.crops.data[base + p]; const i = p * 4;
+        if (!isFinite(x)) { d[i + 3] = 0; continue; }
+        if (view === "change" && nL > 1) { const br = S.crops.data[plane + base + p]; const m = DIV[Math.round(255 * Math.min(Math.max((x / rng + 1) / 2, 0), 1))];
+          d[i] = m[0] * br; d[i + 1] = m[1] * br; d[i + 2] = m[2] * br; }
+        else { const g = Math.max(0, Math.min(255, 255 * (sqrtv(x, sq) - lo) / Math.max(hi - lo, 1e-9))); d[i] = d[i + 1] = d[i + 2] = g; }
+        d[i + 3] = 255; }
+    }
+    octx.putImageData(im, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(off, x0, y0, tile, tile);
+    const u = tile / sz;
+    if (S.roi) {
+      // hatch: footprint pixels left out of the window (no value in some trial)
+      ctx.strokeStyle = "rgba(255,159,10,.9)"; ctx.lineWidth = 1; ctx.beginPath();
+      for (let r = 0; r < sz; r++) for (let c = 0; c < sz; c++) if (S.roi.weights[r][c] > 0 && !S.roi.valid[r][c]) {
+        ctx.moveTo(x0 + c * u + 1, y0 + r * u + 1); ctx.lineTo(x0 + (c + 1) * u - 1, y0 + (r + 1) * u - 1);
+        ctx.moveTo(x0 + (c + 1) * u - 1, y0 + r * u + 1); ctx.lineTo(x0 + c * u + 1, y0 + (r + 1) * u - 1); }
+      ctx.stroke();
+      for (const [sg, col] of segs) { ctx.beginPath(); for (const [a, b, c2, d2] of sg) { ctx.moveTo(x0 + b * u, y0 + a * u); ctx.lineTo(x0 + d2 * u, y0 + c2 * u); }
+        ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+    if (k - 2 === S.trial || (k === 1 && S.trial < 0)) { ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.strokeRect(x0 - 1, y0 - 1, tile + 2, tile + 2); }
+  }
+  const s = S.src >= 0 ? S.data.ids[S.src] + 1 : "";
+  const npx = S.roi ? S.roi.weights.flat().filter((x, i) => x > 0 && S.roi.valid.flat()[i]).length : 0;
+  const inc = exportedSources(S.path);
+  const incTxt = EMB ? ` <span class="muted">(this page holds the crops of sources ${inc.map(k => S.data.ids[k] + 1).join(", ") || "none"})</span>` : "";
+  $("ctitle").innerHTML = `<b>Source ${s}</b>: window (footprint weights, ${npx} px used; red 50%, orange 10% of the peak; hatched: left out), then ${$("cimg").value} ${view === "change" ? "change" : "bleach-normalized, one contrast"}, mean and each trial${incTxt}`;
+}
+
+// ---------------------------------------------------------------- charts
+function setupCharts() {
+  for (const id of ["size", "act"]) {
+    const cv = $(id);
+    cv.addEventListener("mousemove", e => chartTip(id, e));
+    cv.addEventListener("mouseleave", () => { $("tip").style.display = "none"; });
+    cv.addEventListener("click", e => { const t = chartTrial(id, e); if (t !== null) setTrial(t); });
+  }
+}
+const CH = {};
+function chartFrame(id) {
+  const cv = $(id); const w = cv.clientWidth, h = cv.clientHeight; const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+function trialX(id, t) { const c = CH[id]; return c.l + (t + 0.5) * (c.w - c.l - c.r) / c.n; }
+function chartTrial(id, e) {
+  const c = CH[id]; if (!c) return null; const r = $(id).getBoundingClientRect();
+  const t = Math.floor((e.clientX - r.left - c.l) / ((c.w - c.l - c.r) / c.n));
+  return t >= 0 && t < c.n ? t : null;
+}
+function sizeOf(name, k) {
+  // normalized size of source k in image name, as % per trial (NaN where none)
+  const L = S.data.normalized[name]; if (!L) return null;
+  return L.map(row => pct(row[k]));
+}
+function otherSource() {
+  // the next product's source nearest the selected one (within 2.5 px), for the size plot
+  if (S.meta.products.length < 2 || !S.other) return null;
+  return S.other;
+}
+async function refreshOther() {
+  S.other = null;
+  if (S.meta.products.length < 2 || EMB || S.src < 0) return;
+  const j = (S.prod + 1) % S.meta.products.length; const om = S.meta.products[j].paths[S.path]; if (!om) return;
+  try {
+    const od = S.otherData && S.otherData.key === `${j}|${S.path}` ? S.otherData.d : await api.sources(j, S.path);
+    S.otherData = { key: `${j}|${S.path}`, d: od };
+    let best = Infinity, k = -1;
+    for (let i = 0; i < od.n; i++) { const d = (od.rows[i] - S.data.rows[S.src]) ** 2 + (od.cols[i] - S.data.cols[S.src]) ** 2; if (d < best) { best = d; k = i; } }
+    if (k >= 0 && best <= 2.5 ** 2) S.other = { name: S.meta.products[j].name, d: od, k };
+  } catch (e) { /* the comparison is optional */ }
+}
+async function drawSize() {
+  if (!S.data || S.src < 0) return;
+  await refreshOther();
+  const { ctx, w, h } = chartFrame("size"); const pm = pmeta(); const nT = pm.acquisition.length;
+  const prim = $("simg").value; const names = pm.normalized; const k = S.src;
+  CH.size = { l: 44, r: 8, t: 8, b: 26, w, h, n: nT, series: [] };
+  const c = CH.size;
+  // y range from the 5-95% band of all sources and this source's series
+  const L = S.data.normalized[prim] || []; const okk = S.data.ok;
+  const band = [];
+  for (let t = 0; t < nT; t++) { const v = []; for (let i = 0; i < S.data.n; i++) if (okk[i]) { const x = pct(L[t] ? L[t][i] : NaN); if (isFinite(x)) v.push(x); }
+    v.sort((a, b) => a - b); band.push(v.length ? [quantile(v, 0.1), quantile(v, 0.9), quantile(v, 0.5)] : [NaN, NaN, NaN]); }
+  const ser = names.map((nm, j) => ({ name: nm, y: sizeOf(nm, k), col: series(j), main: nm === prim }));
+  const tr = S.data.trends[prim];
+  let shared = null;
+  if (tr && isFinite(tr.shared_loading[k])) shared = tr.shared_v.map(v => pct(tr.shared_loading[k] * v));
+  const oth = otherSource();
+  let othY = null; if (oth && oth.d.normalized[prim]) othY = oth.d.normalized[prim].map(row => pct(row[oth.k]));
+  let lo = Infinity, hi = -Infinity;
+  const upd = arr => { if (arr) for (const x of arr) if (isFinite(x)) { lo = Math.min(lo, x); hi = Math.max(hi, x); } };
+  ser.forEach(s => upd(s.y)); upd(band.map(b => b[0])); upd(band.map(b => b[1])); upd(shared); upd(othY);
+  if (!isFinite(lo)) { lo = -10; hi = 10; }
+  const pad = Math.max(2, 0.08 * (hi - lo)); lo -= pad; hi += pad;
+  const Y = v => c.t + (hi - v) / (hi - lo) * (h - c.t - c.b); c.Y = Y; c.lo = lo; c.hi = hi;
+  // grid and axes
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--text-muted"); ctx.font = "11px system-ui, sans-serif"; ctx.lineWidth = 1;
+  const step = niceStep((hi - lo) / 5);
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) { ctx.beginPath(); ctx.moveTo(c.l, Y(v)); ctx.lineTo(w - c.r, Y(v)); ctx.stroke(); ctx.fillText(`${Math.round(v)}%`, c.l - 4, Y(v)); }
+  ctx.strokeStyle = css("--text-muted"); ctx.beginPath(); ctx.moveTo(c.l, Y(0)); ctx.lineTo(w - c.r, Y(0)); ctx.stroke();
+  xAxis(ctx, c, nT);
+  // band
+  ctx.fillStyle = css("--band");
+  eachBlock(nT, (a, b) => { ctx.beginPath(); let st = false;
+    for (let t = a; t <= b; t++) { if (!isFinite(band[t][1])) continue; const x = trialX("size", t); if (!st) { ctx.moveTo(x, Y(band[t][1])); st = true; } else ctx.lineTo(x, Y(band[t][1])); }
+    for (let t = b; t >= a; t--) { if (!isFinite(band[t][0])) continue; ctx.lineTo(trialX("size", t), Y(band[t][0])); }
+    ctx.closePath(); ctx.fill(); });
+  // selected trial
+  if (S.trial >= 0) { ctx.strokeStyle = css("--accent"); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(trialX("size", S.trial), c.t); ctx.lineTo(trialX("size", S.trial), h - c.b); ctx.stroke(); ctx.setLineDash([]); }
+  const line = (y, col, width, dash, dots) => {
+    if (!y) return; ctx.strokeStyle = col; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+    eachBlock(nT, (a, b) => { ctx.beginPath(); let st = false;
+      for (let t = a; t <= b; t++) { if (!isFinite(y[t])) { st = false; continue; } const x = trialX("size", t); if (!st) { ctx.moveTo(x, Y(y[t])); st = true; } else ctx.lineTo(x, Y(y[t])); }
+      ctx.stroke(); });
+    ctx.setLineDash([]);
+    if (dots) { ctx.fillStyle = col; for (let t = 0; t < nT; t++) if (isFinite(y[t])) { ctx.beginPath(); ctx.arc(trialX("size", t), Y(y[t]), 3.2, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = css("--surface-1"); ctx.lineWidth = 1; ctx.stroke(); } }
+  };
+  for (const s of ser) if (!s.main) line(s.y, s.col, 1.2);
+  line(othY, css("--text-secondary"), 1.5, [5, 3]);
+  line(shared, ser.find(s => s.main)?.col || series(0), 1.5, [2, 3]);
+  const m = ser.find(s => s.main); if (m) line(m.y, m.col, 2.2, null, true);
+  c.series = ser.map(s => ({ name: s.name, y: s.y }));
+  if (shared) c.series.push({ name: `${prim}: shared trend part`, y: shared });
+  if (othY) c.series.push({ name: `${oth.name} source ${oth.d.ids[oth.k] + 1}`, y: othY });
+  c.band = band;
+  // legend and title
+  const leg = ser.map(s => `<span><span class="sw" style="background:${s.col};${s.main ? "height:4px" : ""}"></span>${s.name}${s.main ? " (sizes)" : ""}</span>`);
+  if (shared) leg.push(`<span><span class="sw dot" style="border-color:${m ? m.col : series(0)}"></span>shared-trend part</span>`);
+  if (othY) leg.push(`<span><span class="sw dash" style="border-color:${css("--text-secondary")}"></span>${oth.name}, source ${oth.d.ids[oth.k] + 1}</span>`);
+  leg.push(`<span><span class="sw band"></span>all sources, 10–90%</span>`);
+  $("slegend").innerHTML = leg.join("");
+  let tt = `<b>Source ${S.data.ids[k] + 1}</b>: size vs its own mean (${prim})`;
+  if (tr && tr.tested[k]) {
+    const q = tr.attrs.fdr_q; const b = (p, qq, txt) => qq <= q ? `<b>${txt}</b>` : txt;
+    tt += tr.step_after[k] >= 0 ? `; ${b(tr.step_p[k], tr.step_q[k], `step ${fmtPct(pct(tr.step_d[k]))}% after trial ${acqOf(tr.step_after[k])} (p ${fmtP(tr.step_p[k])}, q ${fmtP(tr.step_q[k])})`)}` : "; no step";
+    const bt = []; for (let i = 0; i < tr.brief_len[k]; i++) bt.push(tr.brief_first[k] + i);
+    tt += bt.length ? `; ${b(tr.brief_p[k], tr.brief_q[k], `brief ${fmtPct(pct(tr.brief_d[k]))}% at ${trialList(bt)} (p ${fmtP(tr.brief_p[k])})`)}` : "; no brief change";
+    tt += tr.resid_after[k] >= 0 ? `; ${b(tr.resid_p[k], tr.resid_q[k], `beyond trend ${fmtPct(pct(tr.resid_d[k]))}% after ${acqOf(tr.resid_after[k])} (p ${fmtP(tr.resid_p[k])})`)}` : "; no step beyond the trend";
+  } else if (tr) tt += " (not tested: not in the reference set)";
+  $("stitle").innerHTML = tt;
+}
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9)))); const m = x / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; }
+function eachBlock(nT, fn) { const bl = pmeta().blocks; let a = 0; for (let t = 1; t <= nT; t++) if (t === nT || bl[t] !== bl[t - 1]) { fn(a, t - 1); a = t; } }
+function xAxis(ctx, c, nT) {
+  const acq = pmeta().acquisition; ctx.fillStyle = css("--text-muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const every = nT > 30 ? 5 : nT > 15 ? 2 : 1;
+  for (let t = 0; t < nT; t++) { const a = acqOf(t); if (a % every === 0 || nT <= 15) ctx.fillText(`${a}`, trialX(c.id || "size", t), c.h - c.b + 4); }
+  // block boundaries
+  const bl = pmeta().blocks; ctx.strokeStyle = css("--border");
+  for (let t = 1; t < nT; t++) if (bl[t] !== bl[t - 1]) { const x = (trialX(c.id || "size", t - 1) + trialX(c.id || "size", t)) / 2; ctx.beginPath(); ctx.moveTo(x, c.t); ctx.lineTo(x, c.h - c.b); ctx.stroke(); }
+}
+function drawAct() {
+  if (!S.data || S.src < 0) return;
+  const { ctx, w, h } = chartFrame("act"); const pm = pmeta(); const nT = pm.acquisition.length; const k = S.src;
+  CH.act = { l: 44, r: 8, t: 6, b: 20, w, h, n: nT, id: "act" };
+  const c = CH.act; const a = S.data.activity.mean_dF; const ev = S.data.activity.event_frames;
+  if (!a) { $("atitle").textContent = "no activity in this product"; return; }
+  const y = a.map(r => r[k]); let hi = 0, lo = 0; for (const v of y) if (isFinite(v)) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
+  if (hi === lo) hi = lo + 1;
+  const Y = v => c.t + (hi - v) / (hi - lo) * (h - c.t - c.b); c.Y = Y;
+  ctx.strokeStyle = css("--text-muted"); ctx.beginPath(); ctx.moveTo(c.l, Y(0)); ctx.lineTo(w - c.r, Y(0)); ctx.stroke();
+  ctx.fillStyle = css("--text-muted"); ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.fillText(hi.toPrecision(2), c.l - 4, Y(hi));
+  xAxis(ctx, c, nT);
+  const bw = Math.max(2, 0.6 * (w - c.l - c.r) / nT); ctx.fillStyle = series(1);
+  for (let t = 0; t < nT; t++) if (isFinite(y[t])) { const x = trialX("act", t); ctx.fillRect(x - bw / 2, Math.min(Y(0), Y(y[t])), bw, Math.max(1, Math.abs(Y(y[t]) - Y(0)))); }
+  if (S.trial >= 0) { ctx.strokeStyle = css("--accent"); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(trialX("act", S.trial), c.t); ctx.lineTo(trialX("act", S.trial), h - c.b); ctx.stroke(); ctx.setLineDash([]); }
+  c.series = [{ name: "mean dF", y }]; if (ev) c.series.push({ name: "event frames", y: ev.map(r => r[k]) });
+  $("atitle").innerHTML = `Activity per trial (mean dF_ls, channel ${pm.activity_channel}): leakage into the size would follow these bars`;
+}
+function chartTip(id, e) {
+  const t = chartTrial(id, e); const c = CH[id]; const tip = $("tip");
+  if (t === null || !c || !c.series) { tip.style.display = "none"; return; }
+  let html = `<div class="r"><span>trial ${acqOf(t)}</span><span></span></div>`;
+  for (const s of c.series) { const v = s.y ? s.y[t] : NaN;
+    html += `<div class="r"><span>${s.name}</span><span>${isFinite(v) ? (id === "size" ? fmtPct(v) + "%" : v.toPrecision(3)) : "–"}</span></div>`; }
+  if (id === "size" && c.band && isFinite(c.band[t][2])) html += `<div class="r"><span>all sources, median</span><span>${fmtPct(c.band[t][2])}%</span></div>`;
+  tip.innerHTML = html; tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px";
+}
+
+// ---------------------------------------------------------------- table
+const COLS = [
+  ["src", "Src"], ["mark", "Mark"], ["ok", "ok"],
+  ["step_d", "%"], ["step_after", "after"], ["step_p", "p"], ["step_q", "q"],
+  ["brief_d", "%"], ["brief_first", "at"], ["brief_p", "p"], ["brief_q", "q"],
+  ["resid_d", "%"], ["resid_after", "after"], ["resid_p", "p"], ["resid_q", "q"],
+  ["shared_r", "r trend"], ["n_pixels", "px"],
+];
+function rowVal(k, key, tr) {
+  if (key === "src") return S.data.ids[k] + 1;
+  if (key === "mark") { const m = markOf(k); return m ? m.label : ""; }
+  if (key === "ok") return S.data.ok[k] ? 1 : 0;
+  if (key === "n_pixels") return S.data.n_pixels[k];
+  if (!tr) return NaN;
+  const v = tr[key] ? tr[key][k] : NaN;
+  return v === null ? NaN : v;
+}
+function buildTable() {
+  if (!S.data) return;
+  const tr = S.data.trends[$("simg").value];
+  const tb = $("srctable");
+  const q = tr ? tr.attrs.fdr_q : 0.1;
+  let html = `<thead><tr><th class="grp" colspan="3"></th><th class="grp" colspan="4">step</th><th class="grp" colspan="4">brief</th><th class="grp" colspan="4">beyond shared trend</th><th class="grp" colspan="2"></th></tr><tr>`;
+  for (const [key, name] of COLS) html += `<th data-k="${key}">${name}${S.sortKey === key ? (S.sortDir > 0 ? " ▲" : " ▼") : ""}</th>`;
+  html += "</tr></thead><tbody>";
+  const idx = [...Array(S.data.n).keys()];
+  const key = S.sortKey;
+  idx.sort((a, b) => { let va = rowVal(a, key, tr), vb = rowVal(b, key, tr);
+    if (typeof va === "string" || typeof vb === "string") return S.sortDir * String(va).localeCompare(String(vb));
+    const fa = isFinite(va), fb = isFinite(vb); if (!fa && !fb) return a - b; if (!fa) return 1; if (!fb) return -1;
+    if (key.endsWith("_d") || key === "shared_r") { va = Math.abs(va); vb = Math.abs(vb); }
+    return S.sortDir * (va - vb) || a - b; });
+  S.order = idx;
+  for (const k of idx) {
+    const m = markOf(k); const chip = m && m.label ? `<span class="chip" style="background:${css(MARK_VAR[m.label])}"></span>` : "";
+    const tested = tr && tr.tested[k];
+    const cell = (v, cls) => `<td class="${cls || ""}">${v}</td>`;
+    let r = `<tr data-k="${k}">` + cell(S.data.ids[k] + 1) + cell(chip + (m ? m.label : "")) + cell(S.data.ok[k] ? "✓" : "");
+    for (const t of ["step", "brief", "resid"]) {
+      if (!tested) { r += cell("", "nt").repeat(4); continue; }
+      const pass = tr[`${t}_q`][k] <= q ? "pass" : "";
+      let at;
+      if (t === "brief") { const bt = []; for (let i = 0; i < tr.brief_len[k]; i++) bt.push(tr.brief_first[k] + i); at = trialList(bt); }
+      else at = acqOf(tr[`${t}_after`][k]);
+      r += cell(fmtPct(pct(tr[`${t}_d`][k])), pass) + cell(at) + cell(fmtP(tr[`${t}_p`][k]), pass) + cell(fmtP(tr[`${t}_q`][k]), pass);
+    }
+    r += cell(tested && isFinite(tr.shared_r[k]) ? tr.shared_r[k].toFixed(2) : "") + cell(S.data.n_pixels[k]) + "</tr>";
+    html += r;
+  }
+  tb.innerHTML = html + "</tbody>";
+  tb.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { const k = th.dataset.k;
+    if (S.sortKey === k) S.sortDir *= -1; else { S.sortKey = k; S.sortDir = (k === "src" || k.endsWith("_p") || k.endsWith("_q") || k === "mark") ? 1 : -1; }
+    buildTable(); highlightRow(true); });
+  tb.querySelectorAll("tbody tr").forEach(tr2 => tr2.onclick = () => selectSource(+tr2.dataset.k, true));
+  const marks = S.data.marks || {}; const nm = Object.keys(marks.by_source || {}).length;
+  const counts = tr ? tr.attrs : null;
+  $("marksinfo").textContent = S.meta.marks_file ? `${nm} marked on Path${S.path} → ${S.meta.marks_file}${marks.unattached ? `; ${marks.unattached} with no source here` : ""}` :
+    (EMB ? "export: marks shown as saved, not editable" : "no marks file (start with --marks to mark)");
+  highlightRow(true);
+}
+function highlightRow(keep) {
+  const tb = $("srctable");
+  tb.querySelectorAll("tr.sel").forEach(r => r.classList.remove("sel"));
+  const r = tb.querySelector(`tbody tr[data-k="${S.src}"]`);
+  if (r) { r.classList.add("sel");
+    if (!keep) { // scroll the table only, not the page
+      const w = $("tablewrap"), head = tb.tHead ? tb.tHead.offsetHeight : 0;
+      if (r.offsetTop - head < w.scrollTop || r.offsetTop + r.offsetHeight > w.scrollTop + w.clientHeight)
+        w.scrollTop = r.offsetTop - head - w.clientHeight / 3; } }
+}
+
+// ---------------------------------------------------------------- marks
+function markOf(k) { const by = S.data && S.data.marks ? S.data.marks.by_source : null; return by ? by[k] : undefined; }
+function showMark() {
+  const m = markOf(S.src); const st = $("markstate");
+  if (m && m.label) { st.textContent = m.label; st.style.color = css(MARK_VAR[m.label]); } else { st.textContent = "not marked"; st.style.color = css("--text-muted"); }
+  $("note").value = m ? m.note || "" : "";
+  $("mtitle").innerHTML = S.src >= 0 ? `Mark <b>source ${S.data.ids[S.src] + 1}</b> (saved at once; attaches to its position)` : "Mark";
+  document.querySelectorAll(".marks button, #note").forEach(b => b.disabled = !S.meta.marks_file);
+}
+async function setMark(label) {
+  if (S.src < 0) return;
+  try {
+    S.data.marks = await api.mark(S.prod, S.path, S.src, label, label ? $("note").value : "");
+    showMark(); drawOverlay(); buildTable(); status(label ? `marked ${label}` : "mark cleared");
+  } catch (e) { status(e.message, true); }
+}
+
+// ---------------------------------------------------------------- trials, keys
+function setTrial(t, quiet) {
+  if (!S.path) return;
+  const nT = pmeta().acquisition.length; t = Math.max(-1, Math.min(nT - 1, t));
+  S.trial = t; $("tslider").value = t;
+  const used = pmeta().used[t];
+  $("tlabel").textContent = t < 0 ? "mean of trials" : `trial ${acqOf(t)} (${t + 1} of ${nT})${used === false ? ", not read out" : ""}`;
+  if (quiet) return;
+  drawField(false); drawCrops(); drawSize(); drawAct();
+}
+function onKey(e) {
+  if (e.target.tagName === "INPUT" && e.target.type !== "range" && e.target.type !== "checkbox") return;
+  if (e.target.tagName === "SELECT") return;
+  const k = e.key;
+  if (k === "ArrowLeft") { setTrial(S.trial - 1); e.preventDefault(); }
+  else if (k === "ArrowRight") { setTrial(S.trial + 1); e.preventDefault(); }
+  else if (k === "a") setTrial(-1);
+  else if (k === "n" || k === "p") { const i = S.order.indexOf(S.src); const j = i < 0 ? 0 : Math.max(0, Math.min(S.order.length - 1, i + (k === "n" ? 1 : -1))); selectSource(S.order[j]); }
+  else if (k === "r" && S.meta.products.length > 1) switchProduct((S.prod + 1) % S.meta.products.length);
+  else if (k in MARK_KEYS && S.meta.marks_file) setMark(MARK_KEYS[k]);
+}
+function redrawAll() { S.lim = {}; renderField(); drawOverlay(); drawCrops(); drawSize(); drawAct(); buildTable(); showMark(); }
+// for scripted checks: the state and a few actions
+window.spineViewer = { state: S, selectSource, setTrial, switchProduct };
+init().catch(e => status(e.message, true));
+</script>
+</body>
+</html>
