@@ -108,6 +108,8 @@ def test_streamed_run_loading_ahead_is_the_same(
         return [tuple(e["unit"]) for e in report["trials"] if "load" in e]
 
     assert loaded(r1) == loaded(r2) and loaded(r1)
+    # each loaded trial reports the loader's phases (none for the fake one)
+    assert all(e["load_phases"] == {} for e in r2["trials"] if "load" in e)
     a, b = SiloSession.open(one), SiloSession.open(ahead)
     ra, rb = _all_results(a), _all_results(b)
     assert ra.keys() == rb.keys() and ra

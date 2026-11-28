@@ -1388,7 +1388,9 @@ def stream(  # noqa: C901
     -------
     list of dict
         Per trial: ``unit``, ``load`` and ``wait`` seconds (the wait is
-        for the previous trial's solve), ``submitted`` and ``solved``
+        for the previous trial's solve), ``load_phases`` (the loader's
+        wall seconds per phase: ``setup``, ``frames``, ``roi_svd``,
+        ``finish``), ``submitted`` and ``solved``
         (seconds since ``clock0`` when its subproblems went to the solver
         and when the last was solved; a trial solved in this process, with
         one solver process or batches, is solved when that returns), or
@@ -1480,6 +1482,7 @@ def stream(  # noqa: C901
                 )
             )
             load_s = time.perf_counter() - t0
+            phases = {k: round(float(v), 3) for k, v in trial.timings.items()}
             record = TrialRecord.from_trial(trial)
             if save_subproblems is not None:
                 _save_container(
@@ -1523,6 +1526,7 @@ def stream(  # noqa: C901
             placements = [(g.pixels, g.sources) for g in groups]
             return {
                 "load": load_s,
+                "load_phases": phases,
                 "record": record,
                 "placements": placements if extracted else [],
                 "subs": subs,
@@ -1560,7 +1564,14 @@ def stream(  # noqa: C901
                 done,
             )
             load_s = item["load"]
-            report.append({"unit": (u.d, u.t), "load": load_s, "wait": wait_s})
+            report.append(
+                {
+                    "unit": (u.d, u.t),
+                    "load": load_s,
+                    "load_phases": item["load_phases"],
+                    "wait": wait_s,
+                }
+            )
             if execution.verbose:
                 print(
                     f"SILo path {u.d + 1} trial {u.t + 1}: loaded in "

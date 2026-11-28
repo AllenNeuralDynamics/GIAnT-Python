@@ -345,6 +345,29 @@ def test_trial_grid_streamed_and_staged_runs_agree(tmp_path, grid_fake):
         assert np.isfinite(prof[()]).any()
 
 
+def test_collect_maps_footprints_once_per_trial(
+    tmp_path, grid_fake, monkeypatch
+):
+    """Collect reads each trial in several passes; only the spatial one
+    reads the footprints, so each trial's are mapped back once."""
+    from giant_python.extraction.raster import trial_grid as grid_mod
+
+    s = SiloSession.open(make_session(tmp_path))
+    silo.run_silo(s.table_path, TRIAL_GRID, EX)
+    calls = []
+    real = grid_mod.footprints_to_consensus
+
+    def counted(footprints, grid, plan):
+        """Count the mappings."""
+        calls.append(grid.trial)
+        return real(footprints, grid, plan)
+
+    monkeypatch.setattr(grid_mod, "footprints_to_consensus", counted)
+    silo_collect.collect(s, TRIAL_GRID, EX)
+    extracted = 2 * 2  # two paths; the third trial is too short
+    assert len(calls) == extracted
+
+
 def test_trial_grid_stages_refuse_the_other_grid(tmp_path, grid_fake):
     """Containers prepared on one grid are not solved on the other, and
     collect does not take results of the other grid."""

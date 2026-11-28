@@ -23,6 +23,7 @@ import json
 import os
 import time
 import warnings
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -105,13 +106,39 @@ def _current(
     return keep
 
 
+class _TrialGridActivity:
+    """A trial's activity solved on its own grid (``solve_grid`` 'trial'):
+    the traces as solved; the footprints mapped back to the consensus frame
+    (:func:`~giant_python.extraction.raster.trial_grid.
+    footprints_to_consensus`) when first read, which only the summaries'
+    spatial pass does."""
+
+    def __init__(self, activity, plan, t: int) -> None:
+        """Wrap ``activity`` (a ``TrialActivity``) of trial ``t``."""
+        self._activity, self._plan, self._t = activity, plan, t
+        for name in ("events", "denoised", "ls", "f0", "snr"):
+            setattr(self, name, getattr(activity, name))
+
+    @cached_property
+    def footprints(self) -> np.ndarray:
+        """``(consensus pixels, sources)`` footprints."""
+        from ..extraction.raster.trial_grid import (
+            footprints_to_consensus,
+            trial_grid,
+        )
+
+        grid = trial_grid(self._plan, self._t)
+        return footprints_to_consensus(
+            self._activity.footprints, grid, self._plan
+        )
+
+
 def _outcome_loader(files: list, solver_params, plan=None, t=None):
     """A function that assembles a trial from its results files.
 
     With ``plan`` and ``t``, the files hold footprints on the trial's own
-    grid (``solve_grid`` 'trial'), which are mapped back to the consensus
-    frame (:func:`~giant_python.extraction.raster.trial_grid.
-    footprints_to_consensus`).
+    grid (``solve_grid`` 'trial'); they are mapped back to the consensus
+    frame when read (:class:`_TrialGridActivity`).
     """
 
     def load():
@@ -120,15 +147,7 @@ def _outcome_loader(files: list, solver_params, plan=None, t=None):
 
         out = trial_outcome([read_results(f) for f in files], solver_params)
         if plan is not None and out.activity is not None:
-            from ..extraction.raster.trial_grid import (
-                footprints_to_consensus,
-                trial_grid,
-            )
-
-            act = out.activity
-            act.footprints = footprints_to_consensus(
-                act.footprints, trial_grid(plan, t), plan
-            )
+            out.activity = _TrialGridActivity(out.activity, plan, t)
         return out
 
     return load
