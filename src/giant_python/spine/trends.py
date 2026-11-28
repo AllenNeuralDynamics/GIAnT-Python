@@ -375,6 +375,8 @@ def trial_orders(seed: int, source: int, n_perm: int, n_trials: int):
     orders, and the step and brief p-values, do not depend on which other
     sources are tested (the beyond-trend p does, through the shared trend
     estimated from all tested sources)."""
+    if n_perm <= 0:
+        return np.zeros((0, n_trials), np.int64)
     return np.concatenate(
         list(_order_chunks(seed, source, n_perm, n_trials, n_perm))
     )
