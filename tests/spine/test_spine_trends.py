@@ -355,6 +355,25 @@ def test_trend_tests_need_three_trials():
     assert not r["tested"].any() and np.isnan(r["step_t"]).all()
 
 
+def test_permutations_in_chunks_give_the_same_p():
+    """The orders are drawn in chunks to bound memory; the p-values do not
+    depend on the chunk size."""
+    from giant_python.spine.trends import _perm_p
+
+    rng = np.random.default_rng(11)
+    x = rng.normal(size=14)
+    resid = rng.normal(size=14)
+    blocks = trial_blocks(np.arange(14))
+    t_obs = [
+        step_stat(x[None])[0][0],
+        brief_stat(x[None], blocks)[0][0],
+        step_stat(resid[None])[0][0],
+    ]
+    one = _perm_p(x, resid, t_obs, 1, 3, 200, blocks, 3)
+    for rows in (1, 7, 200):
+        assert _perm_p(x, resid, t_obs, 1, 3, 200, blocks, 3, rows) == one
+
+
 def test_trial_orders_are_seeded_permutations():
     """Each row is a permutation; the same seed and source repeat."""
     o = trial_orders(1, 7, 50, 9)
