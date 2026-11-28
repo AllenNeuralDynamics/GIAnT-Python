@@ -62,7 +62,7 @@ def test_loaded_keeps_order_and_limits(monkeypatch):
     assert got == list(range(6)) and most[0] == 2
     # one worker: each unit is loaded when it is asked for
     started.clear()
-    gen = silo._loaded(units, load, SiloExecution())
+    gen = silo._loaded(units, load, SiloExecution(load_workers=1))
     next(gen)
     assert started == [0]
 
@@ -103,7 +103,7 @@ def test_loaded_waits_for_a_measured_load_and_takes_units_lazily():
     assert rest == [1, 2, 3, 4, 5] and most[0] == 2
     # one worker: a unit is taken when it is asked for
     taken.clear()
-    gen = silo._loaded(lazy(_units(3)), load, SiloExecution())
+    gen = silo._loaded(lazy(_units(3)), load, SiloExecution(load_workers=1))
     next(gen)
     assert taken == [0]
 
@@ -185,7 +185,7 @@ def test_options_are_checked():
     assert names[-2:] == ["load_workers", "load_memory_gb"]
     assert names[-4:-2] == ["overwrite", "verbose"]
     ex = SiloExecution(6, 3, 4, "cpu", "float64", None, "cpu", True, True)
-    assert ex.overwrite and ex.verbose and ex.load_workers == 1
+    assert ex.overwrite and ex.verbose and ex.load_workers == 4
 
 
 @pytest.mark.parametrize("memory", [None, 1e-9])
@@ -195,7 +195,7 @@ def test_streamed_run_loading_ahead_is_the_same(
     """Loading three trials ahead gives the results files and summaries of
     loading one at a time."""
     one = make_session(tmp_path / "one")
-    r1 = silo.run_silo(one, PARAMS, EX)
+    r1 = silo.run_silo(one, PARAMS, replace(EX, load_workers=1))
     ahead = make_session(tmp_path / "ahead")
     ex = replace(EX, load_workers=3, load_memory_gb=memory)
     r2 = silo.run_silo(ahead, PARAMS, ex)
