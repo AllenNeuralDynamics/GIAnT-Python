@@ -1,19 +1,30 @@
-"""CLI for annotation and extraction from registered SLAP2 band inputs.
+"""CLI for SLAP2 registration, annotation and band extraction.
 
-``giant annotate`` loads or draws ROIs; ``giant extract`` runs BandSILo.
-Both delegate to the public workflow services with separate scientific,
+``giant trial-table`` builds a SLAP2 session's trial table;
+``giant register`` registers raster recordings (MultiRoiRegistration) and
+computes each trial's summary statistics; ``giant reg-stats`` computes them
+for trials registered earlier (GIAnT-MATLAB's included);
+``giant silo`` extracts sources from them (raster SILo; its stages also run
+on their own as ``giant silo-localize``, ``silo-plan``, ``silo-prepare``,
+``silo-dispatch``, ``silo-solve`` and ``silo-collect``, see
+:mod:`giant_python.cli_silo`); ``giant annotate`` loads or draws ROIs;
+``giant extract`` runs BandSILo.
+All delegate to the public workflow services with separate scientific,
 execution and annotation options. GUI imports occur only when needed.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from typing import Optional, Sequence
 
+from .cli_silo import SILO_COMMANDS, add_silo_commands, run_silo_command
 from .models.params import (
     AnnotationOptions,
     BandSiloParams,
     ExecutionOptions,
+    MultiRoiRegistrationParams,
 )
 
 
@@ -111,18 +122,176 @@ def _add_silo_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_register_options(parser: argparse.ArgumentParser) -> None:
+    """Attach the registration options to a subparser."""
+    defaults = MultiRoiRegistrationParams
+    for name, kind, help_text in (
+        ("align_hz", float, "Rate of the registered frames (default: 80)."),
+        ("maxshift", int, "Largest motion in pixels (default: 40)."),
+        ("clip_shift", int, "Smallest search radius per frame (default: 5)."),
+    ):
+        parser.add_argument(
+            "--" + name.replace("_", "-"),
+            type=kind,
+            default=getattr(defaults, name),
+            help=help_text,
+        )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-register trials whose outputs exist.",
+    )
+    movie = parser.add_mutually_exclusive_group()
+    movie.add_argument(
+        "--tif",
+        dest="save_tif",
+        action="store_true",
+        help="Save registered movies as TIFF, as GIAnT-MATLAB does, instead "
+        "of deflated HDF5 (the default).",
+    )
+    movie.add_argument(
+        "--h5",
+        dest="save_tif",
+        action="store_false",
+        help="Save registered movies as deflated HDF5 (the default).",
+    )
+    parser.set_defaults(save_tif=defaults.save_tif)
+    parser.add_argument(
+        "--compensate-online",
+        action="store_true",
+        help="Undo the online motion correction line by line.",
+    )
+    parser.add_argument(
+        "--schedule",
+        choices=("sequential", "grow"),
+        default=MultiRoiRegistrationParams.schedule,
+        help="'sequential' (MATLAB's frame loop, default) or 'grow' "
+        "(batched growth from seed frames, experimental).",
+    )
+    parser.add_argument(
+        "--polish",
+        action="store_true",
+        help="With --schedule grow: rematch every frame to the final "
+        "template.",
+    )
+    parser.add_argument(
+        "--device",
+        default=ExecutionOptions.device,
+        help="'auto' (default), 'cpu', 'cuda' or 'cuda:N'.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=ExecutionOptions.max_workers,
+        help="Parallel trials on the CPU (default: 6).",
+    )
+    parser.add_argument(
+        "--no-stats",
+        dest="stats",
+        action="store_false",
+        help="Do not compute the trials' summary statistics "
+        "(<stem>_REGSTATS-<hz>Hz.h5 next to each movie).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print progress messages.",
+    )
+
+
+def _add_reg_stats_command(subparsers) -> None:
+    """``giant reg-stats``: statistics of registered trials."""
+    stats = subparsers.add_parser(
+        "reg-stats",
+        help="Summary statistics of registered trials (registration "
+        "computes them for new ones).",
+    )
+    stats.add_argument("trial_table", help="Path to trial_table.h5.")
+    stats.add_argument(
+        "--out",
+        default=None,
+        help="Folder for the statistics files (default: next to each "
+        "registered movie).",
+    )
+    stats.add_argument(
+        "--datadr",
+        default=None,
+        help="Raw-data folder, if it moved since the table was written.",
+    )
+    stats.add_argument(
+        "--moco",
+        default=None,
+        help="Motion-correction folder (default: <savedr>/"
+        "motion_correction).",
+    )
+    stats.add_argument(
+        "--device",
+        default="auto",
+        help="'auto' (default), 'cpu', 'cuda' or 'cuda:N'.",
+    )
+    stats.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        help="Parallel trials on the CPU (default: 1).",
+    )
+    stats.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Recompute statistics that are up to date.",
+    )
+    for name in ("paths", "trials"):
+        stats.add_argument(
+            f"--{name}",
+            type=lambda v: [int(x) for x in v.split(",") if x],
+            default=None,
+            help=f"One-based {name}, comma-separated (default: all).",
+        )
+    stats.add_argument(
+        "--verbose", action="store_true", help="Print progress messages."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the ``giant`` argument parser.
 
     Returns
     -------
     argparse.ArgumentParser
-        Parser with ``annotate`` and ``extract``
-        subcommands. Each subcommand stores its ``command`` name in the
-        parsed namespace.
+        Parser with ``trial-table``, ``register``, ``reg-stats``,
+        ``annotate``, ``extract``, the SILo subcommands (``silo``,
+        ``silo-localize``, ``silo-plan``, ``silo-prepare``,
+        ``silo-dispatch``, ``silo-solve``, ``silo-collect``) and
+        ``view``. Each
+        subcommand stores its ``command`` name in the parsed namespace.
     """
     parser = argparse.ArgumentParser(prog="giant")
     subparsers = parser.add_subparsers(dest="command")
+
+    table = subparsers.add_parser(
+        "trial-table", help="Build a SLAP2 session's trial_table.h5."
+    )
+    table.add_argument(
+        "dat_dir", help="Folder with the session's .dat and .meta files."
+    )
+    table.add_argument(
+        "--save-dir",
+        default=None,
+        help="Where trial_table.h5 is written (default: dat_dir).",
+    )
+    table.add_argument(
+        "--max-duration-s",
+        type=float,
+        default=None,
+        help="Keep only the first seconds of the session.",
+    )
+
+    register = subparsers.add_parser(
+        "register", help="Register SLAP2 raster recordings."
+    )
+    register.add_argument("trial_table", help="Path to trial_table.h5.")
+    _add_register_options(register)
+    _add_reg_stats_command(subparsers)
 
     annotate = subparsers.add_parser(
         "annotate", help="Draw / save user ROIs (standalone step)."
@@ -134,7 +303,29 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("trial_table", help="Path to trial_table.h5.")
     _add_silo_options(extract)
 
+    add_silo_commands(subparsers)
+    _add_view_command(subparsers)
     return parser
+
+
+def _add_view_command(subparsers) -> None:
+    """``giant view``: a browser viewer of SILo runs."""
+    from .viewer.server import add_arguments
+
+    view = subparsers.add_parser(
+        "view",
+        help="Inspect SILo runs in the browser: activity images with "
+        "their sources, and the aligned movie with the fitted activity "
+        "and the residual.",
+    )
+    add_arguments(view)
+
+
+def _cmd_view(args: argparse.Namespace) -> int:
+    """Handle ``giant view``."""
+    from .viewer.server import serve
+
+    return serve(args)
 
 
 def _options_from_args(
@@ -182,6 +373,129 @@ def _cmd_annotate(
     return 0
 
 
+def _cmd_trial_table(args: argparse.Namespace) -> int:
+    """Handle ``giant trial-table`` (buildTrialTableSLAP2)."""
+    from .pipeline.trial_table import build_trial_table_slap2
+
+    build_trial_table_slap2(
+        args.dat_dir, args.save_dir, max_duration_s=args.max_duration_s
+    )
+    return 0
+
+
+def _cmd_register(args: argparse.Namespace) -> int:
+    """Handle ``giant register`` (MultiRoiRegistration)."""
+    import logging
+
+    from .io.trial_table import read_trial_table
+    from .pipeline.register import recorded_cells, register_multiroi
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
+    fields = register_multiroi(
+        args.trial_table,
+        MultiRoiRegistrationParams(
+            align_hz=args.align_hz,
+            maxshift=args.maxshift,
+            clip_shift=args.clip_shift,
+            overwrite_existing=args.overwrite,
+            save_tif=args.save_tif,
+            compensate_online=args.compensate_online,
+            schedule=args.schedule,
+            polish=args.polish,
+        ),
+        execution=ExecutionOptions(
+            max_workers=args.max_workers,
+            verbose=args.verbose,
+            device=args.device,
+        ),
+        stats=args.stats,
+    )
+    present = recorded_cells(read_trial_table(args.trial_table).filename)
+    return _report_registration(fields, present)
+
+
+def _cmd_reg_stats(args: argparse.Namespace) -> int:
+    """Handle ``giant reg-stats``; nonzero if a trial failed."""
+    import logging
+
+    from .pipeline.reg_stats import reg_stats
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
+    results = reg_stats(
+        args.trial_table,
+        args.out,
+        datadr=args.datadr,
+        moco=args.moco,
+        device=args.device,
+        max_workers=args.max_workers,
+        overwrite=args.overwrite,
+        paths=args.paths,
+        trials=args.trials,
+    )
+    failed = [r for r in results if r["error"] is not None]
+    print(
+        f"giant reg-stats: {len(results) - len(failed)} of {len(results)} "
+        "trials written."
+    )
+    for r in failed:
+        print(f"  failed: {r['out']}: {r['error']}")
+    return 1 if failed else 0
+
+
+def _report_registration(fields: dict, present) -> int:
+    """Summarize ``register_multiroi``'s outcome; nonzero if a trial raised.
+
+    Trials flagged ``registrationFailed`` (too much motion, or too few
+    frames with samples) have outputs and are listed; SILo skips them.
+    Trials whose registration raised have no outputs (empty filenames).
+    Cells of a ragged table without a recording are listed apart.
+
+    Parameters
+    ----------
+    fields : dict
+        What ``register_multiroi`` returned.
+    present : ndarray of bool
+        Which cells of the table name a recording.
+
+    Returns
+    -------
+    int
+        Exit code: 1 if any trial raised, else 0.
+    """
+    import numpy as np
+
+    failed = np.asarray(fields["registration_failed"], dtype=bool)
+    present = np.asarray(present, dtype=bool)
+    unnamed = np.asarray(fields["fn_adata"], dtype=object) == ""
+    raised = unnamed & present
+    flagged = failed & ~unnamed
+
+    def trials(mask):
+        """``trial t (path d)`` for each selected trial."""
+        return ", ".join(
+            f"trial {t + 1} (path {d + 1})" for d, t in zip(*np.nonzero(mask))
+        )
+
+    print(
+        f"giant register: {(~unnamed).sum()} of {present.sum()} "
+        "trials registered."
+    )
+    if not present.all():
+        print(f"No recording (skipped): {trials(~present)}")
+    if flagged.any():
+        print(f"registrationFailed (excluded by SILo): {trials(flagged)}")
+    if raised.any():
+        print(
+            f"Registration raised, no outputs (see the log): "
+            f"{trials(raised)}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def _cmd_extract(args: argparse.Namespace) -> int:
     """Handle ``giant extract`` (source extraction)."""
     from .pipeline.extract import extract_sources
@@ -201,7 +515,8 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point for the ``giant`` console script.
 
-    Dispatches ``annotate`` and ``extract`` to their workflow services.
+    Dispatches ``trial-table``, ``register``, ``annotate``, ``extract``
+    and the SILo commands to their workflow services.
 
     Parameters
     ----------
@@ -222,9 +537,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
+        "trial-table": _cmd_trial_table,
+        "register": _cmd_register,
+        "reg-stats": _cmd_reg_stats,
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
+        "view": _cmd_view,
     }
+    handlers.update({name: run_silo_command for name in SILO_COMMANDS})
     if args.command is None:
         parser.print_help()
         return 2

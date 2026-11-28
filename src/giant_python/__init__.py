@@ -1,7 +1,9 @@
-"""GIAnT-Python: band extraction functions and a chainable ``Pipeline``.
+"""GIAnT-Python: registration, band extraction and a chainable ``Pipeline``.
 
-Use ``BandSiloParams`` for science, ``ExecutionOptions`` for run policy and
-``AnnotationOptions`` for ROI/GUI policy. ``extract_sources`` defaults to the
+``register_multiroi`` registers SLAP2 raster recordings
+(``MultiRoiRegistrationParams``). Use ``BandSiloParams`` for science,
+``ExecutionOptions`` for run policy and ``AnnotationOptions`` for ROI/GUI
+policy. ``extract_sources`` defaults to the
 implemented SLAP2 band workflow; explicitly requested unsupported modes raise.
 Public exports are lazy: importing GIAnT does not load acquisition or GUI
 toolkits. Summary arrays are currently eager, not disk-backed.
@@ -17,15 +19,18 @@ if TYPE_CHECKING:
         ExecutionOptions,
         ExperimentSummary,
         FrameInfo,
+        MultiRoiRegistrationParams,
         PathSummary,
         TrialTable,
         resolve_band_options,
+        resolve_registration_options,
     )
     from .pipeline import (
         Pipeline,
         annotate_rois,
         extract_band_sources,
         extract_sources,
+        register_multiroi,
     )
 
 __version__ = "0.1.11"
@@ -36,15 +41,18 @@ _MODEL_EXPORTS = {
     "ExecutionOptions",
     "ExperimentSummary",
     "FrameInfo",
+    "MultiRoiRegistrationParams",
     "PathSummary",
     "TrialTable",
     "resolve_band_options",
+    "resolve_registration_options",
 }
 _PIPELINE_EXPORTS = {
     "Pipeline",
     "annotate_rois",
     "extract_band_sources",
     "extract_sources",
+    "register_multiroi",
 }
 
 
@@ -72,11 +80,14 @@ __all__ = [
     "ExecutionOptions",
     "ExperimentSummary",
     "FrameInfo",
+    "MultiRoiRegistrationParams",
     "PathSummary",
     "Pipeline",
     "TrialTable",
     "annotate_rois",
     "extract_band_sources",
     "extract_sources",
+    "register_multiroi",
     "resolve_band_options",
+    "resolve_registration_options",
 ]
