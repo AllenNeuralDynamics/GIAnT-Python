@@ -98,6 +98,32 @@ def test_trials_without_numbers_are_blocks_of_their_own():
     assert start[0] == 3
 
 
+def test_image_blocks_keep_the_paths_boundaries():
+    """A subset of a path's trials keeps the path's block boundaries, also
+    with acquisition numbers out of order, and splits where it skips a
+    trial."""
+    from giant_python.spine.trends import image_blocks
+
+    pb = trial_blocks([1, 5, 2, 3])  # 1 | 5, 2, 3 (a decrease joins)
+    np.testing.assert_array_equal(pb, [0, 1, 1, 1])
+    # without the trial numbered 5, numbers 1, 2, 3 alone would be one block
+    np.testing.assert_array_equal(image_blocks(pb, [0, 2, 3]), [0, 1, 1])
+    np.testing.assert_array_equal(trial_blocks([1, 2, 3]), [0, 0, 0])
+    # a skipped trial splits a block
+    pb = trial_blocks(np.arange(6))
+    np.testing.assert_array_equal(
+        image_blocks(pb, [0, 1, 3, 4, 5]), [0, 0, 1, 1, 1]
+    )
+    # trend_tests takes the blocks as given
+    x = np.random.default_rng(2).normal(size=(5, 2))
+    r = trend_tests(
+        x, np.ones(2, bool), [9, 9, 9, 9, 9], n_perm=0, blocks=[0, 0, 1, 1, 1]
+    )
+    np.testing.assert_array_equal(r["blocks"], [0, 0, 1, 1, 1])
+    with pytest.raises(ValueError, match="blocks"):
+        trend_tests(x, np.ones(2, bool), np.arange(5), n_perm=0, blocks=[0, 1])
+
+
 @pytest.mark.parametrize(
     "kw, match",
     [

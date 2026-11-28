@@ -53,7 +53,12 @@ from .product import FORMAT_VERSION, _code_version, write_product
 from .readout import common_valid, mask_mean, norm_log, project
 from .rois import masks_roiset, sources_roiset
 from .summary_io import RunSummary
-from .trends import check_trend_settings, trend_tests
+from .trends import (
+    check_trend_settings,
+    image_blocks,
+    trend_tests,
+    trial_blocks,
+)
 
 _TRIAL_RE = re.compile(r"TRIAL0*(\d+)")
 _REGISTERED = "_REGISTERED"
@@ -199,6 +204,9 @@ def _trends(n, norm: dict, acq, opts: dict, workers, say, note) -> tuple:
     # it; with some, an unnumbered trial stays a block of its own in every
     # image, whichever trials the image covers
     numbers = np.arange(n_trials) if unknown.all() else np.asarray(acq)
+    # blocks of the whole path; an image's trials split them further where
+    # it skips a trial (image_blocks)
+    path_blocks = trial_blocks(numbers, unknown_consecutive=False)
     if unknown.all():
         note(
             f"Path{n}: no trial has an acquisition number; the brief test "
@@ -230,7 +238,7 @@ def _trends(n, norm: dict, acq, opts: dict, workers, say, note) -> tuple:
             max_brief=opts["max_brief"],
             seed=opts["seed"],
             workers=workers,
-            unknown_consecutive=False,
+            blocks=image_blocks(path_blocks, rows),
         )
         skip = ("counts", "var_share", "shared_v", "blocks", "brief_start")
         arrays = {
