@@ -362,13 +362,30 @@ def _corr(x: np.ndarray, v: np.ndarray) -> np.ndarray:
         return (xc @ vc) / (np.linalg.norm(xc, axis=1) * np.linalg.norm(vc))
 
 
+# trial orders handled at once per source: about 8 MB of indices, so that
+# the threads' memory stays bounded however many trials a session has
+_ORDER_CELLS = 1_000_000
+
+
 def trial_orders(seed: int, source: int, n_perm: int, n_trials: int):
     """The random trial orders of one source: ``(n_perm, n_trials)`` indices
     from numpy's generator seeded with ``(seed, source)``, so that a
     source's p-values do not depend on which other sources are tested."""
+    return np.concatenate(
+        list(_order_chunks(seed, source, n_perm, n_trials, n_perm))
+    )
+
+
+def _order_chunks(seed, source, n_perm: int, n_trials: int, rows: int):
+    """:func:`trial_orders` in chunks of up to ``rows`` orders (the same
+    orders: the generator permutes row after row)."""
     rng = np.random.default_rng([int(seed), int(source)])
-    base = np.broadcast_to(np.arange(n_trials), (n_perm, n_trials))
-    return rng.permuted(base, axis=1)
+    done = 0
+    while done < n_perm:
+        m = min(rows, n_perm - done)
+        base = np.broadcast_to(np.arange(n_trials), (m, n_trials))
+        yield rng.permuted(base, axis=1)
+        done += m
 
 
 TREND_FIELDS = (
@@ -393,21 +410,26 @@ TREND_FIELDS = (
 )
 
 
-def _perm_p(x, resid, t_obs, seed, source, n_perm, blocks, max_brief):
+def _perm_p(
+    x, resid, t_obs, seed, source, n_perm, blocks, max_brief, rows=None
+):
     """One source's permutation p-values of the step, brief and resid
-    tests (``t_obs``: the observed statistics, in that order)."""
-    orders = trial_orders(seed, source, n_perm, x.size)
-    xp, rp = x[orders], resid[orders]
-    stats = (
-        step_stat(xp)[0],
-        brief_stat(xp, blocks, max_brief)[0],
-        step_stat(rp)[0],
-    )
-    out = []
-    for stat, t in zip(stats, t_obs):
-        hits = np.count_nonzero(np.abs(stat) >= abs(t) * (1 - _TIE_RTOL))
-        out.append((1 + hits) / (n_perm + 1))
-    return out
+    tests (``t_obs``: the observed statistics, in that order), from the
+    trial orders in chunks of ``rows`` (default: about a million cells)."""
+    if rows is None:
+        rows = max(1, _ORDER_CELLS // max(1, x.size))
+    hits = np.zeros(3, np.int64)
+    thresh = np.abs(np.asarray(t_obs, float)) * (1 - _TIE_RTOL)
+    for orders in _order_chunks(seed, source, n_perm, x.size, rows):
+        xp, rp = x[orders], resid[orders]
+        stats = (
+            step_stat(xp)[0],
+            brief_stat(xp, blocks, max_brief)[0],
+            step_stat(rp)[0],
+        )
+        for i, stat in enumerate(stats):
+            hits[i] += np.count_nonzero(np.abs(stat) >= thresh[i])
+    return [(1 + h) / (n_perm + 1) for h in hits]
 
 
 def _permute(
