@@ -25,6 +25,7 @@ lookup table.
    file_formats
    architecture
    silo
+   f0_export
    reg_stats
 
 Getting started

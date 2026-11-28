@@ -332,3 +332,35 @@ def test_exact_weights_with_discarded_frames():
     np.testing.assert_allclose(tot[~empty], 1.0)
     assert not w.toarray()[disc].any()
     assert r == pytest.approx((54 / 134) ** 2)
+
+
+@pytest.mark.parametrize("mode", ["rigid", "patchwise"])
+def test_cubic_placement_keeps_the_shape(mode):
+    """Moved by a fraction of a pixel, a footprint keeps its flux with
+    either interpolation; the cubic spline also keeps its peak, where
+    bilinear interpolation blurs it."""
+    warp = make_warp(mode)
+    for t in range(N_TRIALS):
+        field = None
+        if mode == "patchwise":
+            rt, ct = warp.grid_coords(t, (H, W))
+            rr, cc = np.mgrid[:H, :W]
+            field = np.stack([rt - rr, ct - cc])
+        m = TrialMap(warp.affine[t], field)
+        qr, qc = np.mgrid[:H, :W].astype(float)
+        at = warp.inverse(t, qr, qc)
+        err = {}
+        for order in (1, 3):
+            for s, centre in enumerate(CENTRES):
+                fp = gaussian((H, W), centre)
+                r, c = np.nonzero(fp)
+                fps = (r, c, np.zeros(r.size, int), fp[r, c])
+                h = place_footprints(fps, 1, m, (H, W), interp_order=order)
+                img = h.toarray()[:, 0].reshape(H, W)
+                want = gaussian((H, W), centre, at=at)
+                assert img.sum() == pytest.approx(want.sum(), rel=0.01)
+                err.setdefault(order, []).append(
+                    np.abs(img - want).max() / want.max()
+                )
+        assert max(err[3]) < 0.02
+        assert max(err[3]) < max(err[1])
