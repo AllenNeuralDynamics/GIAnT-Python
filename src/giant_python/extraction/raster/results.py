@@ -18,9 +18,7 @@ File layout (HDF5, row-major, zero-based indices)::
                             container_hash, path,
                             trial (both one-based), n_subproblems (of the
                             container), n_pixels, n_sources, photon_scale,
-                            extracted (0 for a trial too short to extract),
-                            solve_grid ('trial' only: pixels of the
-                            trial's own grid, see trial_grid)
+                            extracted (0 for a trial too short to extract)
     /trial/frame_lines      (frames,) one-based lines
     /trial/discard          (frames,) uint8
     /trial/global_f         (channels, frames), file channel order

@@ -23,15 +23,13 @@ import json
 import os
 import time
 import warnings
-from functools import cached_property
-from pathlib import Path
 from typing import Optional
 
 import h5py
 import numpy as np
 
 from ..models.params import SiloExecution, SiloParams
-from .silo_session import SiloSession, attr, now, skip_applies
+from .silo_session import SiloSession, attr, now, skip_hash
 from .silo_solve import solve_science
 
 
@@ -106,63 +104,16 @@ def _current(
     return keep
 
 
-class _TrialGridActivity:
-    """A trial's activity solved on its own grid (``solve_grid`` 'trial'):
-    the traces as solved; the footprints mapped back to the consensus frame
-    (:func:`~giant_python.extraction.raster.trial_grid.
-    footprints_to_consensus`) when first read, which only the summaries'
-    spatial pass does."""
-
-    def __init__(self, activity, plan, t: int) -> None:
-        """Wrap ``activity`` (a ``TrialActivity``) of trial ``t``."""
-        self._activity, self._plan, self._t = activity, plan, t
-        for name in ("events", "denoised", "ls", "f0", "snr"):
-            setattr(self, name, getattr(activity, name))
-
-    @cached_property
-    def footprints(self) -> np.ndarray:
-        """``(consensus pixels, sources)`` footprints."""
-        from ..extraction.raster.trial_grid import (
-            footprints_to_consensus,
-            trial_grid,
-        )
-
-        grid = trial_grid(self._plan, self._t)
-        return footprints_to_consensus(
-            self._activity.footprints, grid, self._plan
-        )
-
-
-def _outcome_loader(files: list, solver_params, plan=None, t=None):
-    """A function that assembles a trial from its results files.
-
-    With ``plan`` and ``t``, the files hold footprints on the trial's own
-    grid (``solve_grid`` 'trial'); they are mapped back to the consensus
-    frame when read (:class:`_TrialGridActivity`).
-    """
+def _outcome_loader(files: list, solver_params):
+    """A function that assembles a trial from its results files."""
 
     def load():
         """Read the files and assemble the trial."""
         from ..extraction.raster.results import read_results, trial_outcome
 
-        out = trial_outcome([read_results(f) for f in files], solver_params)
-        if plan is not None and out.activity is not None:
-            out.activity = _TrialGridActivity(out.activity, plan, t)
-        return out
+        return trial_outcome([read_results(f) for f in files], solver_params)
 
     return load
-
-
-def _check_grid(files: list, solve_grid: str) -> None:
-    """Refuse results files solved on another grid than ``solve_grid``
-    (the solve settings' hash already tells them apart; this names it)."""
-    for f in files:
-        used = attr(f, "solve_grid") or "consensus"
-        if used != solve_grid:
-            raise ValueError(
-                f"{Path(f).name} was solved with solve_grid={used!r}, these "
-                f"settings have {solve_grid!r}"
-            )
 
 
 def path_result(
@@ -232,8 +183,8 @@ def path_result(
     science = solve_science(params)
     for t in plan.valid_trials:
         t = int(t)
-        if skip_applies(session.skip_file(d, t), plan_hash, params.solve_grid):
-            continue  # no data at the selected pixels (on this grid)
+        if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
+            continue  # no data at the selected pixels
         files = _current(
             _results_files(session, d, t),
             plan_hash,
@@ -246,12 +197,7 @@ def path_result(
                 f"the current plan with the current solve settings in "
                 f"{session.results_dir}"
             )
-        _check_grid(files, params.solve_grid)
-        trials[t] = (
-            _outcome_loader(files, sp, plan, t)
-            if params.solve_grid == "trial"
-            else _outcome_loader(files, sp)
-        )
+        trials[t] = _outcome_loader(files, sp)
         if provenance is not None:
             used = _baseline_identity(files)
             if used is not None:

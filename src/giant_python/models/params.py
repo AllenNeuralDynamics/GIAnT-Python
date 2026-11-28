@@ -612,17 +612,6 @@ class SiloParams:
         localize stage also stores each trial's half images.
     align_patch_px : int
         Imaged pixels per patch of the patchwise field (``alignPatchPx``).
-    solve_grid : {'consensus', 'trial'}
-        Pixel grid the subproblems of a trial are solved on. ``'consensus'``
-        (the default; MATLAB's): the plan's selected pixels of the
-        consensus frame, each read at its position in the trial through the
-        across-trial map. ``'trial'``: each subproblem moved into the trial
-        by one whole-pixel shift (the map's rounded mean displacement at
-        its sources), read at whole pixels of the trial's registered frame,
-        and its footprints mapped back to the consensus frame once per
-        trial (:mod:`~giant_python.extraction.raster.trial_grid`). With an
-        affine or patchwise map it reads every pixel through the same
-        interpolation weights. The plan is the same for both.
     peak_method : {'getactimpeaks'}
         Seeding (``peakMethod``); WMF is not ported yet.
     seed_fit : {'local', 'matlab'}, optional
@@ -709,7 +698,6 @@ class SiloParams:
     trial_peaks: bool = True
     inter_trial_alignment: str = "patchwise"
     align_patch_px: int = 1500
-    solve_grid: str = "consensus"
     peak_method: str = "getactimpeaks"
     seed_fit: Optional[str] = None
     seed_merge_px: Optional[float] = None
@@ -793,13 +781,6 @@ class SiloParams:
             self.inter_trial_alignment,
             ("rigid", "affine", "patchwise"),
         )
-        _choice("solve_grid", self.solve_grid, ("consensus", "trial"))
-        if self.solve_grid == "trial" and self.valid_kernel < 3:
-            # a footprint confined to its source's pixel cannot follow a
-            # source off that pixel (trial_grid.max_source_offset)
-            raise ValueError(
-                "solve_grid 'trial' needs valid_kernel of at least 3"
-            )
         if self.peak_method != "getactimpeaks":
             raise NotImplementedError(
                 f"peakMethod {self.peak_method!r} is not ported yet; only "
@@ -1200,12 +1181,8 @@ _STAGE_FIELDS_ADDED = {
         # the zones that group sources
         "valid_kernel": 3,
     },
-    "prepare": {"baseline_source": "median", "solve_grid": "consensus"},
-    "solve": {
-        "baseline_mode": "fit",
-        "valid_kernel": 3,
-        "solve_grid": "consensus",
-    },
+    "prepare": {"baseline_source": "median"},
+    "solve": {"baseline_mode": "fit", "valid_kernel": 3},
 }
 
 # the settings that SiloParams.baseline_source sets, per source (see the
@@ -1248,7 +1225,6 @@ _PYTHON_ONLY = {
     "seed_merge_px": ("seedMergePx", 0.0),
     "baseline_source": ("baselineSource", "median"),
     "baseline_mode": ("baselineMode", "fit"),
-    "solve_grid": ("solveGrid", "consensus"),
 }
 
 

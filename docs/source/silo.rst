@@ -291,37 +291,19 @@ By default each selected pixel of the consensus frame is read at its own
 position in the trial through the across-trial map. With an affine or
 patchwise map every pixel then has its own sub-pixel position, so every
 frame goes through the loader's general bilinear interpolation, and the
-interpolation's blur and noise differ from pixel to pixel.
-``--solve-grid trial`` (``SiloParams.solve_grid='trial'``, a Python setting,
-off by default) solves each trial on its own pixel grid instead
-(:mod:`giant_python.extraction.raster.trial_grid`): the map only places the
-subproblems in the trial, each moved by one whole-pixel shift (the map's
-mean displacement at its sources, rounded; a trial whose map would leave a
-source more than a pixel from its pixel in the moved subproblem is refused),
-and the trial is read at those
-whole pixels of its registered frame, where all pixels share a frame's
-interpolation weights (the fast path). The global trace and the user-ROI
-traces are read on the same grid (labeled pixels from the trial's own mean
-image, the ROIs moved into the trial through the map's inverse). The
-subproblems keep the plan's sources and crops; the rest of the map (up to
-about half a pixel) is absorbed by the footprints, which collect maps back
-to the consensus frame once per trial (bilinear at the map's position of
-each consensus pixel, each footprint's sum kept), so the summaries and
-``giant view`` are in the consensus frame as before. The plan is the same
-on both grids; the prepare and solve settings hashes include the grid when
-it is ``'trial'`` (containers and results files record ``solve_grid``),
-and solve and collect refuse files of the other grid. Measured against
-the consensus grid (GIAnT-Python#52, 780125 and 885233 on Code Ocean, 32
-cores, and the GFP copy with injected events): the same sources, detection
-and traces (matched r 0.99), SNR about 1 % lower; no shorter loads (the
-interpolation it saves runs in parallel within a load); 0.02 to 0.14 px
-more per-trial position jitter, because the footprint fit stays partly
-anchored to its source's pixel, so a source's sub-pixel position in the
-trial, which the map changes from trial to trial, moves its fitted position
-(about half of the map's sub-pixel fraction; the consensus grid keeps that
-fraction the same in every trial); and footprints smoothed by the mapping
-back (7-8 % lower at the peak pixel, 0.05 px wider). It is not
-recommended.
+interpolation's blur differs slightly from pixel to pixel.
+Solving each trial on its own pixel grid instead (each subproblem moved
+into the trial by one whole-pixel shift and read through the loader's
+fast path, its footprints mapped back to the consensus frame) was built
+and measured for GIAnT-Python#52, and removed: on 32 cores the loads took
+no less time (the interpolation runs in parallel within a load), sources
+and traces were the same, but the per-trial position jitter rose by 0.02
+to 0.14 px and the footprints mapped back were smoothed (7-8 % lower at
+the peak pixel). The footprint fit stays about half anchored to its
+source's whole pixel, so a sub-pixel position that the map changes from
+trial to trial moves the fitted position; on the consensus grid that
+position is the same in every trial. The code is in the history of pull
+request #57 (last in commit 36ed58f).
 
 **dispatch**: the session's subproblems, in path, trial and subproblem
 order, are cut into ``--machines`` contiguous parts of about equal

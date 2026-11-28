@@ -474,16 +474,10 @@ class SiloSession:
 
 
 def write_skip(
-    path: Path,
-    reason: str,
-    settings_hash: str,
-    plan_hash: str = "",
-    solve_grid: str = "consensus",
+    path: Path, reason: str, settings_hash: str, plan_hash: str = ""
 ) -> None:
     """Mark a trial-path as not extracted (``*.skip.json``: the reason, the
-    settings hash of the prepare stage, the plan's hash and, when it is not
-    the consensus grid, the grid it was read on: the trial grid reads other
-    pixels, so a marker of one grid says nothing about the other)."""
+    settings hash of the prepare stage and the plan's hash)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.partial")
     record = {
@@ -491,8 +485,6 @@ def write_skip(
         "settings_hash": settings_hash,
         "plan_hash": plan_hash,
     }
-    if solve_grid != "consensus":
-        record["solve_grid"] = solve_grid
     tmp.write_text(json.dumps(record), encoding="utf-8")
     os.replace(tmp, path)
 
@@ -504,19 +496,3 @@ def skip_hash(path: Path, key: str = "settings_hash") -> Optional[str]:
         return json.loads(path.read_text(encoding="utf-8"))[key]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-
-
-def skip_applies(path: Path, plan_hash: str, solve_grid: str) -> bool:
-    """Whether a skip marker says that a trial-path has no data for this
-    plan on this grid (``solve_grid``; markers without one are of the
-    consensus grid). Needs neither raw data nor registration."""
-    try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not isinstance(record, dict) or not plan_hash:
-        return False
-    return (
-        record.get("plan_hash") == plan_hash
-        and record.get("solve_grid", "consensus") == solve_grid
-    )

@@ -43,7 +43,7 @@ from .silo_session import (
     SiloSession,
     attr,
     make_pool,
-    skip_applies,
+    skip_hash,
     stage_hash,
 )
 
@@ -183,9 +183,6 @@ def results_attrs(
         extra["network_baseline"] = json.dumps(
             cparams["baseline"], sort_keys=True
         )
-    if params.solve_grid != "consensus":
-        # footprints on the trial's grid: collect maps them back
-        extra["solve_grid"] = params.solve_grid
     return {
         "settings_hash": h,
         "solve_settings": solve_settings(params, options),
@@ -206,23 +203,15 @@ def results_attrs(
 
 
 def check_container(container, params: SiloParams, name: str) -> None:
-    """Refuse to solve a container with other baseline settings, another
-    footprint support or another solve grid than it was prepared for, or
-    without the baseline the solver's mode needs."""
+    """Refuse to solve a container with other baseline settings or another
+    footprint support than it was prepared for, or without the baseline
+    the solver's mode needs."""
     used = (container.params or {}).get("baseline_source", "median")
     if used != params.baseline_source:
         raise ValueError(
             f"{name} was prepared with baseline_source={used!r}, these "
             f"settings have {params.baseline_source!r}: give every stage "
             f"the same settings (e.g. --baseline {used})"
-        )
-    grid = (container.params or {}).get("solve_grid", "consensus")
-    if grid != params.solve_grid:
-        # its pixels are those of the consensus frame or of the trial
-        raise ValueError(
-            f"{name} was prepared with solve_grid={grid!r}, these settings "
-            f"have {params.solve_grid!r}: give every stage the same "
-            f"settings (e.g. --solve-grid {grid})"
         )
     support = int((container.params or {}).get("valid_kernel", 3))
     if support != params.valid_kernel:
@@ -328,17 +317,16 @@ def solve_container(
     return {"seconds": time.perf_counter() - t0, "solved": len(subs)}
 
 
-def _containers(session: SiloSession, solve_grid: str = "consensus") -> list:
-    """Containers of the session's planned, valid trial-paths (those not
-    marked as without data for the plan on ``solve_grid``)."""
+def _containers(session: SiloSession) -> list:
+    """Containers of the session's planned, valid trial-paths."""
     from .silo import _valid_units
 
     out = []
     for d, t in _valid_units(session):
         f = session.container_file(d, t)
         plan_hash = attr(session.plan_file(d), "settings_hash")
-        if skip_applies(session.skip_file(d, t), plan_hash, solve_grid):
-            continue  # marked as without data for this plan and grid
+        if skip_hash(session.skip_file(d, t), "plan_hash") == plan_hash:
+            continue  # marked as without data for this plan
         if f.exists():
             out.append(((d, t), f))
         else:
@@ -406,7 +394,7 @@ def dispatch(
     ex = execution or SiloExecution()
     options = ex.solver_options()
     entries = []  # (container file, container hash, k, work)
-    for _, f in _containers(session, params.solve_grid):
+    for _, f in _containers(session):
         c = read_container(f, data=False)
         check_container(c, params, f.name)
         h = attr(f, "settings_hash")
@@ -570,7 +558,7 @@ def solve_containers(
     done = {}
     pool = _pool(ex, options)
     try:
-        for (d, t), f in _containers(session, params.solve_grid):
+        for (d, t), f in _containers(session):
             done[f.name] = solve_container(
                 f,
                 session.results_file(d, t),
