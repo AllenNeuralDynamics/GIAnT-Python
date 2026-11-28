@@ -26,6 +26,7 @@ lookup table.
    architecture
    silo
    reg_stats
+   spine
 
 Getting started
 ---------------
