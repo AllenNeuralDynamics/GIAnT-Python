@@ -46,6 +46,31 @@ run's consensus frame, zero-based coordinates)::
                                 positive readouts in every trial used, in
                                 every image that covers them
       activity/<set>/<name>     (T, R) per-trial activity (sources)
+      trends/<set>/<name>/      trend tests of normalized/<set>/<name>
+                                (:mod:`~giant_python.spine.trends`);
+                                attrs: n_perm, fdr_q, max_brief, seed,
+                                var_share (of the shared mode)
+        trials                  (T',) zero-based trials tested (the
+                                image's trials with values)
+        blocks                  (T,) block of consecutive acquisition
+                                numbers (-1: not tested)
+        tested                  (R,) sources tested (in ``ok`` and
+                                covered in every trial tested)
+        step_t, step_d          (R,) step statistic and size (log units)
+        step_after              (R,) zero-based trial after which the
+                                step falls (-1: not tested)
+        step_p, step_q          (R,) permutation p, BH q-value (per path)
+        brief_t, brief_d        (R,) transient-change statistic and size
+        brief_first, brief_len  (R,) its first trial (zero-based) and
+                                number of trials
+        brief_p, brief_q        (R,)
+        resid_t, resid_d, resid_after, resid_p, resid_q
+                                (R,) the step test beyond the shared
+                                trend
+        shared_v                (T,) the shared trend (unit vector over
+                                the trials tested, NaN elsewhere)
+        shared_loading, shared_r  (R,) each source's part of it and the
+                                correlation of its sizes with it
 """
 
 from __future__ import annotations
@@ -59,7 +84,7 @@ import numpy as np
 from .rois import RoiSet
 
 FORMAT = "giant_python.spine_summary"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 _IMAGE_OPTS = {"compression": "gzip", "compression_opts": 4, "shuffle": True}
 
@@ -120,6 +145,17 @@ def _write_root_attrs(f, settings, inputs, run_dir, report) -> None:
         f.attrs["report"] = json.dumps(report, sort_keys=True, default=str)
 
 
+def _write_trends(g: h5py.Group, trends: dict) -> None:
+    """Store the trend tests (set -> image -> {arrays, attrs}) of a path."""
+    for set_name, per_image in trends.items():
+        for name, rec in per_image.items():
+            t = g.create_group(f"trends/{set_name}/{name}")
+            for k, arr in rec["arrays"].items():
+                t[k] = np.asarray(arr)
+            for k, v in rec["attrs"].items():
+                t.attrs[k] = v
+
+
 def write_product(
     path, paths: dict, settings: dict, inputs: dict, run_dir, report=None
 ):
@@ -133,8 +169,9 @@ def write_product(
         Per imaging path number, a dict with ``shape``, ``trials`` (dict of
         arrays), ``reference`` (dict), ``images`` (name -> (stack, attrs)),
         ``valid``, ``rois`` (set -> RoiSet), ``readout`` (set -> name ->
-        array), ``normalized`` (set -> name -> array, plus ``ok``) and
-        ``activity`` (set -> name -> array).
+        array), ``normalized`` (set -> name -> array, plus ``ok``),
+        ``activity`` (set -> name -> array) and optionally ``trends``
+        (set -> name -> {``arrays``: name -> array, ``attrs``: dict}).
     settings, inputs : dict
         JSON-serializable records of the settings and the input files.
     run_dir : str or Path
@@ -178,6 +215,7 @@ def write_product(
                 for set_name, arrays in p.get(group, {}).items():
                     for name, arr in arrays.items():
                         g[f"{group}/{set_name}/{name}"] = np.asarray(arr)
+            _write_trends(g, p.get("trends", {}))
 
 
 def read_product(path) -> dict:
@@ -188,7 +226,8 @@ def read_product(path) -> dict:
     dict
         ``attrs`` (with ``settings`` and ``inputs`` decoded) and, per path
         number, the groups of :func:`write_product` (``rois`` as
-        :class:`RoiSet`).
+        :class:`RoiSet`; ``trends`` as set -> name -> arrays, with the
+        group's attributes under ``attrs``).
     """
     out: dict = {"paths": {}}
     with h5py.File(path, "r") as f:
@@ -222,5 +261,12 @@ def read_product(path) -> dict:
                     s: {k: g[grp][s][k][()] for k in g[grp][s]}
                     for s in g.get(grp, {})
                 }
+            p["trends"] = {
+                s: {
+                    name: dict({k: t[k][()] for k in t}, attrs=dict(t.attrs))
+                    for name, t in g["trends"][s].items()
+                }
+                for s in g.get("trends", {})
+            }
             out["paths"][int(key[4:])] = p
     return out

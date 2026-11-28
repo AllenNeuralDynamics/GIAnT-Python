@@ -496,3 +496,54 @@ def test_untrimmed_trials_are_reported(session, tmp_path):
     p = read_product(rep["output"])["paths"][1]
     assert not p["image_attrs"]["f0_net"]["untrimmed"].any()
     assert "f0_untrimmed" not in rep["paths"][1]
+
+
+def test_readout_runs_the_trend_tests(session, tmp_path):
+    """Every normalized image gets the trend tests over its trials, with
+    trial positions as trial-table indices; the test settings change the
+    output's key but not the network images' cache."""
+    from giant_python.spine.trends import trend_tests
+
+    kw = dict(
+        baseline_dir=session["baselines"], moco_dir=session["moco"], trim_s=0.1
+    )
+    rep = make_spine_summary(
+        session["run"], session["table"], tmp_path / "o", n_perm=200, **kw
+    )
+    p = read_product(rep["output"])["paths"][1]
+    norm = p["normalized"]["sources"]
+    tr = p["trends"]["sources"]
+    assert set(tr) == set(norm) - {"ok"}
+    rec = tr["f0_net"]
+    rows = rec["trials"]
+    np.testing.assert_array_equal(rows, np.arange(syn.N_TRIALS))
+    direct = trend_tests(
+        norm["f0_net"][rows],
+        norm["ok"],
+        p["trials"]["acquisition"][rows],
+        n_perm=200,
+    )
+    tested = direct["tested"]
+    assert tested.any()
+    np.testing.assert_array_equal(rec["tested"], tested)
+    for k in ("step_t", "step_p", "brief_t", "resid_p", "shared_r"):
+        np.testing.assert_array_equal(rec[k], direct[k])
+    np.testing.assert_array_equal(
+        rec["step_after"][tested], rows[direct["step_k"][tested] - 1]
+    )
+    np.testing.assert_array_equal(
+        rec["brief_first"][tested], rows[direct["brief_start"][tested]]
+    )
+    assert (rec["step_after"][~tested] == -1).all()
+    assert rec["attrs"]["n_perm"] == 200
+    assert rec["attrs"]["var_share"] == pytest.approx(direct["var_share"])
+    summ = rep["paths"][1]["trends"]["f0_net"]
+    assert summ["tested"] == int(tested.sum())
+    assert summ["counts"] == direct["counts"]
+    rep2 = make_spine_summary(
+        session["run"], session["table"], tmp_path / "o", n_perm=0, **kw
+    )
+    assert rep2["output"] != rep["output"] and not rep2["reused"]
+    assert rep2["paths"][1]["f0_reused"]
+    p2 = read_product(rep2["output"])["paths"][1]
+    assert np.isnan(p2["trends"]["sources"]["f0_net"]["step_p"]).all()

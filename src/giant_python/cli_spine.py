@@ -2,7 +2,8 @@
 
 ``giant spine readout RUN_DIR --table TABLE [--baseline-dir DIR --moco-dir
 DIR]`` reads out every source's (and user ROI's) size in every trial and
-writes a ``spine_summary_<key>.h5`` file (:mod:`giant_python.spine`);
+writes a ``spine_summary_<key>.h5`` file (:mod:`giant_python.spine`),
+with the trend tests of the normalized sizes;
 ``giant spine images`` only builds the network's per-trial F0 images (the
 slow part), which ``readout`` then reuses from its cache.
 """
@@ -106,6 +107,37 @@ def add_spine_commands(subparsers) -> None:
         action="store_true",
         help="Rewrite an output that exists with the same key.",
     )
+    readout.add_argument(
+        "--n-perm",
+        type=int,
+        default=20000,
+        help="Random trial orders per source for the trend tests' p-values "
+        "(default 20000; 0: statistics only).",
+    )
+    readout.add_argument(
+        "--fdr-q",
+        type=float,
+        default=0.1,
+        help="FDR level of the trend tests' counts (default 0.1).",
+    )
+    readout.add_argument(
+        "--max-brief",
+        type=int,
+        default=3,
+        help="Longest run of trials in the brief-change test (default 3).",
+    )
+    readout.add_argument(
+        "--seed",
+        type=int,
+        default=1,
+        help="Seed of the random trial orders (default 1).",
+    )
+    readout.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Threads for the permutations (default: up to 8).",
+    )
     images = sub.add_parser(
         "images",
         help="Only build the network's per-trial F0 images (cached).",
@@ -148,6 +180,11 @@ def run_spine_command(args: argparse.Namespace) -> int:
         images_only=args.spine_command == "images",
         affine_base=args.affine_base,
         gain_work_dir=args.gain_work_dir,
+        n_perm=getattr(args, "n_perm", 20000),
+        fdr_q=getattr(args, "fdr_q", 0.1),
+        max_brief=getattr(args, "max_brief", 3),
+        seed=getattr(args, "seed", 1),
+        workers=getattr(args, "workers", None),
         progress=say,
     )
     print(json.dumps(report, indent=1, default=str))
