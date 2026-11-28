@@ -138,3 +138,42 @@ Example::
     giant spine readout RUN_DIR --table trial_table.h5 \
         --baseline-dir baselines --moco-dir motion_correction \
         --gain-work-dir RUN_DIR/silo --out-dir spine
+
+Viewing and marking
+-------------------
+
+``giant spine view SUMMARY [SUMMARY ...] --marks spine_marks.csv`` serves a
+page on http://127.0.0.1:8790 (``--port``) for one or more summaries of a
+session, given as files or as ``NAME=FILE``. The page shows:
+
+- the field: any per-trial image, bleach-normalized (each trial divided by
+  its median), one trial or the mean of trials; its change against the mean
+  of trials or the previous trial (trials blurred by 0.7 px, blue dimmer,
+  red brighter, at the mean the last block of consecutive acquisitions
+  against the earlier ones); or the run's activity image. Sources are
+  rings coloured by their mark; a click selects one;
+- the selected source's window (footprint weights, with contours at 50%
+  and 10% of the peak and the pixels left out hatched) and its crops in
+  every trial, as images or as changes;
+- its size over the trials in every image, with the 10-90% band of all
+  sources, its part of the shared trend and, with several summaries, the
+  nearest source of the next one; and its activity per trial;
+- a sortable table of the trend tests of the image chosen under "Sizes".
+
+Keys: left and right move between trials, ``a`` shows the mean, ``n`` and
+``p`` step through the sources in the table's order, ``r`` switches to the
+next summary at the same path, trial and nearest source, and ``g``, ``s``,
+``u``, ``x`` and ``c`` mark the source as Growing, Shrinking, Unsure or Not
+a spine, or clear its mark. Marks are written at once to the CSV (columns
+Path, Source, Label, Note, Row0, Col0, Updated, as GIAnT-MATLAB's
+``spineViewer``). A mark belongs to its position in the consensus frame and
+attaches to the nearest source within 2.5 px, so marks made on one run
+show on every run of the session. A summary that changes on disk is read
+again on the page's next request.
+
+``giant spine export-html SUMMARY --out page.html`` writes the same page
+with the data embedded, for reading without the data or the server (under
+16 MB for a typical session). It holds the sources' sizes, tests and marks
+(``--marks``, read only), the field's mean of trials in every image, and
+the crops of the marked sources and of the ``--top`` (30) per path with the
+smallest q (or of ``--sources``), in the F0 images (``--crop-images``).

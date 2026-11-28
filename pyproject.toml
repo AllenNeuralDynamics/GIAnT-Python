@@ -52,8 +52,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # Bundle the default point-spread-function template used by the BandSILo
-# (band-scan) source-extraction backend, and the page of `giant view`.
-giant_python = ["assets/psfs/*.tif", "viewer/page.html"]
+# (band-scan) source-extraction backend, and the pages of `giant view` and
+# `giant spine view`.
+giant_python = ["assets/psfs/*.tif", "viewer/page.html", "spine/view/page.html"]
 
 [tool.setuptools.dynamic]
 version = {attr = "giant_python.__version__"}
