@@ -260,9 +260,10 @@ def build_parser() -> argparse.ArgumentParser:
     -------
     argparse.ArgumentParser
         Parser with ``trial-table``, ``register``, ``reg-stats``,
-        ``annotate``, ``extract`` and the SILo subcommands
-        (``silo``, ``silo-localize``, ``silo-plan``, ``silo-prepare``,
-        ``silo-dispatch``, ``silo-solve``, ``silo-collect``). Each
+        ``annotate``, ``extract``, the SILo subcommands (``silo``,
+        ``silo-localize``, ``silo-plan``, ``silo-prepare``,
+        ``silo-dispatch``, ``silo-solve``, ``silo-collect``) and
+        ``view``. Each
         subcommand stores its ``command`` name in the parsed namespace.
     """
     parser = argparse.ArgumentParser(prog="giant")
@@ -305,7 +306,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_silo_commands(subparsers)
     add_spine_commands(subparsers)
+    _add_view_command(subparsers)
     return parser
+
+
+def _add_view_command(subparsers) -> None:
+    """``giant view``: a browser viewer of SILo runs."""
+    from .viewer.server import add_arguments
+
+    view = subparsers.add_parser(
+        "view",
+        help="Inspect SILo runs in the browser: activity images with "
+        "their sources, and the aligned movie with the fitted activity "
+        "and the residual.",
+    )
+    add_arguments(view)
+
+
+def _cmd_view(args: argparse.Namespace) -> int:
+    """Handle ``giant view``."""
+    from .viewer.server import serve
+
+    return serve(args)
 
 
 def _options_from_args(
@@ -522,6 +544,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "reg-stats": _cmd_reg_stats,
         "annotate": _cmd_annotate,
         "extract": _cmd_extract,
+        "view": _cmd_view,
     }
     handlers.update({name: run_silo_command for name in SILO_COMMANDS})
     handlers.update({name: run_spine_command for name in SPINE_COMMANDS})

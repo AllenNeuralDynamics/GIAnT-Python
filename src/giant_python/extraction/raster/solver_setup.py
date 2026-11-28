@@ -157,7 +157,8 @@ class SolverParams:
         value.
     valid_kernel : int
         Side of the square around each source where the footprint fit may
-        put intensity (MATLAB's ``validKernel``, 3 x 3; odd). The footprint
+        put intensity (odd; 5 by default; MATLAB's ``validKernel`` is
+        3 x 3, the setting to compare with MATLAB). The footprint
         is ``hfilter`` blurring that support, so its width (RMS per axis)
         lies between ``hfilter``'s sigma (0.9 ``sigma_px``) and
         ``sqrt(sigma**2 + r**2)``, r = (valid_kernel - 1) / 2 (all weight
@@ -187,7 +188,7 @@ class SolverParams:
     tau_full: float | None = None
     baseline_mode: str = "fit"
     outside_footprint: float = 0.1
-    valid_kernel: int = 3
+    valid_kernel: int = 5
 
     def __post_init__(self) -> None:
         """Reject values the solver cannot run with."""
@@ -208,7 +209,9 @@ class SolverParams:
         if isinstance(vk, bool) or not isinstance(vk, (int, np.integer)):
             raise ValueError(f"valid_kernel must be an integer, not {vk!r}")
         if vk < 1 or vk % 2 == 0:
-            raise ValueError(f"valid_kernel must be odd and positive, not {vk}")
+            raise ValueError(
+                f"valid_kernel must be odd and positive, not {vk}"
+            )
         if self.nmf_iter < 1:
             raise ValueError(f"nmf_iter must be >= 1, not {self.nmf_iter}")
         _check_numbers(self)
@@ -534,7 +537,8 @@ def params_from_matlab(g: h5py.Group) -> SolverParams:
         baseline_knot_factor=num("baselineKnotFactor", 0.5),
         baseline_penalty=num("baselinePenalty", 30.0),
         tau_full=num("tau_full", None),
-        valid_kernel=_mat_valid_kernel(g, d.valid_kernel),
+        # a struct without one is MATLAB's (3 x 3), not today's default
+        valid_kernel=_mat_valid_kernel(g, 3),
     )
     for name, ours in (
         ("k", p.k),

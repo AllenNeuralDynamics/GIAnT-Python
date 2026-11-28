@@ -60,12 +60,17 @@ def fake_localize(moco_dir, fn, num_channels, params=None, **kw):
         peaks=None,
         valid=np.ones((H, W), bool),
     )
+    half_ims = None
+    if kw.get("half_ims"):  # two noisy halves, as the patchwise plan needs
+        noise = 0.05 * rng.standard_normal((2,) + mean.shape)
+        half_ims = (mean[None] + noise).astype(np.float32)
     reg = RegisteredTrial(
         movie=np.zeros((1, H, W), np.float32),
         var_factor=None,
         mean_im=mean.astype(np.float32),
         discard=np.zeros(50, bool),
         align_hz=80.0,
+        half_ims=half_ims,
     )
     return loc, reg
 
@@ -312,6 +317,7 @@ def test_valid_kernel_through_the_run(tmp_path, fake):
     from giant_python.extraction.raster.plan import read_plan
 
     p5 = replace(PARAMS, valid_kernel=5)
+    p3 = replace(PARAMS, valid_kernel=3)  # MATLAB's
     seeds = seeds_file(tmp_path)
     table = make_session(tmp_path / "streamed")
     silo.run_silo(table, p5, EX, seeds_file=seeds)
@@ -326,11 +332,11 @@ def test_valid_kernel_through_the_run(tmp_path, fake):
     assert c.params["valid_kernel"] == 5
     # the solve and collect stages refuse another support
     with pytest.raises(ValueError, match="valid_kernel=5"):
-        silo_solve.dispatch(s, PARAMS, 1, EX)
+        silo_solve.dispatch(s, p3, 1, EX)
     for job in silo_solve.dispatch(s, p5, 1, EX):
         silo_solve.solve_job(job, execution=EX)
     with pytest.raises(ValueError, match="valid_kernel=5"):
-        silo_collect.collect(s, PARAMS, EX)
+        silo_collect.collect(s, p3, EX)
     silo_collect.collect(s, p5, EX)
     staged = _all_results(s)
     assert staged.keys() == streamed.keys()
@@ -343,14 +349,14 @@ def test_valid_kernel_through_the_run(tmp_path, fake):
     assert record["valid_kernel"] == 5
     # a solver at 3 on these containers is refused before anything runs
     with pytest.raises(ValueError, match="--valid-kernel 5"):
-        silo_solve.solve_containers(s, PARAMS, EX)
+        silo_solve.solve_containers(s, p3, EX)
     # a plan at 5 is refused by a prepare at 3; planning at 3 redoes it
     with pytest.raises(ValueError, match="valid_kernel=5"):
-        silo.prepare(s, PARAMS, EX)
-    assert silo.plan(s, PARAMS, EX, seeds=_seeds(s, tmp_path))[0]["file"]
+        silo.prepare(s, p3, EX)
+    assert silo.plan(s, p3, EX, seeds=_seeds(s, tmp_path))[0]["file"]
     assert read_plan(s.plan_file(0)).params.valid_kernel == 3
-    silo.prepare(s, PARAMS, EX)
-    silo_solve.solve_containers(s, PARAMS, EX)
+    silo.prepare(s, p3, EX)
+    silo_solve.solve_containers(s, p3, EX)
     three = _all_results(s)
     assert three.keys() == staged.keys()
     assert any(
@@ -500,6 +506,28 @@ def test_job_needs_its_container(tmp_path, fake):
         silo_solve.solve_job(job, execution=EX)
 
 
+def test_job_without_valid_kernel_is_matlabs(tmp_path, fake):
+    """A job file written before valid_kernel existed (its params lack the
+    field) solves its containers at MATLAB's 3 x 3, which they were
+    prepared for, not at today's default."""
+    import json
+    from dataclasses import replace
+
+    p3 = replace(PARAMS, valid_kernel=3)
+    s = SiloSession.open(make_session(tmp_path))
+    silo.localize(s, p3, EX)
+    silo.plan(s, p3, EX, seeds=_seeds(s, tmp_path))
+    silo.prepare(s, p3, EX)
+    job = silo_solve.dispatch(s, p3, 1, EX)[0]
+    record = json.loads(job.read_text(encoding="utf-8"))
+    del record["params"]["valid_kernel"]
+    job.write_text(json.dumps(record), encoding="utf-8")
+    done = silo_solve.solve_job(job, execution=EX)
+    assert done["items"]
+    results = read_results(s.results_file(0, 0))
+    assert results.results
+
+
 def test_trial_without_data_is_skipped(tmp_path, fake, monkeypatch):
     """A trial whose selected pixels have no sample is marked and left out
     of the summaries, streamed and staged alike."""
@@ -578,7 +606,7 @@ def test_cli(tmp_path, fake, capsys):
         ]
     )
     p = params_from_args(args)
-    assert p.valid_kernel == 3
+    assert p.valid_kernel == 5  # the default
     for cmd in ("silo", "silo-plan", "silo-prepare", "silo-collect"):
         assert (
             params_from_args(
@@ -634,6 +662,7 @@ class _FakePool:
     """A pool whose tasks finish at a set time on a controlled clock."""
 
     def __init__(self, now, finish_at):
+        """Take the clock and each task's finish time."""
         self.now, self.finish_at, self.futures = now, list(finish_at), []
 
     def submit(self, *args, **kwargs):

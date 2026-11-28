@@ -315,7 +315,8 @@ def test_params_warn_when_saved_filters_differ(tmp_path):
         g["k"][...] = g["k"][()] * 1.01
         with pytest.warns(UserWarning, match="params.k differs"):
             p = params_from_matlab(g)
-    assert p == SolverParams(tau_full=4.8, photon_scale=None)
+    # a struct without validKernel is MATLAB's 3 x 3 (not the default 5)
+    assert p == SolverParams(tau_full=4.8, photon_scale=None, valid_kernel=3)
 
 
 def test_subproblem_fixture_starts_as_matlab():

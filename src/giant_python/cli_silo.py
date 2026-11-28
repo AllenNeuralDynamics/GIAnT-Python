@@ -126,10 +126,10 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Side of the square around each source where its footprint "
-        "may put intensity, pixels (odd; default 3, MATLAB's validKernel). "
-        "Sets the plan's grouping zones and the solver's footprints "
-        "together; give every stage the same value. 3 is the setting to "
-        "compare with MATLAB.",
+        "may put intensity, pixels (odd; default 5; MATLAB's validKernel "
+        "is 3, the setting to compare with MATLAB). Sets the plan's "
+        "grouping zones and the solver's footprints together; give every "
+        "stage the same value.",
     )
     g.add_argument(
         "--alignment",
@@ -138,7 +138,7 @@ def _add_science(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Across-trial alignment (MATLAB interTrialAlignment): a shift "
         "per trial, or refined to an affine map or a patchwise "
-        "displacement field per valid trial (default rigid).",
+        "displacement field per valid trial (default patchwise).",
     )
     g.add_argument(
         "--align-patch-px",
