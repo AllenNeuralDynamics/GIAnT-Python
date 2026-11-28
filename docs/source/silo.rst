@@ -137,10 +137,22 @@ carry real activity. Two options for seeding more of the dim sources
   cannot judge a source with fewer than 5 events and keeps it.
 
 The bootstrap null holds the photon noise of each trial's model only: on
-the GFP control (no activity) the calibrated activity images of bright
-pixels are wider than their null (about twice, in the upper tail), so the
-false seeds that ``seed_false_per_field`` promises are a lower bound; the
-GFP control is the reference for the false-source rate.
+the GFP control (no activity, registered with older code) the calibrated
+activity images of bright pixels are wider than their null (about twice,
+in the upper tail; 5 false seeds per path where ``seed_false_per_field``
+promised 1e-6), so the promised false seeds are a lower bound and GFP data
+are the reference for the false-source rate. With kept null images each
+trial-path draws its null movies from its own seed, so that the trials'
+nulls are independent.
+
+Evaluated on injected dim-source ground truth (GFP session 847983) and on
+three recordings (GIAnT-Python#58): with the network baseline, ``peak_th``
+5 with ``min_source_events`` 5 raised the recall of sources near the
+detection limit (isolated, 0.28 x the standard event sizes: 62% to 92%) at
+0.5 false sources per path on the GFP control and 17-49% more extraction
+CPU; ``peak_th`` 6 alone gave no false source. The null modes behaved like
+a lower ``peak_th``, since the image's robust SD was 1.0-1.7 times its
+null's on every set.
 
 Footprint support
 ~~~~~~~~~~~~~~~~~
